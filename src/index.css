@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Manrope", "Segoe UI", sans-serif;
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+}
+
+@layer base {
+  html {
+    background: #050505;
+  }
+
+  body {
+    @apply bg-[#050505] text-[#f0f0f0] antialiased;
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #333;
+}
+
+.stage-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 0%, rgba(255, 255, 255, 0.05) 44%, transparent 58%);
+  transform: translateX(-110%);
+}
+
+.stage-card:hover::before {
+  animation: stage-sheen 1.2s ease;
+}
+
+.generation-orbit::before,
+.generation-orbit::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  border-radius: 999px;
+  animation: orbit-pulse 1.7s ease-in-out infinite;
+}
+
+.generation-orbit::after {
+  inset: 30px;
+  border-color: rgba(255, 255, 255, 0.24);
+  animation-delay: -0.55s;
+}
+
+.generation-scan {
+  animation: scan-line 1.25s ease-in-out infinite;
+}
+
+@keyframes stage-sheen {
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes orbit-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: scale(0.8) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08) rotate(180deg);
+  }
+}
+
+@keyframes scan-line {
+  0% {
+    transform: translateX(-105%);
+  }
+  100% {
+    transform: translateX(215%);
+  }
+}

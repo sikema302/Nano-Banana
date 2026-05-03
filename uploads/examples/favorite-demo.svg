@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <defs>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#12081f" />
+        <stop offset="50%" stop-color="#4c1d95" />
+        <stop offset="100%" stop-color="#22d3ee" />
+      </linearGradient>
+      <filter id="blur">
+        <feGaussianBlur stdDeviation="46" />
+      </filter>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#bg)" />
+    <circle cx="204.8" cy="204.8" r="143.36" fill="rgba(255,255,255,0.13)" filter="url(#blur)" />
+    <circle cx="839.68" cy="768" r="184.32" fill="rgba(255,255,255,0.12)" filter="url(#blur)" />
+    <rect x="34" y="34" width="956" height="956" rx="30" fill="rgba(0,0,0,0.12)" stroke="rgba(255,255,255,0.18)" />
+    <text x="72" y="110" fill="rgba(255,255,255,0.92)" font-size="34" font-family="Manrope, Segoe UI, sans-serif" font-weight="700">
+      Visionary Local Mock
+    </text>
+    <text x="72" y="155" fill="rgba(255,255,255,0.62)" font-size="22" font-family="Manrope, Segoe UI, sans-serif">
+      Nano Banana2 / 1:1 / 霓虹雾面
+    </text>
+    <text x="72" y="260" fill="white" font-size="54" font-family="Manrope, Segoe UI, sans-serif" font-weight="700">霓虹机甲少女站在雨夜街头</text>
+    <text x="72" y="938" fill="rgba(255,255,255,0.68)" font-size="22" font-family="Manrope, Segoe UI, sans-serif">
+      Mock image generated locally for prompt visualization.
+    </text>
+  </svg>
