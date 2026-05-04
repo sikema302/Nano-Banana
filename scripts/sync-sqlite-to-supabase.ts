@@ -113,7 +113,10 @@ async function main() {
     await upsertTable(
       supabase,
       'invite_codes',
-      runQuery(db, 'select code, credits, created_by, created_at, redeemed_by, redeemed_at from invite_codes'),
+      runQuery(
+        db,
+        'select code, credits, issued_credits, created_by, created_at, redeemed_by, redeemed_at, low_balance_since from invite_codes',
+      ),
       'code',
     );
     await upsertTable(

@@ -52,10 +52,12 @@ create table if not exists public.user_credits (
 create table if not exists public.invite_codes (
   code text primary key,
   credits integer not null,
+  issued_credits integer not null default 0,
   created_by text not null,
   created_at text not null,
   redeemed_by text,
-  redeemed_at text
+  redeemed_at text,
+  low_balance_since text
 );
 
 create table if not exists public.app_settings (

@@ -5,6 +5,7 @@ coverage/
 .DS_Store
 *.log
 .runtime/
+.vercel/
 data/
 uploads/generated/
 uploads/references/

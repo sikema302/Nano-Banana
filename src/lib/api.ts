@@ -93,6 +93,44 @@ export interface ReferenceUploadInput {
 
 const TOKEN_KEY = 'visionary_local_token';
 const USER_KEY = 'visionary_local_user';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+
+function toApiUrl(path: string) {
+  if (!API_BASE_URL) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+export function resolveAssetUrl(path: string) {
+  if (!path) return path;
+  if (/^(https?:)?\/\//i.test(path) || path.startsWith('data:')) return path;
+  if (!API_BASE_URL) return path;
+  return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function normalizeGeneratedImage(image: GeneratedImagePayload): GeneratedImagePayload {
+  return {
+    ...image,
+    imagePath: resolveAssetUrl(image.imagePath),
+    referenceImages: image.referenceImages.map(resolveAssetUrl),
+  };
+}
+
+function normalizeSavedImage(image: SavedImage): SavedImage {
+  return {
+    ...image,
+    imageUrl: resolveAssetUrl(image.imageUrl),
+    referenceImages: image.referenceImages.map(resolveAssetUrl),
+  };
+}
+
+function normalizeGenerationRecord(record: GenerationRecord): GenerationRecord {
+  return {
+    ...record,
+    imageUrl: resolveAssetUrl(record.imageUrl),
+    referenceImages: record.referenceImages.map(resolveAssetUrl),
+  };
+}
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -130,7 +168,7 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
     }
   }
 
-  const response = await fetch(input, {
+  const response = await fetch(toApiUrl(input), {
     ...init,
     headers,
   });
@@ -217,7 +255,7 @@ export async function generateImage(payload: {
   imageSize?: string;
   reference_images: ReferenceUploadInput[];
 }) {
-  return request<{ image: GeneratedImagePayload }>(
+  const result = await request<{ image: GeneratedImagePayload }>(
     '/api/generate',
     {
       method: 'POST',
@@ -225,15 +263,18 @@ export async function generateImage(payload: {
     },
     true,
   );
+  return { image: normalizeGeneratedImage(result.image) };
 }
 
 export async function fetchUserImages(category?: ImageCategory) {
   const query = category ? `?category=${category}` : '';
-  return request<{ images: SavedImage[] }>(`/api/user/images${query}`, {}, true);
+  const result = await request<{ images: SavedImage[] }>(`/api/user/images${query}`, {}, true);
+  return { images: result.images.map(normalizeSavedImage) };
 }
 
 export async function fetchUserHistory() {
-  return request<{ history: GenerationRecord[] }>('/api/user/history', {}, true);
+  const result = await request<{ history: GenerationRecord[] }>('/api/user/history', {}, true);
+  return { history: result.history.map(normalizeGenerationRecord) };
 }
 
 export async function fetchAdminOverview(params: {
@@ -249,7 +290,7 @@ export async function fetchAdminOverview(params: {
   if (params.inviteCodesPageSize) query.set('inviteCodesPageSize', String(params.inviteCodesPageSize));
   const suffix = query.toString() ? `?${query.toString()}` : '';
 
-  return request<{
+  const result = await request<{
     users: AdminUserSummary[];
     records: GenerationRecord[];
     recordsPage: PaginationInfo;
@@ -257,6 +298,10 @@ export async function fetchAdminOverview(params: {
     inviteCodesPage: PaginationInfo;
     adminCredits: CreditSummary;
   }>(`/api/admin/overview${suffix}`, {}, true);
+  return {
+    ...result,
+    records: result.records.map(normalizeGenerationRecord),
+  };
 }
 
 export async function createInviteCode(payload: { credits: number }) {
@@ -275,7 +320,7 @@ export async function moveImage(payload: {
   image?: GeneratedImagePayload;
   category: ImageCategory;
 }) {
-  return request<{ image: SavedImage | null }>(
+  const result = await request<{ image: SavedImage | null }>(
     '/api/user/images/move',
     {
       method: 'POST',
@@ -283,6 +328,7 @@ export async function moveImage(payload: {
     },
     true,
   );
+  return { image: result.image ? normalizeSavedImage(result.image) : null };
 }
 
 export async function deleteImage(imageId: number) {

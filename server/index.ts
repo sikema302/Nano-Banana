@@ -108,6 +108,8 @@ const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://v
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
 const SUPABASE_URL = normalizeEnvValue(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+const DATABASE_PROVIDER = normalizeEnvValue(process.env.DATABASE_PROVIDER || 'sqlite').toLowerCase();
+const CORS_ORIGIN = normalizeEnvValue(process.env.CORS_ORIGIN);
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -133,6 +135,54 @@ const sqlJsReady = initSqlJs({
 const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
+const SUPABASE_SYNC_TABLES = [
+  {
+    name: 'users',
+    select: 'id, username, password_hash, email, created_at',
+    insert: 'INSERT INTO users (id, username, password_hash, email, created_at) VALUES (?, ?, ?, ?, ?)',
+    onConflict: 'id',
+  },
+  {
+    name: 'user_migrations',
+    select: 'legacy_user_id, supabase_user_id, username, migrated_at',
+    insert: 'INSERT INTO user_migrations (legacy_user_id, supabase_user_id, username, migrated_at) VALUES (?, ?, ?, ?)',
+    onConflict: 'legacy_user_id',
+  },
+  {
+    name: 'user_credits',
+    select: 'user_id, username, total_credits, used_credits, created_at, updated_at',
+    insert: 'INSERT INTO user_credits (user_id, username, total_credits, used_credits, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    onConflict: 'user_id',
+  },
+  {
+    name: 'invite_codes',
+    select: 'code, credits, issued_credits, created_by, created_at, redeemed_by, redeemed_at, low_balance_since',
+    insert:
+      'INSERT INTO invite_codes (code, credits, issued_credits, created_by, created_at, redeemed_by, redeemed_at, low_balance_since) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    onConflict: 'code',
+  },
+  {
+    name: 'generations',
+    select: 'id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at',
+    insert:
+      'INSERT INTO generations (id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    onConflict: 'id',
+  },
+  {
+    name: 'images',
+    select: 'id, user_id, prompt, model_name, dimensions, image_path, category, reference_images, created_at',
+    insert:
+      'INSERT INTO images (id, user_id, prompt, model_name, dimensions, image_path, category, reference_images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    onConflict: 'id',
+    replaceOnSync: true,
+  },
+  {
+    name: 'app_settings',
+    select: 'key, value, updated_at',
+    insert: 'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)',
+    onConflict: 'key',
+  },
+] as const;
 
 const models = [
   {
@@ -206,6 +256,131 @@ async function saveDatabase(db: SqlDatabase) {
   await fs.writeFile(DB_FILE, db.export());
 }
 
+function isSupabasePersistenceEnabled() {
+  return DATABASE_PROVIDER === 'supabase';
+}
+
+function splitCsv(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isAllowedOrigin(origin: string) {
+  if (!CORS_ORIGIN) return true;
+  const allowedOrigins = splitCsv(CORS_ORIGIN);
+  return allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+}
+
+function valuesFromRow(row: Record<string, unknown>, selectClause: string) {
+  return splitCsv(selectClause).map((column) => row[column] ?? null);
+}
+
+async function ensureSupabaseReady() {
+  if (!supabaseAdmin) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when DATABASE_PROVIDER=supabase');
+  }
+
+  const readiness = await supabaseAdmin.from('users').select('id', { count: 'exact', head: true }).limit(1);
+  if (readiness.error) {
+    throw new Error(
+      `Supabase schema is not ready: ${readiness.error.message}. Run supabase/migrations/20260426000000_init_bananas_ai.sql first.`,
+    );
+  }
+}
+
+async function listSupabaseRows(tableName: string, selectClause: string) {
+  if (!supabaseAdmin) return [];
+
+  const rows: Record<string, unknown>[] = [];
+  const pageSize = 1000;
+
+  for (let start = 0; ; start += pageSize) {
+    const end = start + pageSize - 1;
+    const { data, error } = await supabaseAdmin.from(tableName).select(selectClause).range(start, end);
+    if (error) {
+      throw new Error(`${tableName}: ${error.message}`);
+    }
+
+    const chunk = ((data || []) as unknown) as Record<string, unknown>[];
+    rows.push(...chunk);
+    if (chunk.length < pageSize) {
+      break;
+    }
+  }
+
+  return rows;
+}
+
+async function upsertSupabaseTable(
+  tableName: string,
+  rows: Record<string, unknown>[],
+  onConflict: string,
+) {
+  if (!supabaseAdmin || rows.length === 0) return;
+
+  const chunkSize = 500;
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const { error } = await supabaseAdmin.from(tableName).upsert(chunk, { onConflict });
+    if (error) {
+      throw new Error(`${tableName}: ${error.message}`);
+    }
+  }
+}
+
+async function replaceSupabaseTable(
+  tableName: string,
+  rows: Record<string, unknown>[],
+  onConflict: string,
+) {
+  if (!supabaseAdmin) return;
+
+  const { error } = await supabaseAdmin.from(tableName).delete().not(onConflict, 'is', null);
+  if (error) {
+    throw new Error(`${tableName}: ${error.message}`);
+  }
+
+  await upsertSupabaseTable(tableName, rows, onConflict);
+}
+
+async function restoreSqliteFromSupabase() {
+  if (!isSupabasePersistenceEnabled()) return;
+
+  await ensureSupabaseReady();
+  const SQL = await sqlJsReady;
+  const db = new SQL.Database() as SqlDatabase;
+
+  try {
+    ensureSchema(db);
+    for (const table of SUPABASE_SYNC_TABLES) {
+      db.run(`DELETE FROM ${table.name}`);
+      const rows = await listSupabaseRows(table.name, table.select);
+      for (const row of rows) {
+        db.run(table.insert, valuesFromRow(row, table.select));
+      }
+    }
+    await saveDatabase(db);
+  } finally {
+    db.close();
+  }
+}
+
+async function syncSqliteToSupabase(db: SqlDatabase) {
+  if (!isSupabasePersistenceEnabled()) return;
+
+  await ensureSupabaseReady();
+  for (const table of SUPABASE_SYNC_TABLES) {
+    const rows = runQuery<Record<string, unknown>>(db, `SELECT ${table.select} FROM ${table.name}`);
+    if ('replaceOnSync' in table && table.replaceOnSync) {
+      await replaceSupabaseTable(table.name, rows, table.onConflict);
+      continue;
+    }
+    await upsertSupabaseTable(table.name, rows, table.onConflict);
+  }
+}
+
 function runQuery<T extends Record<string, unknown>>(db: SqlDatabase, sql: string, params: unknown[] = []) {
   const statement = db.prepare(sql, params);
   const rows: T[] = [];
@@ -242,6 +417,7 @@ async function withWriteDb<T>(task: (db: SqlDatabase) => Promise<T> | T) {
     try {
       const result = await task(db);
       await saveDatabase(db);
+      await syncSqliteToSupabase(db);
       return result;
     } finally {
       db.close();
@@ -913,10 +1089,27 @@ function toPagination(page: number, pageSize: number, total: number): Pagination
 
 async function start() {
   await ensureRuntimeDirectories();
+  await restoreSqliteFromSupabase();
   await ensureRuntimeSchema();
 
   const app = express();
   const hasDistBuild = await pathExists(path.join(DIST_DIR, 'index.html'));
+
+  app.use((req, res, next) => {
+    const originHeader = req.headers.origin;
+    if (originHeader && isAllowedOrigin(originHeader)) {
+      res.setHeader('Access-Control-Allow-Origin', originHeader);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '20mb' }));
   app.use('/uploads', express.static(UPLOADS_DIR));

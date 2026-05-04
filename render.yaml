@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: nano-banana-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PROVIDER
+        value: supabase
+      - key: CORS_ORIGIN
+        sync: false
+      - key: VISIONARY_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
