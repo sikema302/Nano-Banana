@@ -11,6 +11,24 @@ import jwt from 'jsonwebtoken';
 import initSqlJs from 'sql.js';
 import { createClient } from '@supabase/supabase-js';
 
+// ─── 环境检测 ───────────────────────────────────────────────────────
+
+const IS_VERCEL = Boolean(process.env.VERCEL);
+
+// ─── Supabase 数据库层（Vercel 环境） ───────────────────────────────
+
+// 使用动态导入避免在非 Vercel 环境下加载问题
+let supabaseDb: typeof import('./supabase-db.js') | null = null;
+
+async function getSupabaseDb() {
+  if (!supabaseDb) {
+    supabaseDb = await import('./supabase-db.js');
+  }
+  return supabaseDb;
+}
+
+// ─── 类型定义 ───────────────────────────────────────────────────────
+
 type ImageCategory = 'favorite' | 'backup' | 'discarded';
 
 type AuthUser = {
@@ -89,6 +107,8 @@ declare global {
   }
 }
 
+// ─── 路径常量（本地开发环境使用） ───────────────────────────────────
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -104,6 +124,8 @@ const DEFAULT_PORT = 3001;
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
+
+// ─── 环境变量 ───────────────────────────────────────────────────────
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
@@ -128,10 +150,14 @@ const supabaseUserSyncStatus = {
   lastError: '',
 };
 
+// ─── SQLite 初始化（仅本地环境） ───────────────────────────────────
+
 const require = createRequire(import.meta.url);
 const sqlJsReady = initSqlJs({
   locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
 });
+
+// ─── 常量 ───────────────────────────────────────────────────────────
 
 const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
@@ -215,6 +241,8 @@ const models = [
 const tokenSecret = process.env.JWT_SECRET || process.env.VISIONARY_API_KEY || 'visionary-local-dev-secret';
 let writeQueue = Promise.resolve();
 
+// ─── 通用辅助函数 ───────────────────────────────────────────────────
+
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -225,6 +253,32 @@ function normalizeEnvValue(value: string | undefined) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+/** Vercel 兼容的随机字节生成 */
+function randomHex(bytes: number): string {
+  if (IS_VERCEL) {
+    const array = new Uint8Array(bytes);
+    crypto.getRandomValues(array);
+    return Array.from(array)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return crypto.randomBytes(bytes).toString('hex');
+}
+
+/** Vercel 兼容的 SHA256 摘要 */
+function sha256Digest(input: string): string {
+  if (IS_VERCEL) {
+    // 简单哈希替代，仅用于生成 invite user id，不需要密码学安全
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+      const char = input.charCodeAt(i);
+      hash = ((hash << 5) - hash + char) | 0;
+    }
+    return Math.abs(hash).toString(16).padStart(12, '0').slice(0, 12);
+  }
+  return crypto.createHash('sha256').update(input).digest('hex').slice(0, 12);
 }
 
 async function pathExists(targetPath: string) {
@@ -246,6 +300,204 @@ async function ensureRuntimeDirectories() {
   ]);
 }
 
+function splitCsv(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isAllowedOrigin(origin: string) {
+  if (!CORS_ORIGIN) return true;
+  const allowedOrigins = splitCsv(CORS_ORIGIN);
+  return allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+}
+
+function serializeReferenceImages(referenceImages: string[]) {
+  return JSON.stringify(referenceImages);
+}
+
+function parseReferenceImages(raw: unknown) {
+  if (typeof raw !== 'string' || !raw) return [];
+
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function toSavedImage(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    prompt: String(row.prompt || ''),
+    modelName: String(row.model_name || ''),
+    dimensions: String(row.dimensions || ''),
+    imageUrl: String(row.image_path || ''),
+    category: String(row.category || '') as ImageCategory,
+    referenceImages: parseReferenceImages(row.reference_images),
+    createdAt: String(row.created_at || ''),
+  };
+}
+
+function toGeneration(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    userId: String(row.user_id || ''),
+    username: String(row.username || ''),
+    prompt: String(row.prompt || ''),
+    modelId: String(row.model_id || ''),
+    modelName: String(row.model_name || ''),
+    dimensions: String(row.dimensions || ''),
+    imageSize: String(row.image_size || ''),
+    imageUrl: String(row.image_path || ''),
+    creditsUsed: Number(row.credits_used || 0),
+    referenceImages: parseReferenceImages(row.reference_images),
+    inviteCode: row.invite_code ? String(row.invite_code) : '',
+    createdAt: String(row.created_at || ''),
+  };
+}
+
+function toInviteCode(row: Record<string, unknown>) {
+  return {
+    code: String(row.code || ''),
+    credits: Number(row.credits || 0),
+    createdBy: String(row.created_by || ''),
+    createdAt: String(row.created_at || ''),
+    redeemedBy: row.redeemed_by ? String(row.redeemed_by) : '',
+    redeemedAt: row.redeemed_at ? String(row.redeemed_at) : '',
+  };
+}
+
+function addDaysIso(base: string, days: number) {
+  const date = new Date(base);
+  if (Number.isNaN(date.getTime())) return base;
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function toCreditSummary(row: Record<string, unknown> | null) {
+  const totalCredits = Number(row?.total_credits || 0);
+  const usedCredits = Number(row?.used_credits || 0);
+  return {
+    totalCredits,
+    usedCredits,
+    remainingCredits: Math.max(0, totalCredits - usedCredits),
+  };
+}
+
+function validateCategory(value: unknown): value is ImageCategory {
+  return value === 'favorite' || value === 'backup' || value === 'discarded';
+}
+
+function parsePaginationValue(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function toPagination(page: number, pageSize: number, total: number): PaginationResult {
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+function issueToken(user: AuthUser) {
+  return jwt.sign(user, tokenSecret, { expiresIn: '30d' });
+}
+
+function adminUsernames() {
+  return (process.env.ADMIN_USERNAMES || 'admin')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAdminUser(user: AuthUser) {
+  return adminUsernames().includes(user.username.toLowerCase());
+}
+
+function toPublicUser(user: AuthUser): PublicUser {
+  return {
+    id: user.userId,
+    username: user.username,
+    isAdmin: isAdminUser(user),
+  };
+}
+
+function getModelCredits(modelId: string) {
+  if (modelId === 'gpt-image-2') return 20;
+  if (modelId === 'Nano_Banana_Pro') return 20;
+  if (modelId === 'Nano_Banana_2') return 17;
+  return 1;
+}
+
+function normalizeImageSize(value: string, modelId: string) {
+  if (isGeminiModel(modelId)) return '';
+  if (modelId !== 'Nano_Banana_Pro') return modelId === 'gpt-image-2' ? '' : VISIONARY_IMAGE_SIZE;
+  return value === '4K' ? '4K' : '2K';
+}
+
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Missing Bearer token' });
+    return;
+  }
+
+  try {
+    const payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
+    req.authUser = {
+      userId: String(payload.userId),
+      username: String(payload.username),
+    };
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.authUser || !isAdminUser(req.authUser)) {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+
+  next();
+}
+
+function modelNameFromId(modelId: string) {
+  return models.find((item) => item.id === modelId)?.name || modelId;
+}
+
+function normalizeModelId(modelId: string) {
+  if (modelId === 'nano-banana2') return 'Nano_Banana_2';
+  if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_2';
+  return models.some((item) => item.id === modelId) ? modelId : 'Nano_Banana_Pro';
+}
+
+function isGeminiModel(modelId: string) {
+  return modelId === 'gemini-2.0-flash';
+}
+
+function normalizeRatio(value: string, modelId: string) {
+  const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'];
+  if (value === 'auto') {
+    return modelId === 'gpt-image-2' ? 'auto' : '1:1';
+  }
+  return supported.includes(value) ? value : '1:1';
+}
+
+function generateInviteCode() {
+  return `BANANA-${randomHex(4).toUpperCase()}`;
+}
+
+// ─── SQLite 辅助函数（仅本地环境使用） ──────────────────────────────
+
 async function openDatabase() {
   const SQL = await sqlJsReady;
   try {
@@ -265,19 +517,6 @@ async function saveDatabase(db: SqlDatabase) {
 
 function isSupabasePersistenceEnabled() {
   return DATABASE_PROVIDER === 'supabase';
-}
-
-function splitCsv(value: string) {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function isAllowedOrigin(origin: string) {
-  if (!CORS_ORIGIN) return true;
-  const allowedOrigins = splitCsv(CORS_ORIGIN);
-  return allowedOrigins.includes('*') || allowedOrigins.includes(origin);
 }
 
 function valuesFromRow(row: Record<string, unknown>, selectClause: string) {
@@ -546,80 +785,6 @@ function lastInsertId(db: SqlDatabase) {
   return Number(row?.id || 0);
 }
 
-function serializeReferenceImages(referenceImages: string[]) {
-  return JSON.stringify(referenceImages);
-}
-
-function parseReferenceImages(raw: unknown) {
-  if (typeof raw !== 'string' || !raw) return [];
-
-  try {
-    const value = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function toSavedImage(row: Record<string, unknown>) {
-  return {
-    id: Number(row.id),
-    prompt: String(row.prompt || ''),
-    modelName: String(row.model_name || ''),
-    dimensions: String(row.dimensions || ''),
-    imageUrl: String(row.image_path || ''),
-    category: String(row.category || '') as ImageCategory,
-    referenceImages: parseReferenceImages(row.reference_images),
-    createdAt: String(row.created_at || ''),
-  };
-}
-
-function toGeneration(row: Record<string, unknown>) {
-  return {
-    id: Number(row.id),
-    userId: String(row.user_id || ''),
-    username: String(row.username || ''),
-    prompt: String(row.prompt || ''),
-    modelId: String(row.model_id || ''),
-    modelName: String(row.model_name || ''),
-    dimensions: String(row.dimensions || ''),
-    imageSize: String(row.image_size || ''),
-    imageUrl: String(row.image_path || ''),
-    creditsUsed: Number(row.credits_used || 0),
-    referenceImages: parseReferenceImages(row.reference_images),
-    inviteCode: row.invite_code ? String(row.invite_code) : '',
-    createdAt: String(row.created_at || ''),
-  };
-}
-
-function toInviteCode(row: Record<string, unknown>) {
-  return {
-    code: String(row.code || ''),
-    credits: Number(row.credits || 0),
-    createdBy: String(row.created_by || ''),
-    createdAt: String(row.created_at || ''),
-    redeemedBy: row.redeemed_by ? String(row.redeemed_by) : '',
-    redeemedAt: row.redeemed_at ? String(row.redeemed_at) : '',
-  };
-}
-
-function addDaysIso(base: string, days: number) {
-  const date = new Date(base);
-  if (Number.isNaN(date.getTime())) return base;
-  date.setDate(date.getDate() + days);
-  return date.toISOString();
-}
-
-function toCreditSummary(row: Record<string, unknown> | null) {
-  const totalCredits = Number(row?.total_credits || 0);
-  const usedCredits = Number(row?.used_credits || 0);
-  return {
-    totalCredits,
-    usedCredits,
-    remainingCredits: Math.max(0, totalCredits - usedCredits),
-  };
-}
-
 function getSetting(db: SqlDatabase, key: string, fallback: string) {
   const row = getOne<{ value: string }>(db, 'SELECT value FROM app_settings WHERE key = ?', [key]);
   if (row?.value !== undefined) return String(row.value);
@@ -776,10 +941,6 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
   }
 }
 
-function generateInviteCode() {
-  return `BANANA-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-}
-
 async function ensureRuntimeSchema() {
   await withWriteDb(async (db) => {
     ensureSchema(db);
@@ -835,30 +996,18 @@ async function resolveExternalUserId(db: SqlDatabase, legacyUserId: number, user
   return externalUserId;
 }
 
-function issueToken(user: AuthUser) {
-  return jwt.sign(user, tokenSecret, { expiresIn: '30d' });
-}
-
-function adminUsernames() {
-  return (process.env.ADMIN_USERNAMES || 'admin')
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function isAdminUser(user: AuthUser) {
-  return adminUsernames().includes(user.username.toLowerCase());
-}
-
-function toPublicUser(user: AuthUser): PublicUser {
-  return {
-    id: user.userId,
-    username: user.username,
-    isAdmin: isAdminUser(user),
-  };
-}
+// ─── 获取用户积分（统一接口） ───────────────────────────────────────
 
 async function getPublicUser(user: AuthUser) {
+  if (IS_VERCEL) {
+    const db = await getSupabaseDb();
+    const credits = await db.getUserCredits(user.userId);
+    return {
+      ...toPublicUser(user),
+      creditsRemaining: credits.remainingCredits,
+    };
+  }
+
   const credits = await withReadDb((db) => {
     ensureSchema(db);
     return getUserCredits(db, user.userId);
@@ -870,68 +1019,7 @@ async function getPublicUser(user: AuthUser) {
   };
 }
 
-function getModelCredits(modelId: string) {
-  if (modelId === 'gpt-image-2') return 20;
-  if (modelId === 'Nano_Banana_Pro') return 20;
-  if (modelId === 'Nano_Banana_2') return 17;
-  return 1;
-}
-
-function normalizeImageSize(value: string, modelId: string) {
-  if (isGeminiModel(modelId)) return '';
-  if (modelId !== 'Nano_Banana_Pro') return modelId === 'gpt-image-2' ? '' : VISIONARY_IMAGE_SIZE;
-  return value === '4K' ? '4K' : '2K';
-}
-
-function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing Bearer token' });
-    return;
-  }
-
-  try {
-    const payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
-    req.authUser = {
-      userId: String(payload.userId),
-      username: String(payload.username),
-    };
-    next();
-  } catch {
-    res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
-
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (!req.authUser || !isAdminUser(req.authUser)) {
-    res.status(403).json({ error: 'Admin access required' });
-    return;
-  }
-
-  next();
-}
-
-function modelNameFromId(modelId: string) {
-  return models.find((item) => item.id === modelId)?.name || modelId;
-}
-
-function normalizeModelId(modelId: string) {
-  if (modelId === 'nano-banana2') return 'Nano_Banana_2';
-  if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_2';
-  return models.some((item) => item.id === modelId) ? modelId : 'Nano_Banana_Pro';
-}
-
-function isGeminiModel(modelId: string) {
-  return modelId === 'gemini-2.0-flash';
-}
-
-function normalizeRatio(value: string, modelId: string) {
-  const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'];
-  if (value === 'auto') {
-    return modelId === 'gpt-image-2' ? 'auto' : '1:1';
-  }
-  return supported.includes(value) ? value : '1:1';
-}
+// ─── Gemini API ─────────────────────────────────────────────────────
 
 const GEMINI_API_KEY = normalizeString(process.env.GEMINI_API_KEY);
 
@@ -946,7 +1034,6 @@ async function callGeminiGeneration({
     throw new Error('GEMINI_API_KEY is not configured');
   }
 
-  // 将比例转换为 Gemini 支持的格式
   const aspectRatioMap: Record<string, string> = {
     '1:1': '1:1',
     '16:9': '16:9',
@@ -987,7 +1074,6 @@ async function callGeminiGeneration({
       (payload?.error as Record<string, unknown>)?.message ||
       `Gemini API request failed (${response.status})`,
     );
-    // 检测是否为额度用尽 (429 或 quota 相关错误)
     const isQuotaError =
       response.status === 429 ||
       String(errMsg).toLowerCase().includes('quota') ||
@@ -999,7 +1085,6 @@ async function callGeminiGeneration({
     throw error;
   }
 
-  // 解析 Gemini 返回的图片数据
   const candidates = payload?.candidates as Array<Record<string, unknown>> | undefined;
   if (!candidates || candidates.length === 0) {
     throw new Error('Gemini API returned no candidates');
@@ -1012,7 +1097,6 @@ async function callGeminiGeneration({
     throw new Error('Gemini API returned no content parts');
   }
 
-  // 查找内联图片数据
   for (const part of partsArray) {
     if (part.inlineData) {
       const inlineData = part.inlineData as { mimeType: string; data: string };
@@ -1029,6 +1113,8 @@ function isGeminiQuotaError(error: unknown): boolean {
   }
   return false;
 }
+
+// ─── Visionary API ──────────────────────────────────────────────────
 
 async function callVisionaryGeneration({
   prompt,
@@ -1060,7 +1146,7 @@ async function callVisionaryGeneration({
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      'Idempotency-Key': `req_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`,
+      'Idempotency-Key': `req_${Date.now()}_${randomHex(8)}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1079,6 +1165,8 @@ async function callVisionaryGeneration({
 
   return imageUrl;
 }
+
+// ─── SVG 占位图 ─────────────────────────────────────────────────────
 
 function sanitizeSvgText(value: string) {
   return value
@@ -1152,6 +1240,8 @@ function buildSvg(prompt: string, modelName: string, dimensions: string) {
 </svg>`.trim();
 }
 
+// ─── 参考图片持久化 ────────────────────────────────────────────────
+
 function fileExtensionFromMimeType(mimeType: string) {
   if (mimeType === 'image/jpeg') return 'jpg';
   if (mimeType === 'image/webp') return 'webp';
@@ -1161,6 +1251,14 @@ function fileExtensionFromMimeType(mimeType: string) {
 }
 
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
+  // Vercel 环境下不保存参考图片到本地文件系统，直接返回原始 data URL
+  if (IS_VERCEL) {
+    return referenceImages
+      .slice(0, 3)
+      .map((item) => normalizeString(item.data))
+      .filter(Boolean);
+  }
+
   const output: string[] = [];
 
   for (const item of referenceImages.slice(0, 3)) {
@@ -1168,7 +1266,7 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
     if (!base64) continue;
 
     const extension = fileExtensionFromMimeType(item.mimeType);
-    const fileName = `reference-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${extension}`;
+    const fileName = `reference-${Date.now()}-${randomHex(3)}.${extension}`;
     const target = path.join(REFERENCES_DIR, fileName);
     await fs.writeFile(target, Buffer.from(base64, 'base64'));
     output.push(`/uploads/references/${fileName}`);
@@ -1177,32 +1275,22 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
   return output;
 }
 
-function validateCategory(value: unknown): value is ImageCategory {
-  return value === 'favorite' || value === 'backup' || value === 'discarded';
-}
-
-function parsePaginationValue(value: unknown, fallback: number, min: number, max: number) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(numeric)));
-}
-
-function toPagination(page: number, pageSize: number, total: number): PaginationResult {
-  return {
-    page,
-    pageSize,
-    total,
-    totalPages: Math.max(1, Math.ceil(total / pageSize)),
-  };
-}
+// ─── 服务器启动 ─────────────────────────────────────────────────────
 
 async function start() {
-  await ensureRuntimeDirectories();
-  await restoreSqliteFromSupabase();
-  await ensureRuntimeSchema();
+  // 本地环境初始化
+  if (!IS_VERCEL) {
+    await ensureRuntimeDirectories();
+    await restoreSqliteFromSupabase();
+    await ensureRuntimeSchema();
+  } else {
+    // Vercel 环境：初始化 Supabase schema
+    const db = await getSupabaseDb();
+    await db.ensureRuntimeSchema();
+  }
 
   const app = express();
-  const hasDistBuild = await pathExists(path.join(DIST_DIR, 'index.html'));
+  const hasDistBuild = !IS_VERCEL && (await pathExists(path.join(DIST_DIR, 'index.html')));
 
   app.use((req, res, next) => {
     const originHeader = req.headers.origin;
@@ -1221,14 +1309,20 @@ async function start() {
   });
 
   app.use(express.json({ limit: '20mb' }));
-  app.use('/uploads', express.static(UPLOADS_DIR));
+
+  // 静态文件服务仅本地环境
+  if (!IS_VERCEL) {
+    app.use('/uploads', express.static(UPLOADS_DIR));
+  }
 
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      userStorage: 'SQLite',
+      userStorage: IS_VERCEL ? 'Supabase' : 'SQLite',
     });
   });
+
+  // ─── 注册 ─────────────────────────────────────────────────────────
 
   app.post('/api/auth/register', async (req, res) => {
     const username = normalizeString(req.body?.username);
@@ -1246,6 +1340,28 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+
+        const existing = await db.findUserByUsername(username);
+        if (existing) {
+          res.status(409).json({ error: 'Username already exists' });
+          return;
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const user = await db.createUser(username, passwordHash, email);
+        await db.ensureUserCredits(user.id, username, 0);
+
+        const authUser = { userId: user.id, username };
+        res.status(201).json({
+          token: issueToken(authUser),
+          user: await getPublicUser(authUser),
+        });
+        return;
+      }
+
+      // SQLite 模式
       const result = await withWriteDb(async (db) => {
         ensureSchema(db);
 
@@ -1282,6 +1398,8 @@ async function start() {
     }
   });
 
+  // ─── 登录 ─────────────────────────────────────────────────────────
+
   app.post('/api/auth/login', async (req, res) => {
     const username = normalizeString(req.body?.username);
     const password = normalizeString(req.body?.password);
@@ -1292,6 +1410,32 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+
+        const record = await db.findUserByUsername(username);
+        if (!record) {
+          res.status(401).json({ error: 'Invalid username or password' });
+          return;
+        }
+
+        const matches = await bcrypt.compare(password, record.password_hash);
+        if (!matches) {
+          res.status(401).json({ error: 'Invalid username or password' });
+          return;
+        }
+
+        await db.ensureUserCredits(record.id, record.username, 0);
+        const authUser = { userId: record.id, username: record.username };
+
+        res.json({
+          token: issueToken(authUser),
+          user: await getPublicUser(authUser),
+        });
+        return;
+      }
+
+      // SQLite 模式
       const user = await withWriteDb(async (db) => {
         ensureSchema(db);
         const record = getOne<{
@@ -1331,6 +1475,8 @@ async function start() {
     }
   });
 
+  // ─── 邀请码登录 ───────────────────────────────────────────────────
+
   app.post('/api/auth/invite', async (req, res) => {
     const code = normalizeString(req.body?.code).toUpperCase();
 
@@ -1340,6 +1486,43 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const invite = await db.getInviteCode(code);
+        if (!invite) {
+          res.status(401).json({ error: 'Invalid invite code' });
+          return;
+        }
+
+        const credits = invite.credits;
+        const redeemedBy = invite.redeemed_by || '';
+        if (!redeemedBy && credits <= 0) {
+          res.status(401).json({ error: 'Invalid invite code' });
+          return;
+        }
+
+        const digest = sha256Digest(code);
+        const userId = redeemedBy || `invite-${digest}`;
+        const username = `invite-${code.slice(-4).toLowerCase()}`;
+
+        if (!redeemedBy) {
+          await db.redeemInviteCode(code, userId);
+          await db.ensureUserCredits(userId, username, credits);
+        } else {
+          await db.ensureUserCredits(userId, username, 0);
+        }
+
+        const authUser = { userId, username };
+        res.json({
+          token: issueToken(authUser),
+          user: await getPublicUser(authUser),
+        });
+        return;
+      }
+
+      // SQLite 模式
       const inviteUser = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -1349,7 +1532,7 @@ async function start() {
         const credits = Number(invite.credits || 0);
         const redeemedBy = normalizeString(invite.redeemed_by);
         if (!redeemedBy && credits <= 0) return null;
-        const digest = crypto.createHash('sha256').update(code).digest('hex').slice(0, 12);
+        const digest = sha256Digest(code);
         const userId = redeemedBy || `invite-${digest}`;
         const username = `invite-${code.slice(-4).toLowerCase()}`;
 
@@ -1377,17 +1560,28 @@ async function start() {
     }
   });
 
+  // ─── 获取当前用户 ─────────────────────────────────────────────────
+
   app.get('/api/auth/me', requireAuth, async (req, res) => {
-    await withWriteDb((db) => {
-      ensureSchema(db);
-      reclaimLowBalanceInviteCodes(db);
-    });
+    if (IS_VERCEL) {
+      const db = await getSupabaseDb();
+      await db.reclaimLowBalanceInviteCodes();
+    } else {
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+      });
+    }
     res.json({ user: await getPublicUser(req.authUser!) });
   });
+
+  // ─── 模型列表 ─────────────────────────────────────────────────────
 
   app.get('/api/models', requireAuth, (_req, res) => {
     res.json({ models });
   });
+
+  // ─── 图片生成 ─────────────────────────────────────────────────────
 
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
@@ -1411,10 +1605,8 @@ async function start() {
       let creditsUsed = getModelCredits(modelId);
       let fallbackUsed = false;
 
-      // Gemini 模型: 0 积分，检查 API Key 是否配置
       if (isGeminiModel(modelId)) {
         if (!GEMINI_API_KEY) {
-          // Gemini API Key 未配置，自动回退到 Nano_Banana_2
           modelId = 'Nano_Banana_2';
           ratio = normalizeRatio(dimensions, modelId);
           modelName = modelNameFromId(modelId);
@@ -1424,17 +1616,27 @@ async function start() {
         }
       }
 
-      // 积分检查 (Gemini 免费模型跳过)
+      // 积分检查
       if (creditsUsed > 0) {
-        await withWriteDb((db) => {
-          ensureSchema(db);
-          reclaimLowBalanceInviteCodes(db);
-          ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
-          const credits = getUserCredits(db, req.authUser!.userId);
+        if (IS_VERCEL) {
+          const db = await getSupabaseDb();
+          await db.reclaimLowBalanceInviteCodes();
+          await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
+          const credits = await db.getUserCredits(req.authUser!.userId);
           if (credits.remainingCredits < creditsUsed) {
             throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
           }
-        });
+        } else {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            reclaimLowBalanceInviteCodes(db);
+            ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+            const credits = getUserCredits(db, req.authUser!.userId);
+            if (credits.remainingCredits < creditsUsed) {
+              throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+            }
+          });
+        }
       }
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
@@ -1442,7 +1644,6 @@ async function start() {
       let imagePath: string;
 
       if (isGeminiModel(modelId)) {
-        // 使用 Gemini API 生成
         try {
           imagePath = await callGeminiGeneration({
             prompt,
@@ -1450,24 +1651,33 @@ async function start() {
           });
         } catch (geminiError) {
           if (isGeminiQuotaError(geminiError)) {
-            // Gemini 额度用尽，自动回退到 Nano_Banana_2
             const fallbackModelId = 'Nano_Banana_2';
             const fallbackCredits = getModelCredits(fallbackModelId);
 
-            // 检查回退模型的积分
-            await withWriteDb((db) => {
-              ensureSchema(db);
-              reclaimLowBalanceInviteCodes(db);
-              ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
-              const credits = getUserCredits(db, req.authUser!.userId);
+            if (IS_VERCEL) {
+              const db = await getSupabaseDb();
+              await db.reclaimLowBalanceInviteCodes();
+              await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
+              const credits = await db.getUserCredits(req.authUser!.userId);
               if (credits.remainingCredits < fallbackCredits) {
                 throw new Error(
                   `Gemini 额度已用完，自动切换到 ${modelNameFromId(fallbackModelId)} 但积分不足（需要 ${fallbackCredits} 积分，当前剩余 ${credits.remainingCredits} 积分）。请充值或选择其他模型。`,
                 );
               }
-            });
+            } else {
+              await withWriteDb((db) => {
+                ensureSchema(db);
+                reclaimLowBalanceInviteCodes(db);
+                ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+                const credits = getUserCredits(db, req.authUser!.userId);
+                if (credits.remainingCredits < fallbackCredits) {
+                  throw new Error(
+                    `Gemini 额度已用完，自动切换到 ${modelNameFromId(fallbackModelId)} 但积分不足（需要 ${fallbackCredits} 积分，当前剩余 ${credits.remainingCredits} 积分）。请充值或选择其他模型。`,
+                  );
+                }
+              });
+            }
 
-            // 使用回退模型生成
             modelId = fallbackModelId;
             ratio = normalizeRatio(dimensions, modelId);
             modelName = modelNameFromId(modelId);
@@ -1489,7 +1699,6 @@ async function start() {
           }
         }
       } else {
-        // 使用 Visionary API 生成
         imagePath = await callVisionaryGeneration({
           prompt,
           modelId,
@@ -1512,55 +1721,80 @@ async function start() {
         fallbackUsed,
       };
 
-      // 扣除积分 (Gemini 免费模型不扣积分)
+      // 扣除积分
       if (creditsUsed > 0) {
-        await withWriteDb((db) => {
-          ensureSchema(db);
-          reclaimLowBalanceInviteCodes(db);
-          db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
-            creditsUsed,
-            nowIso(),
-            req.authUser!.userId,
-          ]);
-          syncInviteCodeBalanceForUser(db, req.authUser!.userId);
-        });
+        if (IS_VERCEL) {
+          const db = await getSupabaseDb();
+          await db.reclaimLowBalanceInviteCodes();
+          await db.incrementUsedCredits(req.authUser!.userId, creditsUsed);
+          await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
+        } else {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            reclaimLowBalanceInviteCodes(db);
+            db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
+              creditsUsed,
+              nowIso(),
+              req.authUser!.userId,
+            ]);
+            syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+          });
+        }
       }
 
       // 记录生成历史
-      await withWriteDb((db) => {
-        ensureSchema(db);
-        reclaimLowBalanceInviteCodes(db);
-        db.run(
-          `
-            INSERT INTO generations (
-              user_id,
-              username,
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+        await db.insertGeneration({
+          userId: req.authUser!.userId,
+          username: req.authUser!.username,
+          prompt,
+          modelId,
+          modelName,
+          dimensions: ratio,
+          imageSize,
+          imagePath,
+          creditsUsed,
+          referenceImages,
+          createdAt,
+        });
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          reclaimLowBalanceInviteCodes(db);
+          db.run(
+            `
+              INSERT INTO generations (
+                user_id,
+                username,
+                prompt,
+                model_id,
+                model_name,
+                dimensions,
+                image_size,
+                image_path,
+                credits_used,
+                reference_images,
+                created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+              req.authUser!.userId,
+              req.authUser!.username,
               prompt,
-              model_id,
-              model_name,
-              dimensions,
-              image_size,
-              image_path,
-              credits_used,
-              reference_images,
-              created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `,
-          [
-            req.authUser!.userId,
-            req.authUser!.username,
-            prompt,
-            modelId,
-            modelName,
-            ratio,
-            imageSize,
-            imagePath,
-            creditsUsed,
-            serializeReferenceImages(referenceImages),
-            createdAt,
-          ],
-        );
-      });
+              modelId,
+              modelName,
+              ratio,
+              imageSize,
+              imagePath,
+              creditsUsed,
+              serializeReferenceImages(referenceImages),
+              createdAt,
+            ],
+          );
+        });
+      }
 
       res.json({ image: payload });
     } catch (error) {
@@ -1568,10 +1802,33 @@ async function start() {
     }
   });
 
+  // ─── 生成历史 ─────────────────────────────────────────────────────
+
   app.get('/api/user/history', requireAuth, async (req, res) => {
     const userId = req.authUser!.userId;
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        const generations = await db.getUserGenerations(userId);
+        const history = generations.map((row) => toGeneration({
+          id: row.id,
+          user_id: row.user_id,
+          username: row.username,
+          prompt: row.prompt,
+          model_id: row.model_id,
+          model_name: row.model_name,
+          dimensions: row.dimensions,
+          image_size: row.image_size,
+          image_path: row.image_path,
+          credits_used: row.credits_used,
+          reference_images: row.reference_images,
+          created_at: row.created_at,
+        }));
+        res.json({ history });
+        return;
+      }
+
       const history = await withReadDb((db) => {
         ensureSchema(db);
         return runQuery<Record<string, unknown>>(
@@ -1592,6 +1849,8 @@ async function start() {
     }
   });
 
+  // ─── 管理员概览 ───────────────────────────────────────────────────
+
   app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
     const recordsPage = parsePaginationValue(req.query.recordsPage, 1, 1, 100000);
     const recordsPageSize = parsePaginationValue(req.query.recordsPageSize, 20, 1, 100);
@@ -1599,6 +1858,130 @@ async function start() {
     const inviteCodesPageSize = parsePaginationValue(req.query.inviteCodesPageSize, 20, 1, 100);
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const generationSummaries = await db.getGenerationSummaries();
+        const registeredUsers = await db.getRegisteredUsers();
+        const creditRows = await db.getAllCreditRows();
+
+        const summaryByUserId = new Map(
+          generationSummaries.map((row) => [
+            row.user_id,
+            {
+              userId: row.user_id,
+              username: row.username,
+              generations: row.generations,
+              creditsUsed: row.credits_used,
+              lastGeneratedAt: row.last_generated_at,
+            },
+          ]),
+        );
+
+        const userMap = new Map<
+          string,
+          {
+            userId: string;
+            username: string;
+            generations: number;
+            creditsUsed: number;
+            totalCredits: number;
+            usedCredits: number;
+            remainingCredits: number;
+            lastGeneratedAt: string;
+          }
+        >();
+
+        for (const row of registeredUsers) {
+          userMap.set(row.user_id, {
+            userId: row.user_id,
+            username: row.username,
+            generations: 0,
+            creditsUsed: 0,
+            totalCredits: row.total_credits,
+            usedCredits: row.used_credits,
+            remainingCredits: Math.max(0, row.total_credits - row.used_credits),
+            lastGeneratedAt: '',
+          });
+        }
+
+        for (const row of creditRows) {
+          if (!userMap.has(row.user_id)) {
+            userMap.set(row.user_id, {
+              userId: row.user_id,
+              username: row.username,
+              generations: 0,
+              creditsUsed: 0,
+              totalCredits: row.total_credits,
+              usedCredits: row.used_credits,
+              remainingCredits: Math.max(0, row.total_credits - row.used_credits),
+              lastGeneratedAt: '',
+            });
+          }
+        }
+
+        for (const summary of summaryByUserId.values()) {
+          const current = userMap.get(summary.userId);
+          userMap.set(summary.userId, {
+            userId: summary.userId,
+            username: current?.username || summary.username,
+            generations: summary.generations,
+            creditsUsed: summary.creditsUsed,
+            totalCredits: current?.totalCredits || 0,
+            usedCredits: current?.usedCredits || 0,
+            remainingCredits: current?.remainingCredits || 0,
+            lastGeneratedAt: summary.lastGeneratedAt,
+          });
+        }
+
+        const users = [...userMap.values()].sort(
+          (left, right) => right.creditsUsed - left.creditsUsed || right.generations - left.generations,
+        );
+
+        const { records: genRecords, total: recordsTotal } = await db.getGenerationsWithInviteCode(recordsPage, recordsPageSize);
+        const records = genRecords.map((row) => toGeneration({
+          id: row.id,
+          user_id: row.user_id,
+          username: row.username,
+          prompt: row.prompt,
+          model_id: row.model_id,
+          model_name: row.model_name,
+          dimensions: row.dimensions,
+          image_size: row.image_size,
+          image_path: row.image_path,
+          credits_used: row.credits_used,
+          reference_images: row.reference_images,
+          created_at: row.created_at,
+          invite_code: row.invite_code,
+        }));
+
+        const { codes: inviteCodeRows, total: inviteCodesTotal } = await db.listInviteCodes(inviteCodesPage, inviteCodesPageSize);
+        const inviteCodes = inviteCodeRows.map((row) => toInviteCode({
+          code: row.code,
+          credits: row.credits,
+          issued_credits: row.issued_credits,
+          created_by: row.created_by,
+          created_at: row.created_at,
+          redeemed_by: row.redeemed_by,
+          redeemed_at: row.redeemed_at,
+          low_balance_since: row.low_balance_since,
+        }));
+
+        const adminCredits = await db.getAdminCreditSummary();
+
+        res.json({
+          users,
+          records,
+          recordsPage: toPagination(recordsPage, recordsPageSize, recordsTotal),
+          inviteCodes,
+          inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
+          adminCredits,
+        });
+        return;
+      }
+
+      // SQLite 模式
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -1792,6 +2175,8 @@ async function start() {
     }
   });
 
+  // ─── 创建邀请码 ───────────────────────────────────────────────────
+
   app.post('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
     const requestedCredits = Number(req.body?.credits);
 
@@ -1801,6 +2186,45 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const adminCredits = await db.getAdminCreditSummary();
+        const credits = Math.floor(requestedCredits);
+
+        if (credits > adminCredits.remainingCredits) {
+          throw new Error(`管理员剩余积分不足，当前剩余 ${adminCredits.remainingCredits} 积分`);
+        }
+
+        let code = generateInviteCode();
+        while (await db.getInviteCode(code)) {
+          code = generateInviteCode();
+        }
+
+        await db.createInviteCode(code, credits, req.authUser!.username);
+        await db.adjustAdminTotalCredits(-credits);
+
+        const invite = await db.getInviteCode(code);
+        const newAdminCredits = await db.getAdminCreditSummary();
+
+        res.status(201).json({
+          inviteCode: invite ? toInviteCode({
+            code: invite.code,
+            credits: invite.credits,
+            issued_credits: invite.issued_credits,
+            created_by: invite.created_by,
+            created_at: invite.created_at,
+            redeemed_by: invite.redeemed_by,
+            redeemed_at: invite.redeemed_at,
+            low_balance_since: invite.low_balance_since,
+          }) : null,
+          adminCredits: newAdminCredits,
+        });
+        return;
+      }
+
+      // SQLite 模式
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -1842,6 +2266,8 @@ async function start() {
     }
   });
 
+  // ─── 用户图片列表 ─────────────────────────────────────────────────
+
   app.get('/api/user/images', requireAuth, async (req, res) => {
     const category = normalizeString(req.query.category);
     const userId = req.authUser!.userId;
@@ -1852,6 +2278,24 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        const images = await db.getUserImages(userId, category || undefined);
+        res.json({
+          images: images.map((row) => toSavedImage({
+            id: row.id,
+            prompt: row.prompt,
+            model_name: row.model_name,
+            dimensions: row.dimensions,
+            image_path: row.image_path,
+            category: row.category,
+            reference_images: row.reference_images,
+            created_at: row.created_at,
+          })),
+        });
+        return;
+      }
+
       const images = await withReadDb((db) => {
         ensureSchema(db);
         const rows = category
@@ -1885,6 +2329,8 @@ async function start() {
     }
   });
 
+  // ─── 保存/移动图片 ────────────────────────────────────────────────
+
   app.post('/api/user/images/move', requireAuth, async (req, res) => {
     const category = normalizeString(req.body?.category);
     const imageId = req.body?.imageId;
@@ -1897,6 +2343,74 @@ async function start() {
     }
 
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+
+        if (typeof imageId === 'number') {
+          // Vercel 环境下 imageId 是 UUID 字符串，但前端可能传 number
+          // 尝试通过字符串 ID 查找
+          const existing = await db.getImageById(String(imageId), userId);
+          if (!existing) {
+            res.json({ image: null });
+            return;
+          }
+
+          await db.updateImageCategory(String(imageId), userId, category);
+          res.json({
+            image: toSavedImage({
+              id: existing.id,
+              prompt: existing.prompt,
+              model_name: existing.model_name,
+              dimensions: existing.dimensions,
+              image_path: existing.image_path,
+              category,
+              reference_images: existing.reference_images,
+              created_at: existing.created_at,
+            }),
+          });
+          return;
+        }
+
+        const prompt = normalizeString(image?.prompt);
+        const modelName = normalizeString(image?.modelName);
+        const dimensions = normalizeString(image?.dimensions) || '1:1';
+        const imagePath = normalizeString(image?.imagePath);
+        const referenceImages = Array.isArray(image?.referenceImages)
+          ? image.referenceImages.filter((item): item is string => typeof item === 'string')
+          : [];
+        const createdAt = normalizeString(image?.createdAt) || nowIso();
+
+        if (!prompt || !modelName || !imagePath) {
+          throw new Error('Image payload is incomplete');
+        }
+
+        const savedImage = await db.insertImage({
+          userId,
+          prompt,
+          modelName,
+          dimensions,
+          imagePath,
+          category,
+          referenceImages,
+          createdAt,
+        });
+
+        res.json({
+          image: toSavedImage({
+            id: savedImage.id,
+            prompt: savedImage.prompt,
+            model_name: savedImage.model_name,
+            dimensions: savedImage.dimensions,
+            image_path: savedImage.image_path,
+            category: savedImage.category,
+            reference_images: savedImage.reference_images,
+            created_at: savedImage.created_at,
+          }),
+        });
+        return;
+      }
+
+      // SQLite 模式
       const savedImage = await withWriteDb((db) => {
         ensureSchema(db);
 
@@ -1968,19 +2482,29 @@ async function start() {
     }
   });
 
+  // ─── 删除图片 ─────────────────────────────────────────────────────
+
   app.delete('/api/user/images/:id', requireAuth, async (req, res) => {
-    const id = Number(req.params.id);
+    const id = req.params.id;
     const userId = req.authUser!.userId;
 
-    if (!Number.isFinite(id)) {
-      res.status(400).json({ error: 'Invalid image id' });
-      return;
-    }
-
     try {
+      if (IS_VERCEL) {
+        const db = await getSupabaseDb();
+        await db.deleteImage(id, userId);
+        res.json({ ok: true });
+        return;
+      }
+
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) {
+        res.status(400).json({ error: 'Invalid image id' });
+        return;
+      }
+
       await withWriteDb((db) => {
         ensureSchema(db);
-        db.run('DELETE FROM images WHERE id = ? AND user_id = ?', [id, userId]);
+        db.run('DELETE FROM images WHERE id = ? AND user_id = ?', [numericId, userId]);
       });
 
       res.json({ ok: true });
@@ -1989,6 +2513,8 @@ async function start() {
     }
   });
 
+  // ─── 静态文件服务（仅本地环境） ───────────────────────────────────
+
   if (hasDistBuild) {
     app.use(express.static(DIST_DIR));
     app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => {
@@ -1996,16 +2522,20 @@ async function start() {
     });
   }
 
+  // ─── 错误处理 ─────────────────────────────────────────────────────
+
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = error instanceof Error ? error.message : 'Unexpected server error';
     res.status(500).json({ error: message });
   });
 
+  // ─── 启动监听 ─────────────────────────────────────────────────────
+
   const host = process.env.HOST || DEFAULT_HOST;
   const port = Number(process.env.PORT || DEFAULT_PORT);
 
   // Vercel Serverless 环境下不启动监听，导出 app
-  if (process.env.VERCEL) {
+  if (IS_VERCEL) {
     return app;
   }
 
@@ -2018,7 +2548,7 @@ async function start() {
 const serverPromise = start();
 
 // 本地开发时直接启动
-if (!process.env.VERCEL) {
+if (!IS_VERCEL) {
   serverPromise.catch((error) => {
     console.error(error);
     process.exit(1);

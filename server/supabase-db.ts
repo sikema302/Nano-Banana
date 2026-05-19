@@ -1,0 +1,848 @@
+/**
+ * Supabase 数据库操作层
+ * 在 Vercel Serverless 环境下替代 SQLite，直接使用 Supabase (PostgreSQL) 作为数据库。
+ */
+
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+// ─── 类型定义 ───────────────────────────────────────────────────────
+
+type CreditSummary = {
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+};
+
+type InviteCodeRow = {
+  code: string;
+  credits: number;
+  issued_credits: number;
+  created_by: string;
+  created_at: string;
+  redeemed_by: string | null;
+  redeemed_at: string | null;
+  low_balance_since: string | null;
+};
+
+type GenerationRow = {
+  id: string;
+  user_id: string;
+  username: string;
+  prompt: string;
+  model_id: string;
+  model_name: string;
+  dimensions: string;
+  image_size: string;
+  image_path: string;
+  credits_used: number;
+  reference_images: string;
+  created_at: string;
+  invite_code?: string;
+};
+
+type ImageRow = {
+  id: string;
+  user_id: string;
+  prompt: string;
+  model_name: string;
+  dimensions: string;
+  image_path: string;
+  category: string;
+  reference_images: string;
+  created_at: string;
+};
+
+type UserRow = {
+  id: string;
+  username: string;
+  password_hash: string;
+  email: string | null;
+  created_at: string;
+};
+
+type UserCreditsRow = {
+  user_id: string;
+  username: string;
+  total_credits: number;
+  used_credits: number;
+  created_at: string;
+  updated_at: string;
+};
+
+// ─── 常量 ───────────────────────────────────────────────────────────
+
+const ADMIN_INITIAL_CREDITS = 3859;
+const INVITE_RECLAIM_THRESHOLD = 17;
+const INVITE_RECLAIM_DAYS = 7;
+
+// ─── Supabase 客户端 ────────────────────────────────────────────────
+
+let _supabase: SupabaseClient | null = null;
+
+function getSupabase(): SupabaseClient {
+  if (!_supabase) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) {
+      throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in Vercel environment');
+    }
+    _supabase = createClient(url, key, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+  }
+  return _supabase;
+}
+
+// ─── 辅助函数 ───────────────────────────────────────────────────────
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function toCreditSummary(row: { total_credits: number; used_credits: number } | null): CreditSummary {
+  const totalCredits = Number(row?.total_credits || 0);
+  const usedCredits = Number(row?.used_credits || 0);
+  return {
+    totalCredits,
+    usedCredits,
+    remainingCredits: Math.max(0, totalCredits - usedCredits),
+  };
+}
+
+function addDaysIso(base: string, days: number): string {
+  const date = new Date(base);
+  if (Number.isNaN(date.getTime())) return base;
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function generateRandomHex(bytes: number): string {
+  const array = new Uint8Array(bytes);
+  crypto.getRandomValues(array);
+  return Array.from(array)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function generateInviteCode(): string {
+  return `BANANA-${generateRandomHex(4).toUpperCase()}`;
+}
+
+function sha256Digest(input: string): string {
+  // 使用 Web Crypto API (Vercel 环境可用)
+  // 由于是同步场景，这里用简单哈希替代
+  // 实际上 crypto.createHash 在 Vercel 中也可用，但为安全起见用简单方法
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    const char = input.charCodeAt(i);
+    hash = ((hash << 5) - hash + char) | 0;
+  }
+  return Math.abs(hash).toString(16).padStart(12, '0').slice(0, 12);
+}
+
+// ─── 用户操作 ───────────────────────────────────────────────────────
+
+export async function findUserByUsername(username: string): Promise<UserRow | null> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .select('id, username, password_hash, email, created_at')
+    .eq('username', username)
+    .single();
+  if (error || !data) return null;
+  return data as unknown as UserRow;
+}
+
+export async function createUser(
+  username: string,
+  passwordHash: string,
+  email: string | null,
+): Promise<UserRow> {
+  const id = crypto.randomUUID();
+  const { data, error } = await getSupabase()
+    .from('users')
+    .insert({
+      id,
+      username,
+      password_hash: passwordHash,
+      email,
+      created_at: nowIso(),
+    })
+    .select('id, username, password_hash, email, created_at')
+    .single();
+  if (error) throw new Error(`Create user failed: ${error.message}`);
+  return data as unknown as UserRow;
+}
+
+export async function updateUserPassword(username: string, passwordHash: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('users')
+    .update({ password_hash: passwordHash })
+    .eq('username', username);
+  if (error) throw new Error(`Update password failed: ${error.message}`);
+}
+
+// ─── 积分操作 ───────────────────────────────────────────────────────
+
+export async function getUserCredits(userId: string): Promise<CreditSummary> {
+  const { data, error } = await getSupabase()
+    .from('user_credits')
+    .select('total_credits, used_credits')
+    .eq('user_id', userId)
+    .single();
+  if (error) return { totalCredits: 0, usedCredits: 0, remainingCredits: 0 };
+  return toCreditSummary(data as { total_credits: number; used_credits: number });
+}
+
+export async function ensureUserCredits(
+  userId: string,
+  username: string,
+  totalCredits = 0,
+): Promise<void> {
+  const { data: existing } = await getSupabase()
+    .from('user_credits')
+    .select('user_id')
+    .eq('user_id', userId)
+    .single();
+
+  if (existing) {
+    const { error } = await getSupabase()
+      .from('user_credits')
+      .update({ username, updated_at: nowIso() })
+      .eq('user_id', userId);
+    if (error) throw new Error(`Update credits failed: ${error.message}`);
+    return;
+  }
+
+  const { error } = await getSupabase().from('user_credits').insert({
+    user_id: userId,
+    username,
+    total_credits: totalCredits,
+    used_credits: 0,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  });
+  if (error) throw new Error(`Insert credits failed: ${error.message}`);
+}
+
+export async function setUserTotalCredits(userId: string, totalCredits: number): Promise<void> {
+  const { error } = await getSupabase()
+    .from('user_credits')
+    .update({
+      total_credits: Math.max(0, Math.floor(totalCredits)),
+      updated_at: nowIso(),
+    })
+    .eq('user_id', userId);
+  if (error) throw new Error(`Set total credits failed: ${error.message}`);
+}
+
+export async function adjustUserTotalCredits(userId: string, delta: number): Promise<void> {
+  const credits = await getUserCredits(userId);
+  await setUserTotalCredits(userId, credits.totalCredits + delta);
+}
+
+export async function incrementUsedCredits(userId: string, amount: number): Promise<void> {
+  // 先读取当前值
+  const credits = await getUserCredits(userId);
+  const { error } = await getSupabase()
+    .from('user_credits')
+    .update({
+      used_credits: credits.usedCredits + amount,
+      updated_at: nowIso(),
+    })
+    .eq('user_id', userId);
+  if (error) throw new Error(`Increment used credits failed: ${error.message}`);
+}
+
+// ─── 管理员积分 ─────────────────────────────────────────────────────
+
+export async function getAdminCreditOwner(): Promise<{ user_id: string } | null> {
+  const { data, error } = await getSupabase()
+    .from('user_credits')
+    .select('user_id')
+    .eq('username', 'admin')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .single();
+  if (error || !data) return null;
+  return data as unknown as { user_id: string };
+}
+
+export async function getAdminCreditSummary(): Promise<CreditSummary> {
+  const { data, error } = await getSupabase()
+    .from('user_credits')
+    .select('total_credits, used_credits')
+    .eq('username', 'admin')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .single();
+  if (error) return { totalCredits: 0, usedCredits: 0, remainingCredits: 0 };
+  return toCreditSummary(data as { total_credits: number; used_credits: number });
+}
+
+export async function adjustAdminTotalCredits(delta: number): Promise<void> {
+  const admin = await getAdminCreditOwner();
+  if (!admin?.user_id) {
+    throw new Error('Admin credits are not initialized');
+  }
+  await adjustUserTotalCredits(String(admin.user_id), delta);
+}
+
+// ─── 邀请码操作 ─────────────────────────────────────────────────────
+
+export async function getInviteCode(code: string): Promise<InviteCodeRow | null> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .eq('code', code)
+    .single();
+  if (error || !data) return null;
+  return data as unknown as InviteCodeRow;
+}
+
+export async function createInviteCode(
+  code: string,
+  credits: number,
+  createdBy: string,
+): Promise<InviteCodeRow> {
+  const lowBalanceSince = credits < INVITE_RECLAIM_THRESHOLD ? nowIso() : null;
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .insert({
+      code,
+      credits,
+      issued_credits: credits,
+      created_by: createdBy,
+      created_at: nowIso(),
+      low_balance_since: lowBalanceSince,
+    })
+    .select('*')
+    .single();
+  if (error) throw new Error(`Create invite code failed: ${error.message}`);
+  return data as unknown as InviteCodeRow;
+}
+
+export async function redeemInviteCode(code: string, userId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .update({
+      redeemed_by: userId,
+      redeemed_at: nowIso(),
+    })
+    .eq('code', code);
+  if (error) throw new Error(`Redeem invite code failed: ${error.message}`);
+}
+
+export async function updateInviteCodeCredits(
+  code: string,
+  credits: number,
+  lowBalanceSince: string | null,
+): Promise<void> {
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .update({
+      credits,
+      low_balance_since: lowBalanceSince,
+    })
+    .eq('code', code);
+  if (error) throw new Error(`Update invite code failed: ${error.message}`);
+}
+
+export async function zeroInviteCode(code: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .update({
+      credits: 0,
+      low_balance_since: null,
+    })
+    .eq('code', code);
+  if (error) throw new Error(`Zero invite code failed: ${error.message}`);
+}
+
+export async function listInviteCodes(
+  page: number,
+  pageSize: number,
+): Promise<{ codes: InviteCodeRow[]; total: number }> {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { count, error: countError } = await getSupabase()
+    .from('invite_codes')
+    .select('*', { count: 'exact', head: true });
+  const total = countError ? 0 : count || 0;
+
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .range(from, to);
+  if (error) throw new Error(`List invite codes failed: ${error.message}`);
+
+  return {
+    codes: (data || []) as unknown as InviteCodeRow[],
+    total,
+  };
+}
+
+export async function getRedeemedInviteCodeForUser(
+  userId: string,
+): Promise<InviteCodeRow | null> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .eq('redeemed_by', userId)
+    .order('redeemed_at', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  if (error || !data) return null;
+  return data as unknown as InviteCodeRow;
+}
+
+export async function getAllRedeemedUserIds(): Promise<string[]> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('redeemed_by')
+    .not('redeemed_by', 'is', null)
+    .neq('redeemed_by', '');
+  if (error) return [];
+  return [...new Set((data || []).map((row: { redeemed_by: string }) => row.redeemed_by).filter(Boolean))];
+}
+
+export async function getReclaimableInviteCodes(): Promise<InviteCodeRow[]> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .gt('credits', 0)
+    .not('low_balance_since', 'is', null);
+  if (error) return [];
+  return (data || []) as unknown as InviteCodeRow[];
+}
+
+export async function getOutstandingInviteCredits(): Promise<number> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('credits');
+  if (error) return 0;
+  return (data || []).reduce((sum: number, row: { credits: number }) => sum + Number(row.credits || 0), 0);
+}
+
+// ─── 生成历史操作 ───────────────────────────────────────────────────
+
+export async function insertGeneration(record: {
+  userId: string;
+  username: string;
+  prompt: string;
+  modelId: string;
+  modelName: string;
+  dimensions: string;
+  imageSize: string;
+  imagePath: string;
+  creditsUsed: number;
+  referenceImages: string[];
+  createdAt: string;
+}): Promise<void> {
+  const { error } = await getSupabase().from('generations').insert({
+    id: crypto.randomUUID(),
+    user_id: record.userId,
+    username: record.username,
+    prompt: record.prompt,
+    model_id: record.modelId,
+    model_name: record.modelName,
+    dimensions: record.dimensions,
+    image_size: record.imageSize,
+    image_path: record.imagePath,
+    credits_used: record.creditsUsed,
+    reference_images: JSON.stringify(record.referenceImages),
+    created_at: record.createdAt,
+  });
+  if (error) throw new Error(`Insert generation failed: ${error.message}`);
+}
+
+export async function getUserGenerations(userId: string): Promise<GenerationRow[]> {
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(`Fetch generations failed: ${error.message}`);
+  return (data || []) as unknown as GenerationRow[];
+}
+
+export async function getGenerationSummaries(): Promise<
+  Array<{
+    user_id: string;
+    username: string;
+    generations: number;
+    credits_used: number;
+    last_generated_at: string;
+  }>
+> {
+  // Supabase 不直接支持 GROUP BY，需要分两步：
+  // 1. 获取所有非 demo 的 generations
+  // 2. 在应用层聚合
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('user_id, username, credits_used, created_at')
+    .neq('username', 'demo');
+  if (error) return [];
+
+  const summaryMap = new Map<
+    string,
+    {
+      user_id: string;
+      username: string;
+      generations: number;
+      credits_used: number;
+      last_generated_at: string;
+    }
+  >();
+
+  for (const row of data as Array<{
+    user_id: string;
+    username: string;
+    credits_used: number;
+    created_at: string;
+  }>) {
+    const existing = summaryMap.get(row.user_id);
+    if (existing) {
+      existing.generations += 1;
+      existing.credits_used += Number(row.credits_used || 0);
+      if (row.created_at > existing.last_generated_at) {
+        existing.last_generated_at = row.created_at;
+      }
+    } else {
+      summaryMap.set(row.user_id, {
+        user_id: row.user_id,
+        username: row.username,
+        generations: 1,
+        credits_used: Number(row.credits_used || 0),
+        last_generated_at: row.created_at,
+      });
+    }
+  }
+
+  return [...summaryMap.values()].sort((a, b) => b.credits_used - a.credits_used || b.generations - a.generations);
+}
+
+export async function getGenerationsWithInviteCode(
+  page: number,
+  pageSize: number,
+): Promise<{ records: GenerationRow[]; total: number }> {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { count, error: countError } = await getSupabase()
+    .from('generations')
+    .select('*', { count: 'exact', head: true })
+    .neq('username', 'demo');
+  const total = countError ? 0 : count || 0;
+
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('*')
+    .neq('username', 'demo')
+    .order('created_at', { ascending: false })
+    .range(from, to);
+  if (error) throw new Error(`Fetch generations failed: ${error.message}`);
+
+  const records = (data || []) as unknown as GenerationRow[];
+
+  // 为每条记录附加 invite_code
+  const userIds = [...new Set(records.map((r) => r.user_id))];
+  const inviteCodeMap = new Map<string, string>();
+
+  for (const userId of userIds) {
+    const { data: inviteData } = await getSupabase()
+      .from('invite_codes')
+      .select('code')
+      .eq('redeemed_by', userId)
+      .order('redeemed_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    if (inviteData) {
+      inviteCodeMap.set(userId, (inviteData as { code: string }).code);
+    }
+  }
+
+  for (const record of records) {
+    (record as GenerationRow & { invite_code?: string }).invite_code =
+      inviteCodeMap.get(record.user_id) || '';
+  }
+
+  return { records, total };
+}
+
+// ─── 图片操作 ───────────────────────────────────────────────────────
+
+export async function insertImage(record: {
+  userId: string;
+  prompt: string;
+  modelName: string;
+  dimensions: string;
+  imagePath: string;
+  category: string;
+  referenceImages: string[];
+  createdAt: string;
+}): Promise<ImageRow> {
+  const id = crypto.randomUUID();
+  const { data, error } = await getSupabase()
+    .from('images')
+    .insert({
+      id,
+      user_id: record.userId,
+      prompt: record.prompt,
+      model_name: record.modelName,
+      dimensions: record.dimensions,
+      image_path: record.imagePath,
+      category: record.category,
+      reference_images: JSON.stringify(record.referenceImages),
+      created_at: record.createdAt,
+    })
+    .select('*')
+    .single();
+  if (error) throw new Error(`Insert image failed: ${error.message}`);
+  return data as unknown as ImageRow;
+}
+
+export async function getUserImages(
+  userId: string,
+  category?: string,
+): Promise<ImageRow[]> {
+  let query = getSupabase()
+    .from('images')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (category) {
+    query = query.eq('category', category);
+  }
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Fetch images failed: ${error.message}`);
+  return (data || []) as unknown as ImageRow[];
+}
+
+export async function getImageById(imageId: string, userId: string): Promise<ImageRow | null> {
+  const { data, error } = await getSupabase()
+    .from('images')
+    .select('*')
+    .eq('id', imageId)
+    .eq('user_id', userId)
+    .single();
+  if (error || !data) return null;
+  return data as unknown as ImageRow;
+}
+
+export async function updateImageCategory(
+  imageId: string,
+  userId: string,
+  category: string,
+): Promise<boolean> {
+  const { error } = await getSupabase()
+    .from('images')
+    .update({ category })
+    .eq('id', imageId)
+    .eq('user_id', userId);
+  if (error) return false;
+  return true;
+}
+
+export async function deleteImage(imageId: string, userId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('images')
+    .delete()
+    .eq('id', imageId)
+    .eq('user_id', userId);
+  if (error) throw new Error(`Delete image failed: ${error.message}`);
+}
+
+// ─── 设置操作 ───────────────────────────────────────────────────────
+
+export async function getSetting(key: string, fallback: string): Promise<string> {
+  const { data, error } = await getSupabase()
+    .from('app_settings')
+    .select('value')
+    .eq('key', key)
+    .single();
+  if (error || !data) {
+    // 设置默认值
+    const { error: insertError } = await getSupabase().from('app_settings').insert({
+      key,
+      value: fallback,
+      updated_at: nowIso(),
+    });
+    if (insertError) {
+      // 可能已存在，尝试更新
+      const { error: upsertError } = await getSupabase()
+        .from('app_settings')
+        .update({ value: fallback, updated_at: nowIso() })
+        .eq('key', key);
+      if (upsertError) throw new Error(`Set setting failed: ${upsertError.message}`);
+    }
+    return fallback;
+  }
+  return String((data as { value: string }).value);
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('app_settings')
+    .upsert(
+      { key, value, updated_at: nowIso() },
+      { onConflict: 'key' },
+    );
+  if (error) throw new Error(`Set setting failed: ${error.message}`);
+}
+
+// ─── 管理概览操作 ───────────────────────────────────────────────────
+
+export async function getRegisteredUsers(): Promise<
+  Array<{
+    user_id: string;
+    username: string;
+    total_credits: number;
+    used_credits: number;
+  }>
+> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .select('id, username')
+    .neq('username', 'demo')
+    .order('created_at', { ascending: false });
+  if (error) return [];
+
+  const users: Array<{
+    user_id: string;
+    username: string;
+    total_credits: number;
+    used_credits: number;
+  }> = [];
+
+  for (const user of data as Array<{ id: string; username: string }>) {
+    const credits = await getUserCredits(user.id);
+    users.push({
+      user_id: user.id,
+      username: user.username,
+      total_credits: credits.totalCredits,
+      used_credits: credits.usedCredits,
+    });
+  }
+
+  return users;
+}
+
+export async function getAllCreditRows(): Promise<
+  Array<{
+    user_id: string;
+    username: string;
+    total_credits: number;
+    used_credits: number;
+  }>
+> {
+  const { data, error } = await getSupabase()
+    .from('user_credits')
+    .select('*')
+    .neq('username', 'demo');
+  if (error) return [];
+  return (data || []).map((row: UserCreditsRow) => ({
+    user_id: row.user_id,
+    username: row.username,
+    total_credits: Number(row.total_credits || 0),
+    used_credits: Number(row.used_credits || 0),
+  }));
+}
+
+// ─── 邀请码回收逻辑 ────────────────────────────────────────────────
+
+export async function syncInviteCodeBalanceForUser(userId: string): Promise<void> {
+  const invite = await getRedeemedInviteCodeForUser(userId);
+  if (!invite?.code) return;
+
+  const credits = await getUserCredits(userId);
+  const remainingCredits = credits.remainingCredits;
+  const currentCredits = Number(invite.credits || 0);
+  const existingLowBalanceSince = invite.low_balance_since || '';
+  const nextLowBalanceSince =
+    remainingCredits > 0 && remainingCredits < INVITE_RECLAIM_THRESHOLD
+      ? existingLowBalanceSince || nowIso()
+      : null;
+
+  if (
+    currentCredits === remainingCredits &&
+    String(invite.low_balance_since || '') === String(nextLowBalanceSince || '')
+  ) {
+    return;
+  }
+
+  await updateInviteCodeCredits(invite.code, remainingCredits, nextLowBalanceSince);
+}
+
+export async function syncRedeemedInviteCodeBalances(): Promise<void> {
+  const userIds = await getAllRedeemedUserIds();
+  for (const userId of userIds) {
+    await syncInviteCodeBalanceForUser(userId);
+  }
+}
+
+export async function reclaimLowBalanceInviteCodes(): Promise<void> {
+  const invites = await getReclaimableInviteCodes();
+
+  for (const invite of invites) {
+    const lowBalanceSince = invite.low_balance_since || '';
+    if (!lowBalanceSince) continue;
+
+    const reclaimAt = new Date(addDaysIso(lowBalanceSince, INVITE_RECLAIM_DAYS));
+    if (Number.isNaN(reclaimAt.getTime()) || reclaimAt.getTime() > Date.now()) {
+      continue;
+    }
+
+    const creditsToReturn = Number(invite.credits || 0);
+    if (creditsToReturn <= 0) continue;
+
+    const redeemedBy = invite.redeemed_by || '';
+    if (redeemedBy) {
+      const userCredits = await getUserCredits(redeemedBy);
+      await setUserTotalCredits(redeemedBy, userCredits.usedCredits);
+    }
+
+    await zeroInviteCode(invite.code);
+    await adjustAdminTotalCredits(creditsToReturn);
+  }
+}
+
+// ─── 初始化逻辑 ─────────────────────────────────────────────────────
+
+export async function ensureRuntimeSchema(): Promise<void> {
+  const bcrypt = await import('bcryptjs');
+
+  // 确保管理员用户存在
+  const adminUsername = 'admin';
+  let adminUser = await findUserByUsername(adminUsername);
+
+  if (!adminUser) {
+    const passwordHash = await bcrypt.hash('admin654', 10);
+    adminUser = await createUser(adminUsername, passwordHash, 'admin@example.com');
+  } else {
+    const passwordHash = await bcrypt.hash('admin654', 10);
+    await updateUserPassword(adminUsername, passwordHash);
+  }
+
+  await ensureUserCredits(adminUser.id, adminUsername, 0);
+  const adminCredits = await getUserCredits(adminUser.id);
+  if (adminCredits.totalCredits === 0 && adminCredits.usedCredits === 0) {
+    const outstandingInviteCredits = await getOutstandingInviteCredits();
+    await setUserTotalCredits(adminUser.id, Math.max(0, ADMIN_INITIAL_CREDITS - outstandingInviteCredits));
+  }
+
+  await syncRedeemedInviteCodeBalances();
+  await reclaimLowBalanceInviteCodes();
+}
+
+// ─── 导出辅助 ───────────────────────────────────────────────────────
+
+export { generateInviteCode, generateRandomHex, sha256Digest, INVITE_RECLAIM_THRESHOLD };
