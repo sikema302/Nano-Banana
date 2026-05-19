@@ -2003,12 +2003,27 @@ async function start() {
 
   const host = process.env.HOST || DEFAULT_HOST;
   const port = Number(process.env.PORT || DEFAULT_PORT);
+
+  // Vercel Serverless 环境下不启动监听，导出 app
+  if (process.env.VERCEL) {
+    return app;
+  }
+
   app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
   });
+  return app;
 }
 
-start().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const serverPromise = start();
+
+// 本地开发时直接启动
+if (!process.env.VERCEL) {
+  serverPromise.catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+// Vercel Serverless 导出
+export default serverPromise;
