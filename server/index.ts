@@ -17,7 +17,8 @@ const IS_VERCEL = Boolean(process.env.VERCEL);
 // ─── 动态导入模块（避免 Vercel 构建时加载） ─────────────────────────
 
 // sql.js 只在非 Vercel 环境下使用
-let initSqlJs: typeof import('sql.js').default | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let initSqlJs: any = null;
 
 async function getSqlJs() {
   if (!initSqlJs && !IS_VERCEL) {
@@ -165,7 +166,8 @@ const supabaseUserSyncStatus = {
 const require = createRequire(import.meta.url);
 
 // sql.js 初始化（只在非 Vercel 环境）
-let sqlJsReady: Promise<typeof import('sql.js').default> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sqlJsReady: Promise<any> | null = null;
 
 async function getSqlJsReady() {
   if (!sqlJsReady && !IS_VERCEL) {
