@@ -21,8 +21,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const app = await getApp();
     return app(req, res);
-  } catch (error) {
+  } catch (error: any) {
     console.error('API Error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    const errorMessage = error?.message || error?.code || 'Unknown error';
+    res.status(500).json({ 
+      error: 'Internal Server Error',
+      details: errorMessage,
+      stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+    });
   }
 }
