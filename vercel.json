@@ -13,8 +13,5 @@
       "memory": 512,
       "maxDuration": 30
     }
-  },
-  "excludeFiles": [
-    "node_modules/sql.js/**"
-  ]
+  }
 }
