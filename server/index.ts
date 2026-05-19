@@ -8,16 +8,26 @@ import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
-import initSqlJs from 'sql.js';
 import { createClient } from '@supabase/supabase-js';
 
 // ─── 环境检测 ───────────────────────────────────────────────────────
 
 const IS_VERCEL = Boolean(process.env.VERCEL);
 
-// ─── Supabase 数据库层（Vercel 环境） ───────────────────────────────
+// ─── 动态导入模块（避免 Vercel 构建时加载） ─────────────────────────
 
-// 使用动态导入避免在非 Vercel 环境下加载问题
+// sql.js 只在非 Vercel 环境下使用
+let initSqlJs: typeof import('sql.js').default | null = null;
+
+async function getSqlJs() {
+  if (!initSqlJs && !IS_VERCEL) {
+    const sql = await import('sql.js');
+    initSqlJs = sql.default;
+  }
+  return initSqlJs;
+}
+
+// Supabase 数据库层只在 Vercel 环境下使用
 let supabaseDb: typeof import('./supabase-db.js') | null = null;
 
 async function getSupabaseDb() {
@@ -153,9 +163,19 @@ const supabaseUserSyncStatus = {
 // ─── SQLite 初始化（仅本地环境） ───────────────────────────────────
 
 const require = createRequire(import.meta.url);
-const sqlJsReady = initSqlJs({
-  locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
-});
+
+// sql.js 初始化（只在非 Vercel 环境）
+let sqlJsReady: Promise<typeof import('sql.js').default> | null = null;
+
+async function getSqlJsReady() {
+  if (!sqlJsReady && !IS_VERCEL) {
+    const sql = await import('sql.js');
+    sqlJsReady = sql.default({
+      locateFile: (file: string) => require.resolve(`sql.js/dist/${file}`),
+    });
+  }
+  return sqlJsReady!;
+}
 
 // ─── 常量 ───────────────────────────────────────────────────────────
 
@@ -499,7 +519,7 @@ function generateInviteCode() {
 // ─── SQLite 辅助函数（仅本地环境使用） ──────────────────────────────
 
 async function openDatabase() {
-  const SQL = await sqlJsReady;
+  const SQL = await getSqlJsReady();
   try {
     const file = await fs.readFile(DB_FILE);
     return new SQL.Database(file) as SqlDatabase;
@@ -595,7 +615,7 @@ async function restoreSqliteFromSupabase() {
   if (!isSupabasePersistenceEnabled()) return;
 
   await ensureSupabaseReady();
-  const SQL = await sqlJsReady;
+  const SQL = await getSqlJsReady();
   const db = new SQL.Database() as SqlDatabase;
 
   try {
