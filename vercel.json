@@ -6,12 +6,5 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" }
-  ],
-  "functions": {
-    "api/**/*.ts": {
-      "runtime": "nodejs22.x",
-      "memory": 512,
-      "maxDuration": 30
-    }
-  }
+  ]
 }
