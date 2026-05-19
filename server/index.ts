@@ -1306,9 +1306,13 @@ async function start() {
     await restoreSqliteFromSupabase();
     await ensureRuntimeSchema();
   } else {
-    // Vercel 环境：初始化 Supabase schema
-    const db = await getSupabaseDb();
-    await db.ensureRuntimeSchema();
+    // Vercel 环境：初始化 Supabase schema（失败不影响服务启动）
+    try {
+      const db = await getSupabaseDb();
+      await db.ensureRuntimeSchema();
+    } catch (schemaError) {
+      console.error('Supabase schema initialization failed (will retry on first request):', schemaError);
+    }
   }
 
   const app = express();
