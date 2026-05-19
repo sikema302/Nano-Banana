@@ -22,6 +22,7 @@ export interface GeneratedImagePayload {
   imagePath: string;
   referenceImages: string[];
   createdAt: string;
+  fallbackUsed?: boolean;
 }
 
 export interface SavedImage {

@@ -42,6 +42,7 @@ type GeneratedImagePayload = {
   imagePath: string;
   referenceImages: string[];
   createdAt: string;
+  fallbackUsed?: boolean;
 };
 
 type ReferenceUploadInput = {
@@ -185,6 +186,12 @@ const SUPABASE_SYNC_TABLES = [
 ] as const;
 
 const models = [
+  {
+    id: 'gemini-2.0-flash',
+    name: 'Gemini Image',
+    description: 'Google Gemini 通用模型。',
+    creditsCost: 0,
+  },
   {
     id: 'Nano_Banana_Pro',
     name: 'Nano Banana Pro',
@@ -871,6 +878,7 @@ function getModelCredits(modelId: string) {
 }
 
 function normalizeImageSize(value: string, modelId: string) {
+  if (isGeminiModel(modelId)) return '';
   if (modelId !== 'Nano_Banana_Pro') return modelId === 'gpt-image-2' ? '' : VISIONARY_IMAGE_SIZE;
   return value === '4K' ? '4K' : '2K';
 }
@@ -913,12 +921,113 @@ function normalizeModelId(modelId: string) {
   return models.some((item) => item.id === modelId) ? modelId : 'Nano_Banana_Pro';
 }
 
+function isGeminiModel(modelId: string) {
+  return modelId === 'gemini-2.0-flash';
+}
+
 function normalizeRatio(value: string, modelId: string) {
   const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'];
   if (value === 'auto') {
     return modelId === 'gpt-image-2' ? 'auto' : '1:1';
   }
   return supported.includes(value) ? value : '1:1';
+}
+
+const GEMINI_API_KEY = normalizeString(process.env.GEMINI_API_KEY);
+
+async function callGeminiGeneration({
+  prompt,
+  ratio,
+}: {
+  prompt: string;
+  ratio: string;
+}): Promise<string> {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+
+  // 将比例转换为 Gemini 支持的格式
+  const aspectRatioMap: Record<string, string> = {
+    '1:1': '1:1',
+    '16:9': '16:9',
+    '9:16': '9:16',
+    '4:3': '4:3',
+    '3:4': '3:4',
+    '3:2': '3:2',
+    '2:3': '2:3',
+  };
+  const geminiRatio = aspectRatioMap[ratio] || '1:1';
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `Generate an image based on this prompt: ${prompt}. Aspect ratio: ${geminiRatio}. Only output the image, no text.`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+        },
+      }),
+    },
+  );
+
+  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+
+  if (!response.ok) {
+    const errMsg = String(
+      (payload?.error as Record<string, unknown>)?.message ||
+      `Gemini API request failed (${response.status})`,
+    );
+    // 检测是否为额度用尽 (429 或 quota 相关错误)
+    const isQuotaError =
+      response.status === 429 ||
+      String(errMsg).toLowerCase().includes('quota') ||
+      String(errMsg).toLowerCase().includes('rate limit') ||
+      String(errMsg).toLowerCase().includes('resource exhausted');
+    const error = new Error(errMsg) as Error & { code?: string; isQuotaError?: boolean };
+    error.code = 'GEMINI_QUOTA_EXCEEDED';
+    error.isQuotaError = isQuotaError;
+    throw error;
+  }
+
+  // 解析 Gemini 返回的图片数据
+  const candidates = payload?.candidates as Array<Record<string, unknown>> | undefined;
+  if (!candidates || candidates.length === 0) {
+    throw new Error('Gemini API returned no candidates');
+  }
+
+  const parts = candidates[0].content as Record<string, unknown>;
+  const partsArray = parts?.parts as Array<Record<string, unknown>> | undefined;
+
+  if (!partsArray) {
+    throw new Error('Gemini API returned no content parts');
+  }
+
+  // 查找内联图片数据
+  for (const part of partsArray) {
+    if (part.inlineData) {
+      const inlineData = part.inlineData as { mimeType: string; data: string };
+      return `data:${inlineData.mimeType};base64,${inlineData.data}`;
+    }
+  }
+
+  throw new Error('Gemini API returned no image in response');
+}
+
+function isGeminiQuotaError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'isQuotaError' in error) {
+    return (error as { isQuotaError: boolean }).isQuotaError === true;
+  }
+  return false;
 }
 
 async function callVisionaryGeneration({
@@ -1295,32 +1404,102 @@ async function start() {
     }
 
     try {
-      const modelId = normalizeModelId(model);
-      const ratio = normalizeRatio(dimensions, modelId);
-      const modelName = modelNameFromId(modelId);
-      const imageSize = normalizeImageSize(requestedImageSize, modelId);
-      const creditsUsed = getModelCredits(modelId);
-      await withWriteDb((db) => {
-        ensureSchema(db);
-        reclaimLowBalanceInviteCodes(db);
-        ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
-        const credits = getUserCredits(db, req.authUser!.userId);
-        if (credits.remainingCredits < creditsUsed) {
-          throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+      let modelId = normalizeModelId(model);
+      let ratio = normalizeRatio(dimensions, modelId);
+      let modelName = modelNameFromId(modelId);
+      let imageSize = normalizeImageSize(requestedImageSize, modelId);
+      let creditsUsed = getModelCredits(modelId);
+      let fallbackUsed = false;
+
+      // Gemini 模型: 0 积分，检查 API Key 是否配置
+      if (isGeminiModel(modelId)) {
+        if (!GEMINI_API_KEY) {
+          // Gemini API Key 未配置，自动回退到 Nano_Banana_2
+          modelId = 'Nano_Banana_2';
+          ratio = normalizeRatio(dimensions, modelId);
+          modelName = modelNameFromId(modelId);
+          imageSize = normalizeImageSize(requestedImageSize, modelId);
+          creditsUsed = getModelCredits(modelId);
+          fallbackUsed = true;
         }
-      });
+      }
+
+      // 积分检查 (Gemini 免费模型跳过)
+      if (creditsUsed > 0) {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          reclaimLowBalanceInviteCodes(db);
+          ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+          const credits = getUserCredits(db, req.authUser!.userId);
+          if (credits.remainingCredits < creditsUsed) {
+            throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+          }
+        });
+      }
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const createdAt = nowIso();
-      const imagePath = await callVisionaryGeneration({
-        prompt,
-        modelId,
-        ratio,
-        imageSize,
-        images: referenceImagesInput
-          .map((item) => normalizeString(item.data))
-          .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
-      });
+      let imagePath: string;
+
+      if (isGeminiModel(modelId)) {
+        // 使用 Gemini API 生成
+        try {
+          imagePath = await callGeminiGeneration({
+            prompt,
+            ratio,
+          });
+        } catch (geminiError) {
+          if (isGeminiQuotaError(geminiError)) {
+            // Gemini 额度用尽，自动回退到 Nano_Banana_2
+            const fallbackModelId = 'Nano_Banana_2';
+            const fallbackCredits = getModelCredits(fallbackModelId);
+
+            // 检查回退模型的积分
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              reclaimLowBalanceInviteCodes(db);
+              ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+              const credits = getUserCredits(db, req.authUser!.userId);
+              if (credits.remainingCredits < fallbackCredits) {
+                throw new Error(
+                  `Gemini 额度已用完，自动切换到 ${modelNameFromId(fallbackModelId)} 但积分不足（需要 ${fallbackCredits} 积分，当前剩余 ${credits.remainingCredits} 积分）。请充值或选择其他模型。`,
+                );
+              }
+            });
+
+            // 使用回退模型生成
+            modelId = fallbackModelId;
+            ratio = normalizeRatio(dimensions, modelId);
+            modelName = modelNameFromId(modelId);
+            imageSize = normalizeImageSize(requestedImageSize, modelId);
+            creditsUsed = fallbackCredits;
+            fallbackUsed = true;
+
+            imagePath = await callVisionaryGeneration({
+              prompt,
+              modelId,
+              ratio,
+              imageSize,
+              images: referenceImagesInput
+                .map((item) => normalizeString(item.data))
+                .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
+            });
+          } else {
+            throw geminiError;
+          }
+        }
+      } else {
+        // 使用 Visionary API 生成
+        imagePath = await callVisionaryGeneration({
+          prompt,
+          modelId,
+          ratio,
+          imageSize,
+          images: referenceImagesInput
+            .map((item) => normalizeString(item.data))
+            .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
+        });
+      }
 
       const payload: GeneratedImagePayload = {
         prompt,
@@ -1330,17 +1509,27 @@ async function start() {
         imagePath,
         referenceImages,
         createdAt,
+        fallbackUsed,
       };
 
+      // 扣除积分 (Gemini 免费模型不扣积分)
+      if (creditsUsed > 0) {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          reclaimLowBalanceInviteCodes(db);
+          db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
+            creditsUsed,
+            nowIso(),
+            req.authUser!.userId,
+          ]);
+          syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+        });
+      }
+
+      // 记录生成历史
       await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
-        db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
-          creditsUsed,
-          nowIso(),
-          req.authUser!.userId,
-        ]);
-        syncInviteCodeBalanceForUser(db, req.authUser!.userId);
         db.run(
           `
             INSERT INTO generations (
