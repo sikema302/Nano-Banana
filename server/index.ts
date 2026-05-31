@@ -556,6 +556,7 @@ async function ensureSupabaseReady() {
 
   const readiness = await supabaseAdmin.from('users').select('id', { count: 'exact', head: true }).limit(1);
   if (readiness.error) {
+    console.error('Supabase readiness check failed:', readiness.error);
     throw new Error(
       `Supabase schema is not ready: ${readiness.error.message}. Run supabase/migrations/20260426000000_init_bananas_ai.sql first.`,
     );
