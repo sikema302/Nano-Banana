@@ -4,6 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 // ─── 类型定义 ───────────────────────────────────────────────────────
 
@@ -90,6 +91,9 @@ function getSupabase(): SupabaseClient {
       auth: {
         autoRefreshToken: false,
         persistSession: false,
+      },
+      realtime: {
+        transport: WebSocket as any,
       },
     });
   }
