@@ -9,6 +9,7 @@ import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 // ─── 环境检测 ───────────────────────────────────────────────────────
 
@@ -150,6 +151,9 @@ const supabaseAdmin =
         auth: {
           autoRefreshToken: false,
           persistSession: false,
+        },
+        realtime: {
+          transport: WebSocket as any,
         },
       })
     : null;
