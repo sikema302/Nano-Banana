@@ -92,9 +92,7 @@ function getSupabase(): SupabaseClient {
         autoRefreshToken: false,
         persistSession: false,
       },
-      realtime: {
-        transport: WebSocket as any,
-      },
+      realtime: false, // 禁用 Realtime，避免 WebSocket 问题
     });
   }
   return _supabase;
