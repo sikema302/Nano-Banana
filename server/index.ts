@@ -1308,8 +1308,9 @@ async function start() {
   // 本地环境初始化
   if (!IS_VERCEL) {
     await ensureRuntimeDirectories();
-    await restoreSqliteFromSupabase();
-    await ensureRuntimeSchema();
+    // 跳过 SQLite 恢复，直接使用 Supabase
+    // await restoreSqliteFromSupabase();
+    // await ensureRuntimeSchema();
   } else {
     // Vercel 环境：初始化 Supabase schema（失败不影响服务启动）
     try {
