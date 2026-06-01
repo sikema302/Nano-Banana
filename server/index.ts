@@ -2547,7 +2547,11 @@ async function start() {
   // ─── 静态文件服务（仅本地环境） ───────────────────────────────────
 
   if (hasDistBuild) {
+    // 静态资源文件（assets）优先处理
+    app.use('/assets', express.static(path.join(DIST_DIR, 'assets')));
+    // 其他静态文件
     app.use(express.static(DIST_DIR));
+    // 前端路由 fallback（排除 API 和 uploads）
     app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => {
       res.sendFile(path.join(DIST_DIR, 'index.html'));
     });
