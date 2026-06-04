@@ -17,6 +17,7 @@ import {
 import {
   clearSession,
   createInviteCode,
+  deleteInviteCode as deleteInviteCodeRequest,
   fetchAdminOverview,
   deleteImage,
   fetchHealth,
@@ -490,6 +491,7 @@ function AdminView({
   inviteCodesPage,
   adminCredits,
   onCreateInviteCode,
+  onDeleteInviteCode,
   onRecordsPageChange,
   onInviteCodesPageChange,
   onPreview,
@@ -501,12 +503,14 @@ function AdminView({
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   onCreateInviteCode: (credits: number) => Promise<void>;
+  onDeleteInviteCode: (code: string) => Promise<void>;
   onRecordsPageChange: (page: number) => void;
   onInviteCodesPageChange: (page: number) => void;
   onPreview: (item: GenerationRecord) => void;
 }) {
   const [credits, setCredits] = useState(100);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingCode, setDeletingCode] = useState('');
 
   async function handleCreateInviteCode() {
     setSubmitting(true);
@@ -514,6 +518,19 @@ function AdminView({
       await onCreateInviteCode(credits);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteInviteCode(code: string) {
+    if (!window.confirm(`确认删除邀请码 ${code} 吗？删除后积分会退回 admin 账户。`)) {
+      return;
+    }
+
+    setDeletingCode(code);
+    try {
+      await onDeleteInviteCode(code);
+    } finally {
+      setDeletingCode('');
     }
   }
 
@@ -558,6 +575,7 @@ function AdminView({
                     <th className="px-3 py-2 font-medium">状态</th>
                     <th className="px-3 py-2 font-medium">使用者</th>
                     <th className="px-3 py-2 font-medium">创建时间</th>
+                    <th className="px-3 py-2 text-right font-medium">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/6">
@@ -568,6 +586,16 @@ function AdminView({
                       <td className="px-3 py-3">{item.redeemedBy ? '已使用' : '未使用'}</td>
                       <td className="max-w-[220px] truncate px-3 py-3 text-zinc-500">{item.redeemedBy || '-'}</td>
                       <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
+                      <td className="px-3 py-3 text-right">
+                        <button
+                          className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={Boolean(item.redeemedBy) || deletingCode === item.code}
+                          type="button"
+                          onClick={() => void handleDeleteInviteCode(item.code)}
+                        >
+                          {deletingCode === item.code ? '删除中...' : '删除'}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -878,6 +906,26 @@ export default function App() {
       void loadAdminOverview();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码生成失败');
+    }
+  }
+
+  async function handleDeleteInviteCode(code: string) {
+    try {
+      const payload = await deleteInviteCodeRequest(code);
+      setAdminOverview((current) => ({
+        ...current,
+        inviteCodes: current.inviteCodes.filter((item) => item.code !== code),
+        inviteCodesPage: {
+          ...current.inviteCodesPage,
+          total: Math.max(0, current.inviteCodesPage.total - 1),
+        },
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已删除邀请码 ${code}，并将积分退回给 admin。`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadAdminOverview();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '删除邀请码失败');
     }
   }
 
@@ -1742,6 +1790,7 @@ export default function App() {
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
               onCreateInviteCode={handleCreateInviteCode}
+              onDeleteInviteCode={handleDeleteInviteCode}
               onRecordsPageChange={setAdminRecordsPage}
               onInviteCodesPageChange={setAdminInviteCodesPage}
               onPreview={setPreviewImage}

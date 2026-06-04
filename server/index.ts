@@ -2127,6 +2127,84 @@ async function start() {
     }
   });
 
+  app.delete('/api/admin/invite-codes/:code', requireAuth, requireAdmin, async (req, res) => {
+    const code = normalizeString(req.params.code);
+
+    if (!code) {
+      res.status(400).json({ error: 'Invite code is required' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const invite = await db.getInviteCode(code);
+        if (!invite) {
+          res.status(404).json({ error: 'Invite code not found' });
+          return;
+        }
+
+        if (invite.redeemed_by) {
+          res.status(400).json({ error: 'Only unused invite codes can be deleted' });
+          return;
+        }
+
+        const creditsToReturn = Number(invite.credits || 0);
+        await db.deleteInviteCode(code);
+        if (creditsToReturn > 0) {
+          await db.adjustAdminTotalCredits(creditsToReturn);
+        }
+
+        res.json({
+          ok: true,
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+
+        const invite = getOne<Record<string, unknown>>(
+          db,
+          'SELECT code, credits, redeemed_by FROM invite_codes WHERE code = ?',
+          [code],
+        );
+
+        if (!invite) {
+          throw new Error('Invite code not found');
+        }
+
+        if (normalizeString(invite.redeemed_by)) {
+          throw new Error('Only unused invite codes can be deleted');
+        }
+
+        const creditsToReturn = Number(invite.credits || 0);
+        db.run('DELETE FROM invite_codes WHERE code = ?', [code]);
+        if (creditsToReturn > 0) {
+          adjustAdminTotalCredits(db, creditsToReturn);
+        }
+
+        return {
+          ok: true,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Delete invite code failed';
+      if (message === 'Invite code not found') {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(400).json({ error: message });
+    }
+  });
+
   // 鈹€鈹€鈹€ 鐢ㄦ埛鍥剧墖鍒楄〃 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/user/images', requireAuth, async (req, res) => {

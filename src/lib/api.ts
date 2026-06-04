@@ -315,6 +315,16 @@ export async function createInviteCode(payload: { credits: number }) {
   );
 }
 
+export async function deleteInviteCode(code: string) {
+  return request<{ ok: boolean; adminCredits: CreditSummary }>(
+    `/api/admin/invite-codes/${encodeURIComponent(code)}`,
+    {
+      method: 'DELETE',
+    },
+    true,
+  );
+}
+
 export async function moveImage(payload: {
   imageId?: number;
   image?: GeneratedImagePayload;

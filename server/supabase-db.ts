@@ -365,6 +365,14 @@ export async function zeroInviteCode(code: string): Promise<void> {
   if (error) throw new Error(`Zero invite code failed: ${error.message}`);
 }
 
+export async function deleteInviteCode(code: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .delete()
+    .eq('code', code);
+  if (error) throw new Error(`Delete invite code failed: ${error.message}`);
+}
+
 export async function listInviteCodes(
   page: number,
   pageSize: number,
