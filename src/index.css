@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@source "../index.html";
+@source "./**/*.{ts,tsx}";
 
 @theme {
   --font-sans: "Manrope", "Segoe UI", sans-serif;

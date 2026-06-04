@@ -11,25 +11,24 @@ import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 
-// ─── 环境检测 ───────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const IS_VERCEL = Boolean(process.env.VERCEL);
 
-// ─── 动态导入模块（避免 Vercel 构建时加载） ─────────────────────────
+// 鈹€鈹€鈹€ 鍔ㄦ€佸鍏ユā鍧楋紙閬垮厤 Vercel 鏋勫缓鏃跺姞杞斤級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-// sql.js 只在非 Vercel 环境下使用
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// sql.js 鍙湪 SQLite 妯″紡涓嬩娇鐢?// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let initSqlJs: any = null;
 
 async function getSqlJs() {
-  if (!initSqlJs && !IS_VERCEL) {
+  if (!initSqlJs && !isSupabasePersistenceEnabled()) {
     const sql = await import('sql.js');
     initSqlJs = sql.default;
   }
   return initSqlJs;
 }
 
-// Supabase 数据库层只在 Vercel 环境下使用
+// Supabase 鏁版嵁搴撳眰鍦ㄤ换浣曞惎鐢ㄤ簡 Supabase 鐨勮繍琛岀幆澧冧笅閮藉彲浣跨敤
 let supabaseDb: typeof import('./supabase-db.js') | null = null;
 
 async function getSupabaseDb() {
@@ -39,7 +38,7 @@ async function getSupabaseDb() {
   return supabaseDb;
 }
 
-// ─── 类型定义 ───────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 绫诲瀷瀹氫箟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 type ImageCategory = 'favorite' | 'backup' | 'discarded';
 
@@ -72,7 +71,6 @@ type GeneratedImagePayload = {
   imagePath: string;
   referenceImages: string[];
   createdAt: string;
-  fallbackUsed?: boolean;
 };
 
 type ReferenceUploadInput = {
@@ -119,7 +117,7 @@ declare global {
   }
 }
 
-// ─── 路径常量（本地开发环境使用） ───────────────────────────────────
+// 鈹€鈹€鈹€ 璺緞甯搁噺锛堟湰鍦板紑鍙戠幆澧冧娇鐢級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,13 +135,14 @@ const DEFAULT_PORT = 3001;
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 
-// ─── 环境变量 ───────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
 const SUPABASE_URL = normalizeEnvValue(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const DATABASE_PROVIDER = normalizeEnvValue(process.env.DATABASE_PROVIDER || 'sqlite').toLowerCase();
+const USE_SUPABASE = DATABASE_PROVIDER === 'supabase';
 const CORS_ORIGIN = normalizeEnvValue(process.env.CORS_ORIGIN);
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -165,16 +164,15 @@ const supabaseUserSyncStatus = {
   lastError: '',
 };
 
-// ─── SQLite 初始化（仅本地环境） ───────────────────────────────────
+// 鈹€鈹€鈹€ SQLite 鍒濆鍖栵紙浠呮湰鍦扮幆澧冿級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const require = createRequire(import.meta.url);
 
-// sql.js 初始化（只在非 Vercel 环境）
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// sql.js 鍒濆鍖栵紙鍙湪 SQLite 妯″紡锛?// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let sqlJsReady: Promise<any> | null = null;
 
 async function getSqlJsReady() {
-  if (!sqlJsReady && !IS_VERCEL) {
+  if (!sqlJsReady && !USE_SUPABASE) {
     const sql = await import('sql.js');
     sqlJsReady = sql.default({
       locateFile: (file: string) => require.resolve(`sql.js/dist/${file}`),
@@ -183,7 +181,7 @@ async function getSqlJsReady() {
   return sqlJsReady!;
 }
 
-// ─── 常量 ───────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 甯搁噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
@@ -239,12 +237,6 @@ const SUPABASE_SYNC_TABLES = [
 
 const models = [
   {
-    id: 'gemini-2.0-flash',
-    name: 'Gemini Image',
-    description: 'Google Gemini 通用模型。',
-    creditsCost: 0,
-  },
-  {
     id: 'Nano_Banana_Pro',
     name: 'Nano Banana Pro',
     description: 'Higher quality Banana image generation.',
@@ -267,7 +259,7 @@ const models = [
 const tokenSecret = process.env.JWT_SECRET || process.env.VISIONARY_API_KEY || 'visionary-local-dev-secret';
 let writeQueue = Promise.resolve();
 
-// ─── 通用辅助函数 ───────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 閫氱敤杈呭姪鍑芥暟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -281,7 +273,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-/** Vercel 兼容的随机字节生成 */
+/** Vercel 鍏煎鐨勯殢鏈哄瓧鑺傜敓鎴?*/
 function randomHex(bytes: number): string {
   if (IS_VERCEL) {
     const array = new Uint8Array(bytes);
@@ -293,10 +285,10 @@ function randomHex(bytes: number): string {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
-/** Vercel 兼容的 SHA256 摘要 */
+/** Vercel 鍏煎鐨?SHA256 鎽樿 */
 function sha256Digest(input: string): string {
   if (IS_VERCEL) {
-    // 简单哈希替代，仅用于生成 invite user id，不需要密码学安全
+    // 绠€鍗曞搱甯屾浛浠ｏ紝浠呯敤浜庣敓鎴?invite user id锛屼笉闇€瑕佸瘑鐮佸瀹夊叏
     let hash = 0;
     for (let i = 0; i < input.length; i++) {
       const char = input.charCodeAt(i);
@@ -463,7 +455,6 @@ function getModelCredits(modelId: string) {
 }
 
 function normalizeImageSize(value: string, modelId: string) {
-  if (isGeminiModel(modelId)) return '';
   if (modelId !== 'Nano_Banana_Pro') return modelId === 'gpt-image-2' ? '' : VISIONARY_IMAGE_SIZE;
   return value === '4K' ? '4K' : '2K';
 }
@@ -506,10 +497,6 @@ function normalizeModelId(modelId: string) {
   return models.some((item) => item.id === modelId) ? modelId : 'Nano_Banana_Pro';
 }
 
-function isGeminiModel(modelId: string) {
-  return modelId === 'gemini-2.0-flash';
-}
-
 function normalizeRatio(value: string, modelId: string) {
   const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'];
   if (value === 'auto') {
@@ -522,7 +509,7 @@ function generateInviteCode() {
   return `BANANA-${randomHex(4).toUpperCase()}`;
 }
 
-// ─── SQLite 辅助函数（仅本地环境使用） ──────────────────────────────
+// 鈹€鈹€鈹€ SQLite 杈呭姪鍑芥暟锛堜粎鏈湴鐜浣跨敤锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 async function openDatabase() {
   const SQL = await getSqlJsReady();
@@ -542,7 +529,7 @@ async function saveDatabase(db: SqlDatabase) {
 }
 
 function isSupabasePersistenceEnabled() {
-  return DATABASE_PROVIDER === 'supabase';
+  return USE_SUPABASE;
 }
 
 function valuesFromRow(row: Record<string, unknown>, selectClause: string) {
@@ -1023,10 +1010,10 @@ async function resolveExternalUserId(db: SqlDatabase, legacyUserId: number, user
   return externalUserId;
 }
 
-// ─── 获取用户积分（统一接口） ───────────────────────────────────────
+// 鈹€鈹€鈹€ 鑾峰彇鐢ㄦ埛绉垎锛堢粺涓€鎺ュ彛锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 async function getPublicUser(user: AuthUser) {
-  if (IS_VERCEL) {
+  if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     const credits = await db.getUserCredits(user.userId);
     return {
@@ -1046,102 +1033,7 @@ async function getPublicUser(user: AuthUser) {
   };
 }
 
-// ─── Gemini API ─────────────────────────────────────────────────────
-
-const GEMINI_API_KEY = normalizeString(process.env.GEMINI_API_KEY);
-
-async function callGeminiGeneration({
-  prompt,
-  ratio,
-}: {
-  prompt: string;
-  ratio: string;
-}): Promise<string> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured');
-  }
-
-  const aspectRatioMap: Record<string, string> = {
-    '1:1': '1:1',
-    '16:9': '16:9',
-    '9:16': '9:16',
-    '4:3': '4:3',
-    '3:4': '3:4',
-    '3:2': '3:2',
-    '2:3': '2:3',
-  };
-  const geminiRatio = aspectRatioMap[ratio] || '1:1';
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Generate an image based on this prompt: ${prompt}. Aspect ratio: ${geminiRatio}. Only output the image, no text.`,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
-        },
-      }),
-    },
-  );
-
-  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-
-  if (!response.ok) {
-    const errMsg = String(
-      (payload?.error as Record<string, unknown>)?.message ||
-      `Gemini API request failed (${response.status})`,
-    );
-    const isQuotaError =
-      response.status === 429 ||
-      String(errMsg).toLowerCase().includes('quota') ||
-      String(errMsg).toLowerCase().includes('rate limit') ||
-      String(errMsg).toLowerCase().includes('resource exhausted');
-    const error = new Error(errMsg) as Error & { code?: string; isQuotaError?: boolean };
-    error.code = 'GEMINI_QUOTA_EXCEEDED';
-    error.isQuotaError = isQuotaError;
-    throw error;
-  }
-
-  const candidates = payload?.candidates as Array<Record<string, unknown>> | undefined;
-  if (!candidates || candidates.length === 0) {
-    throw new Error('Gemini API returned no candidates');
-  }
-
-  const parts = candidates[0].content as Record<string, unknown>;
-  const partsArray = parts?.parts as Array<Record<string, unknown>> | undefined;
-
-  if (!partsArray) {
-    throw new Error('Gemini API returned no content parts');
-  }
-
-  for (const part of partsArray) {
-    if (part.inlineData) {
-      const inlineData = part.inlineData as { mimeType: string; data: string };
-      return `data:${inlineData.mimeType};base64,${inlineData.data}`;
-    }
-  }
-
-  throw new Error('Gemini API returned no image in response');
-}
-
-function isGeminiQuotaError(error: unknown): boolean {
-  if (error && typeof error === 'object' && 'isQuotaError' in error) {
-    return (error as { isQuotaError: boolean }).isQuotaError === true;
-  }
-  return false;
-}
-
-// ─── Visionary API ──────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Visionary API 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 async function callVisionaryGeneration({
   prompt,
@@ -1193,7 +1085,7 @@ async function callVisionaryGeneration({
   return imageUrl;
 }
 
-// ─── SVG 占位图 ─────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ SVG 鍗犱綅鍥?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function sanitizeSvgText(value: string) {
   return value
@@ -1267,7 +1159,7 @@ function buildSvg(prompt: string, modelName: string, dimensions: string) {
 </svg>`.trim();
 }
 
-// ─── 参考图片持久化 ────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 鍙傝€冨浘鐗囨寔涔呭寲 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function fileExtensionFromMimeType(mimeType: string) {
   if (mimeType === 'image/jpeg') return 'jpg';
@@ -1278,7 +1170,7 @@ function fileExtensionFromMimeType(mimeType: string) {
 }
 
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
-  // Vercel 环境下不保存参考图片到本地文件系统，直接返回原始 data URL
+  // Vercel 鐜涓嬩笉淇濆瓨鍙傝€冨浘鐗囧埌鏈湴鏂囦欢绯荤粺锛岀洿鎺ヨ繑鍥炲師濮?data URL
   if (IS_VERCEL) {
     return referenceImages
       .slice(0, 3)
@@ -1302,23 +1194,31 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
   return output;
 }
 
-// ─── 服务器启动 ─────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 鏈嶅姟鍣ㄥ惎鍔?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 async function start() {
-  // 本地环境初始化
   if (!IS_VERCEL) {
     await ensureRuntimeDirectories();
-    // 跳过 SQLite 恢复，直接使用 Supabase
-    // await restoreSqliteFromSupabase();
-    // await ensureRuntimeSchema();
-  } else {
-    // Vercel 环境：初始化 Supabase schema（失败不影响服务启动）
-    try {
+  }
+
+  if (USE_SUPABASE) {
+    if (IS_VERCEL) {
+      // Vercel Serverless 鐜锛氬垵濮嬪寲澶辫触鏃跺欢杩熷埌棣栦釜璇锋眰鍐嶉噸璇?
+      try {
+        const db = await getSupabaseDb();
+        await db.ensureRuntimeSchema();
+      } catch (schemaError) {
+        console.error('Supabase schema initialization failed (will retry on first request):', schemaError);
+      }
+    } else {
       const db = await getSupabaseDb();
       await db.ensureRuntimeSchema();
-    } catch (schemaError) {
-      console.error('Supabase schema initialization failed (will retry on first request):', schemaError);
     }
+  } else if (!IS_VERCEL) {
+    // SQLite 浠呭湪鎸佷箙鍖栨枃浠剁郴缁熺幆澧冧笅鍒濆鍖?    // await restoreSqliteFromSupabase();
+    await ensureRuntimeSchema();
+  } else if (IS_VERCEL) {
+    throw new Error('SQLite persistence is not supported in the Vercel serverless runtime.');
   }
 
   const app = express();
@@ -1342,7 +1242,7 @@ async function start() {
 
   app.use(express.json({ limit: '20mb' }));
 
-  // 静态文件服务仅本地环境
+  // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
     app.use('/uploads', express.static(UPLOADS_DIR));
   }
@@ -1350,11 +1250,12 @@ async function start() {
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      userStorage: IS_VERCEL ? 'Supabase' : 'SQLite',
+      userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
+      databaseProvider: DATABASE_PROVIDER,
     });
   });
 
-  // ─── 注册 ─────────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 娉ㄥ唽 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/auth/register', async (req, res) => {
     const username = normalizeString(req.body?.username);
@@ -1372,7 +1273,7 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
 
         const existing = await db.findUserByUsername(username);
@@ -1393,7 +1294,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const result = await withWriteDb(async (db) => {
         ensureSchema(db);
 
@@ -1430,7 +1331,7 @@ async function start() {
     }
   });
 
-  // ─── 登录 ─────────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鐧诲綍 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/auth/login', async (req, res) => {
     const username = normalizeString(req.body?.username);
@@ -1442,7 +1343,7 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
 
         const record = await db.findUserByUsername(username);
@@ -1467,7 +1368,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const user = await withWriteDb(async (db) => {
         ensureSchema(db);
         const record = getOne<{
@@ -1507,7 +1408,7 @@ async function start() {
     }
   });
 
-  // ─── 邀请码登录 ───────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 閭€璇风爜鐧诲綍 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/auth/invite', async (req, res) => {
     const code = normalizeString(req.body?.code).toUpperCase();
@@ -1518,7 +1419,7 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
@@ -1554,7 +1455,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const inviteUser = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -1592,10 +1493,10 @@ async function start() {
     }
   });
 
-  // ─── 获取当前用户 ─────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鑾峰彇褰撳墠鐢ㄦ埛 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/auth/me', requireAuth, async (req, res) => {
-    if (IS_VERCEL) {
+    if (USE_SUPABASE) {
       const db = await getSupabaseDb();
       await db.reclaimLowBalanceInviteCodes();
     } else {
@@ -1607,13 +1508,13 @@ async function start() {
     res.json({ user: await getPublicUser(req.authUser!) });
   });
 
-  // ─── 模型列表 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 妯″瀷鍒楄〃 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/models', requireAuth, (_req, res) => {
     res.json({ models });
   });
 
-  // ─── 图片生成 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鍥剧墖鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
@@ -1635,28 +1536,16 @@ async function start() {
       let modelName = modelNameFromId(modelId);
       let imageSize = normalizeImageSize(requestedImageSize, modelId);
       let creditsUsed = getModelCredits(modelId);
-      let fallbackUsed = false;
 
-      if (isGeminiModel(modelId)) {
-        if (!GEMINI_API_KEY) {
-          modelId = 'Nano_Banana_2';
-          ratio = normalizeRatio(dimensions, modelId);
-          modelName = modelNameFromId(modelId);
-          imageSize = normalizeImageSize(requestedImageSize, modelId);
-          creditsUsed = getModelCredits(modelId);
-          fallbackUsed = true;
-        }
-      }
-
-      // 积分检查
+      // Credits check
       if (creditsUsed > 0) {
-        if (IS_VERCEL) {
+        if (USE_SUPABASE) {
           const db = await getSupabaseDb();
           await db.reclaimLowBalanceInviteCodes();
           await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
           const credits = await db.getUserCredits(req.authUser!.userId);
           if (credits.remainingCredits < creditsUsed) {
-            throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+            throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
           }
         } else {
           await withWriteDb((db) => {
@@ -1665,7 +1554,7 @@ async function start() {
             ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
             const credits = getUserCredits(db, req.authUser!.userId);
             if (credits.remainingCredits < creditsUsed) {
-              throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+              throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
             }
           });
         }
@@ -1673,74 +1562,15 @@ async function start() {
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const createdAt = nowIso();
-      let imagePath: string;
-
-      if (isGeminiModel(modelId)) {
-        try {
-          imagePath = await callGeminiGeneration({
-            prompt,
-            ratio,
-          });
-        } catch (geminiError) {
-          if (isGeminiQuotaError(geminiError)) {
-            const fallbackModelId = 'Nano_Banana_2';
-            const fallbackCredits = getModelCredits(fallbackModelId);
-
-            if (IS_VERCEL) {
-              const db = await getSupabaseDb();
-              await db.reclaimLowBalanceInviteCodes();
-              await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
-              const credits = await db.getUserCredits(req.authUser!.userId);
-              if (credits.remainingCredits < fallbackCredits) {
-                throw new Error(
-                  `Gemini 额度已用完，自动切换到 ${modelNameFromId(fallbackModelId)} 但积分不足（需要 ${fallbackCredits} 积分，当前剩余 ${credits.remainingCredits} 积分）。请充值或选择其他模型。`,
-                );
-              }
-            } else {
-              await withWriteDb((db) => {
-                ensureSchema(db);
-                reclaimLowBalanceInviteCodes(db);
-                ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
-                const credits = getUserCredits(db, req.authUser!.userId);
-                if (credits.remainingCredits < fallbackCredits) {
-                  throw new Error(
-                    `Gemini 额度已用完，自动切换到 ${modelNameFromId(fallbackModelId)} 但积分不足（需要 ${fallbackCredits} 积分，当前剩余 ${credits.remainingCredits} 积分）。请充值或选择其他模型。`,
-                  );
-                }
-              });
-            }
-
-            modelId = fallbackModelId;
-            ratio = normalizeRatio(dimensions, modelId);
-            modelName = modelNameFromId(modelId);
-            imageSize = normalizeImageSize(requestedImageSize, modelId);
-            creditsUsed = fallbackCredits;
-            fallbackUsed = true;
-
-            imagePath = await callVisionaryGeneration({
-              prompt,
-              modelId,
-              ratio,
-              imageSize,
-              images: referenceImagesInput
-                .map((item) => normalizeString(item.data))
-                .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
-            });
-          } else {
-            throw geminiError;
-          }
-        }
-      } else {
-        imagePath = await callVisionaryGeneration({
-          prompt,
-          modelId,
-          ratio,
-          imageSize,
-          images: referenceImagesInput
-            .map((item) => normalizeString(item.data))
-            .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
-        });
-      }
+      const imagePath = await callVisionaryGeneration({
+        prompt,
+        modelId,
+        ratio,
+        imageSize,
+        images: referenceImagesInput
+          .map((item) => normalizeString(item.data))
+          .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
+      });
 
       const payload: GeneratedImagePayload = {
         prompt,
@@ -1750,12 +1580,11 @@ async function start() {
         imagePath,
         referenceImages,
         createdAt,
-        fallbackUsed,
       };
 
-      // 扣除积分
+      // 鎵ｉ櫎绉垎
       if (creditsUsed > 0) {
-        if (IS_VERCEL) {
+        if (USE_SUPABASE) {
           const db = await getSupabaseDb();
           await db.reclaimLowBalanceInviteCodes();
           await db.incrementUsedCredits(req.authUser!.userId, creditsUsed);
@@ -1774,8 +1603,8 @@ async function start() {
         }
       }
 
-      // 记录生成历史
-      if (IS_VERCEL) {
+      // 璁板綍鐢熸垚鍘嗗彶
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
         await db.insertGeneration({
@@ -1834,13 +1663,13 @@ async function start() {
     }
   });
 
-  // ─── 生成历史 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鐢熸垚鍘嗗彶 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/user/history', requireAuth, async (req, res) => {
     const userId = req.authUser!.userId;
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const generations = await db.getUserGenerations(userId);
         const history = generations.map((row) => toGeneration({
@@ -1881,7 +1710,7 @@ async function start() {
     }
   });
 
-  // ─── 管理员概览 ───────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 绠＄悊鍛樻瑙?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
     const recordsPage = parsePaginationValue(req.query.recordsPage, 1, 1, 100000);
@@ -1890,7 +1719,7 @@ async function start() {
     const inviteCodesPageSize = parsePaginationValue(req.query.inviteCodesPageSize, 20, 1, 100);
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
@@ -2013,7 +1842,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -2207,7 +2036,7 @@ async function start() {
     }
   });
 
-  // ─── 创建邀请码 ───────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
     const requestedCredits = Number(req.body?.credits);
@@ -2218,7 +2047,7 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
@@ -2226,7 +2055,7 @@ async function start() {
         const credits = Math.floor(requestedCredits);
 
         if (credits > adminCredits.remainingCredits) {
-          throw new Error(`管理员剩余积分不足，当前剩余 ${adminCredits.remainingCredits} 积分`);
+          throw new Error(`绠＄悊鍛樺墿浣欑Н鍒嗕笉瓒筹紝褰撳墠鍓╀綑 ${adminCredits.remainingCredits} 绉垎`);
         }
 
         let code = generateInviteCode();
@@ -2256,7 +2085,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
@@ -2264,7 +2093,7 @@ async function start() {
         const credits = Math.floor(requestedCredits);
 
         if (credits > adminCredits.remainingCredits) {
-          throw new Error(`管理员剩余积分不足，当前剩余 ${adminCredits.remainingCredits} 积分`);
+          throw new Error(`绠＄悊鍛樺墿浣欑Н鍒嗕笉瓒筹紝褰撳墠鍓╀綑 ${adminCredits.remainingCredits} 绉垎`);
         }
 
         let code = generateInviteCode();
@@ -2298,7 +2127,7 @@ async function start() {
     }
   });
 
-  // ─── 用户图片列表 ─────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鐢ㄦ埛鍥剧墖鍒楄〃 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.get('/api/user/images', requireAuth, async (req, res) => {
     const category = normalizeString(req.query.category);
@@ -2310,7 +2139,7 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const images = await db.getUserImages(userId, category || undefined);
         res.json({
@@ -2361,7 +2190,7 @@ async function start() {
     }
   });
 
-  // ─── 保存/移动图片 ────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 淇濆瓨/绉诲姩鍥剧墖 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/user/images/move', requireAuth, async (req, res) => {
     const category = normalizeString(req.body?.category);
@@ -2375,12 +2204,12 @@ async function start() {
     }
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
 
         if (typeof imageId === 'number') {
-          // Vercel 环境下 imageId 是 UUID 字符串，但前端可能传 number
-          // 尝试通过字符串 ID 查找
+          // Vercel 鐜涓?imageId 鏄?UUID 瀛楃涓诧紝浣嗗墠绔彲鑳戒紶 number
+          // 灏濊瘯閫氳繃瀛楃涓?ID 鏌ユ壘
           const existing = await db.getImageById(String(imageId), userId);
           if (!existing) {
             res.json({ image: null });
@@ -2442,7 +2271,7 @@ async function start() {
         return;
       }
 
-      // SQLite 模式
+      // SQLite 妯″紡
       const savedImage = await withWriteDb((db) => {
         ensureSchema(db);
 
@@ -2514,14 +2343,14 @@ async function start() {
     }
   });
 
-  // ─── 删除图片 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鍒犻櫎鍥剧墖 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.delete('/api/user/images/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
     const userId = req.authUser!.userId;
 
     try {
-      if (IS_VERCEL) {
+      if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         await db.deleteImage(id, userId);
         res.json({ ok: true });
@@ -2545,32 +2374,32 @@ async function start() {
     }
   });
 
-  // ─── 静态文件服务（仅本地环境） ───────────────────────────────────
+  // 鈹€鈹€鈹€ 闈欐€佹枃浠舵湇鍔★紙浠呮湰鍦扮幆澧冿級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   if (hasDistBuild) {
-    // 静态资源文件（assets）优先处理
+    // 闈欐€佽祫婧愭枃浠讹紙assets锛変紭鍏堝鐞?
     app.use('/assets', express.static(path.join(DIST_DIR, 'assets')));
-    // 其他静态文件
+    // 鍏朵粬闈欐€佹枃浠?
     app.use(express.static(DIST_DIR));
-    // 前端路由 fallback（排除 API 和 uploads）
+    // 鍓嶇璺敱 fallback锛堟帓闄?API 鍜?uploads锛?
     app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => {
       res.sendFile(path.join(DIST_DIR, 'index.html'));
     });
   }
 
-  // ─── 错误处理 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 閿欒澶勭悊 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = error instanceof Error ? error.message : 'Unexpected server error';
     res.status(500).json({ error: message });
   });
 
-  // ─── 启动监听 ─────────────────────────────────────────────────────
+  // 鈹€鈹€鈹€ 鍚姩鐩戝惉 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   const host = process.env.HOST || DEFAULT_HOST;
   const port = Number(process.env.PORT || DEFAULT_PORT);
 
-  // Vercel Serverless 环境下不启动监听，导出 app
+  // Vercel Serverless 鐜涓嬩笉鍚姩鐩戝惉锛屽鍑?app
   if (IS_VERCEL) {
     return app;
   }
@@ -2583,7 +2412,7 @@ async function start() {
 
 const serverPromise = start();
 
-// 本地开发时直接启动
+// 鏈湴寮€鍙戞椂鐩存帴鍚姩
 if (!IS_VERCEL) {
   serverPromise.catch((error) => {
     console.error(error);
@@ -2591,5 +2420,8 @@ if (!IS_VERCEL) {
   });
 }
 
-// Vercel Serverless 导出
+// Vercel Serverless 瀵煎嚭
 export default serverPromise;
+
+
+

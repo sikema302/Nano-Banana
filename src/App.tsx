@@ -58,10 +58,9 @@ interface DisplayImage extends GeneratedImagePayload {
 }
 
 const defaultModels: ModelInfo[] = [
-  { id: 'gemini-2.0-flash', name: 'Gemini Image', description: 'Google Gemini通用模型。', creditsCost: 0 },
-  { id: 'gpt-image-2', name: 'GPT Image 2', description: '通用图像生成，支持自动比例。' },
-  { id: 'Nano_Banana_2', name: 'Nano Banana2', description: '快速生成 2K 图片，适合日常创意出图。' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '更高质量的 Banana 生成模型。' },
+  { id: 'Nano_Banana_2', name: 'Nano Banana2', description: '快速生成 2K 图片，适合日常创意出图。' },
+  { id: 'gpt-image-2', name: 'GPT Image 2', description: '通用图像生成，支持自动比例。' },
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4';
@@ -144,7 +143,6 @@ function formatTime(value: string) {
 function getModelCredits(model: Pick<ModelInfo, 'id' | 'creditsCost'> | null) {
   if (!model) return 0;
   if (typeof model.creditsCost === 'number') return model.creditsCost;
-  if (model.id === 'gemini-2.0-flash') return 0;
   if (model.id === 'gpt-image-2') return 20;
   if (model.id === 'Nano_Banana_Pro') return 20;
   if (model.id === 'Nano_Banana_2') return 17;
@@ -152,10 +150,9 @@ function getModelCredits(model: Pick<ModelInfo, 'id' | 'creditsCost'> | null) {
 }
 
 function getModelSortOrder(modelId: string) {
-  if (modelId === 'gemini-2.0-flash') return 0;
-  if (modelId === 'Nano_Banana_Pro') return 1;
-  if (modelId === 'Nano_Banana_2') return 2;
-  if (modelId === 'gpt-image-2') return 3;
+  if (modelId === 'Nano_Banana_Pro') return 0;
+  if (modelId === 'Nano_Banana_2') return 1;
+  if (modelId === 'gpt-image-2') return 2;
   return 99;
 }
 
@@ -721,7 +718,7 @@ function AdminView({
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [selectedModel, setSelectedModel] = useState('Nano_Banana_Pro');
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
   const [imageSize, setImageSize] = useState<ImageSizeOption>('2K');
@@ -937,11 +934,6 @@ export default function App() {
 
       setHistoryQueue((current) => (currentImage ? [currentImage, ...current].slice(0, 7) : current));
       setCurrentImage(toDisplayImage(response.image));
-
-      // 如果发生了模型回退，提示用户
-      if (response.image.fallbackUsed) {
-        setNotice(`Gemini 免费额度已用完，已自动切换到 ${response.image.modelName} 生成。`);
-      }
 
       void fetchMe().then(setUser).catch(() => undefined);
       void loadHistory();
