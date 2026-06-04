@@ -506,7 +506,7 @@ function normalizeRatio(value: string, modelId: string) {
 }
 
 function generateInviteCode() {
-  return `BANANA-${randomHex(4).toUpperCase()}`;
+  return `PIXORY-${randomHex(4).toUpperCase()}`;
 }
 
 // 鈹€鈹€鈹€ SQLite 杈呭姪鍑芥暟锛堜粎鏈湴鐜浣跨敤锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -1149,7 +1149,7 @@ function buildSvg(prompt: string, modelName: string, dimensions: string) {
   )}" height="${Math.round(height * 0.8)}" rx="34" fill="rgba(8,11,24,0.16)" stroke="rgba(255,255,255,0.18)" />
   <text x="${Math.round(width * 0.1)}" y="${Math.round(height * 0.17)}" fill="white" font-size="${Math.round(
     Math.min(width, height) * 0.034,
-  )}" font-family="Segoe UI, Arial, sans-serif" font-weight="700">BANANAS AI</text>
+  )}" font-family="Segoe UI, Arial, sans-serif" font-weight="700">PIXORY</text>
   <text x="${Math.round(width * 0.1)}" y="${Math.round(height * 0.26)}" fill="rgba(255,255,255,0.95)" font-size="${Math.round(
     Math.min(width, height) * 0.068,
   )}" font-family="Segoe UI, Arial, sans-serif" font-weight="700">${safePrompt}</text>

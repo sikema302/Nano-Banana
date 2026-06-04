@@ -1468,7 +1468,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="h-7 w-7 rounded-lg bg-[linear-gradient(135deg,#6d2fff_0%,#8a49ff_42%,#2ad4ff_100%)]" />
             <div className="flex items-end gap-2">
-              <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">BANANAS AI</span>
+              <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
               <span className="pb-0.5 text-sm text-zinc-500">/ Studio</span>
             </div>
           </div>

@@ -132,7 +132,7 @@ function generateRandomHex(bytes: number): string {
 }
 
 function generateInviteCode(): string {
-  return `BANANA-${generateRandomHex(4).toUpperCase()}`;
+  return `PIXORY-${generateRandomHex(4).toUpperCase()}`;
 }
 
 function sha256Digest(input: string): string {
