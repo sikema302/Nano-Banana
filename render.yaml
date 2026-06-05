@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
@@ -16,6 +16,8 @@ services:
       - key: CORS_ORIGIN
         sync: false
       - key: VISIONARY_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false

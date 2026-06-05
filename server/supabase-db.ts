@@ -75,6 +75,7 @@ type UserCreditsRow = {
 const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
+const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhrKpGbUUiHCaQrYCq';
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
@@ -104,6 +105,71 @@ function getSupabase(): SupabaseClient {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeSupabaseId(value: unknown): string {
+  return typeof value === 'string' ? value : String(value ?? '');
+}
+
+function toUserRow(row: Record<string, unknown>): UserRow {
+  return {
+    id: normalizeSupabaseId(row.id),
+    username: String(row.username || ''),
+    password_hash: String(row.password_hash || ''),
+    email: row.email == null ? null : String(row.email),
+    created_at: String(row.created_at || ''),
+  };
+}
+
+function toGenerationRow(row: Record<string, unknown>): GenerationRow {
+  return {
+    id: normalizeSupabaseId(row.id),
+    user_id: normalizeSupabaseId(row.user_id),
+    username: String(row.username || ''),
+    prompt: String(row.prompt || ''),
+    model_id: String(row.model_id || ''),
+    model_name: String(row.model_name || ''),
+    dimensions: String(row.dimensions || ''),
+    image_size: String(row.image_size || ''),
+    image_path: String(row.image_path || ''),
+    credits_used: Number(row.credits_used || 0),
+    reference_images: String(row.reference_images || '[]'),
+    created_at: String(row.created_at || ''),
+    invite_code: row.invite_code == null ? undefined : String(row.invite_code),
+  };
+}
+
+function toImageRow(row: Record<string, unknown>): ImageRow {
+  return {
+    id: normalizeSupabaseId(row.id),
+    user_id: normalizeSupabaseId(row.user_id),
+    prompt: String(row.prompt || ''),
+    model_name: String(row.model_name || ''),
+    dimensions: String(row.dimensions || ''),
+    image_path: String(row.image_path || ''),
+    category: String(row.category || ''),
+    reference_images: String(row.reference_images || '[]'),
+    created_at: String(row.created_at || ''),
+  };
+}
+
+async function getNextNumericId(tableName: 'users' | 'generations' | 'images'): Promise<number> {
+  const { data, error } = await getSupabase()
+    .from(tableName)
+    .select('id')
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Read next ${tableName} id failed: ${error.message}`);
+  }
+
+  return Number(data?.id || 0) + 1;
+}
+
+function isPrimaryKeyConflict(error: { message?: string } | null | undefined): boolean {
+  return Boolean(error?.message && error.message.includes('duplicate key value violates unique constraint'));
 }
 
 function toCreditSummary(row: { total_credits: number; used_credits: number } | null): CreditSummary {
@@ -156,7 +222,7 @@ export async function findUserByUsername(username: string): Promise<UserRow | nu
     .eq('username', username)
     .single();
   if (error || !data) return null;
-  return data as unknown as UserRow;
+  return toUserRow(data as Record<string, unknown>);
 }
 
 export async function createUser(
@@ -164,20 +230,67 @@ export async function createUser(
   passwordHash: string,
   email: string | null,
 ): Promise<UserRow> {
-  const id = crypto.randomUUID();
-  const { data, error } = await getSupabase()
-    .from('users')
-    .insert({
-      id,
-      username,
-      password_hash: passwordHash,
-      email,
-      created_at: nowIso(),
-    })
-    .select('id, username, password_hash, email, created_at')
-    .single();
-  if (error) throw new Error(`Create user failed: ${error.message}`);
-  return data as unknown as UserRow;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('users');
+    const { data, error } = await getSupabase()
+      .from('users')
+      .insert({
+        id,
+        username,
+        password_hash: passwordHash,
+        email,
+        created_at: nowIso(),
+      })
+      .select('id, username, password_hash, email, created_at')
+      .single();
+
+    if (!error && data) {
+      return toUserRow(data as Record<string, unknown>);
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Create user failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  throw new Error('Create user failed: unable to allocate a unique user id');
+}
+
+export async function findOrCreateInviteUser(username: string): Promise<UserRow> {
+  const existing = await findUserByUsername(username);
+  if (existing) {
+    return existing;
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('users');
+    const { data, error } = await getSupabase()
+      .from('users')
+      .insert({
+        id,
+        username,
+        password_hash: INVITE_USER_PASSWORD_HASH,
+        email: null,
+        created_at: nowIso(),
+      })
+      .select('id, username, password_hash, email, created_at')
+      .single();
+
+    if (!error && data) {
+      return toUserRow(data as Record<string, unknown>);
+    }
+
+    const retry = await findUserByUsername(username);
+    if (retry) {
+      return retry;
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Create invite user failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  throw new Error('Create invite user failed: unable to allocate a unique user id');
 }
 
 export async function updateUserPassword(username: string, passwordHash: string): Promise<void> {
@@ -271,7 +384,7 @@ export async function getAdminCreditOwner(): Promise<{ user_id: string } | null>
     .limit(1)
     .single();
   if (error || !data) return null;
-  return data as unknown as { user_id: string };
+  return { user_id: normalizeSupabaseId((data as Record<string, unknown>).user_id) };
 }
 
 export async function getAdminCreditSummary(): Promise<CreditSummary> {
@@ -337,6 +450,62 @@ export async function redeemInviteCode(code: string, userId: string): Promise<vo
     })
     .eq('code', code);
   if (error) throw new Error(`Redeem invite code failed: ${error.message}`);
+}
+
+export async function migrateLegacyInviteUserId(
+  oldUserId: string,
+  newUserId: string,
+  username: string,
+): Promise<void> {
+  if (!oldUserId || oldUserId === newUserId) {
+    return;
+  }
+
+  const supabase = getSupabase();
+  const { data: oldCredits } = await supabase
+    .from('user_credits')
+    .select('user_id, username, total_credits, used_credits, created_at, updated_at')
+    .eq('user_id', oldUserId)
+    .maybeSingle();
+
+  const { data: newCredits } = await supabase
+    .from('user_credits')
+    .select('user_id, username, total_credits, used_credits, created_at, updated_at')
+    .eq('user_id', newUserId)
+    .maybeSingle();
+
+  if (oldCredits) {
+    const totalCredits = Number(oldCredits.total_credits || 0) + Number(newCredits?.total_credits || 0);
+    const usedCredits = Number(oldCredits.used_credits || 0) + Number(newCredits?.used_credits || 0);
+
+    const { error: upsertError } = await supabase.from('user_credits').upsert(
+      {
+        user_id: newUserId,
+        username,
+        total_credits: totalCredits,
+        used_credits: usedCredits,
+        created_at: String(newCredits?.created_at || oldCredits.created_at || nowIso()),
+        updated_at: nowIso(),
+      },
+      { onConflict: 'user_id' },
+    );
+    if (upsertError) {
+      throw new Error(`Migrate credits failed: ${upsertError.message}`);
+    }
+
+    const { error: deleteOldError } = await supabase.from('user_credits').delete().eq('user_id', oldUserId);
+    if (deleteOldError) {
+      throw new Error(`Delete legacy credits failed: ${deleteOldError.message}`);
+    }
+  }
+
+  const { error: inviteError } = await supabase
+    .from('invite_codes')
+    .update({ redeemed_by: newUserId })
+    .eq('redeemed_by', oldUserId);
+  if (inviteError) {
+    throw new Error(`Migrate invite ownership failed: ${inviteError.message}`);
+  }
 }
 
 export async function updateInviteCodeCredits(
@@ -456,21 +625,33 @@ export async function insertGeneration(record: {
   referenceImages: string[];
   createdAt: string;
 }): Promise<void> {
-  const { error } = await getSupabase().from('generations').insert({
-    id: crypto.randomUUID(),
-    user_id: record.userId,
-    username: record.username,
-    prompt: record.prompt,
-    model_id: record.modelId,
-    model_name: record.modelName,
-    dimensions: record.dimensions,
-    image_size: record.imageSize,
-    image_path: record.imagePath,
-    credits_used: record.creditsUsed,
-    reference_images: JSON.stringify(record.referenceImages),
-    created_at: record.createdAt,
-  });
-  if (error) throw new Error(`Insert generation failed: ${error.message}`);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('generations');
+    const { error } = await getSupabase().from('generations').insert({
+      id,
+      user_id: record.userId,
+      username: record.username,
+      prompt: record.prompt,
+      model_id: record.modelId,
+      model_name: record.modelName,
+      dimensions: record.dimensions,
+      image_size: record.imageSize,
+      image_path: record.imagePath,
+      credits_used: record.creditsUsed,
+      reference_images: JSON.stringify(record.referenceImages),
+      created_at: record.createdAt,
+    });
+
+    if (!error) {
+      return;
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Insert generation failed: ${error.message}`);
+    }
+  }
+
+  throw new Error('Insert generation failed: unable to allocate a unique generation id');
 }
 
 export async function getUserGenerations(userId: string): Promise<GenerationRow[]> {
@@ -480,7 +661,7 @@ export async function getUserGenerations(userId: string): Promise<GenerationRow[
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
-  return (data || []) as unknown as GenerationRow[];
+  return (data || []).map((row) => toGenerationRow(row as Record<string, unknown>));
 }
 
 export async function getGenerationSummaries(): Promise<
@@ -600,24 +781,34 @@ export async function insertImage(record: {
   referenceImages: string[];
   createdAt: string;
 }): Promise<ImageRow> {
-  const id = crypto.randomUUID();
-  const { data, error } = await getSupabase()
-    .from('images')
-    .insert({
-      id,
-      user_id: record.userId,
-      prompt: record.prompt,
-      model_name: record.modelName,
-      dimensions: record.dimensions,
-      image_path: record.imagePath,
-      category: record.category,
-      reference_images: JSON.stringify(record.referenceImages),
-      created_at: record.createdAt,
-    })
-    .select('*')
-    .single();
-  if (error) throw new Error(`Insert image failed: ${error.message}`);
-  return data as unknown as ImageRow;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('images');
+    const { data, error } = await getSupabase()
+      .from('images')
+      .insert({
+        id,
+        user_id: record.userId,
+        prompt: record.prompt,
+        model_name: record.modelName,
+        dimensions: record.dimensions,
+        image_path: record.imagePath,
+        category: record.category,
+        reference_images: JSON.stringify(record.referenceImages),
+        created_at: record.createdAt,
+      })
+      .select('*')
+      .single();
+
+    if (!error && data) {
+      return toImageRow(data as Record<string, unknown>);
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Insert image failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  throw new Error('Insert image failed: unable to allocate a unique image id');
 }
 
 export async function getUserImages(
@@ -636,7 +827,7 @@ export async function getUserImages(
 
   const { data, error } = await query;
   if (error) throw new Error(`Fetch images failed: ${error.message}`);
-  return (data || []) as unknown as ImageRow[];
+  return (data || []).map((row) => toImageRow(row as Record<string, unknown>));
 }
 
 export async function getImageById(imageId: string, userId: string): Promise<ImageRow | null> {
@@ -647,7 +838,7 @@ export async function getImageById(imageId: string, userId: string): Promise<Ima
     .eq('user_id', userId)
     .single();
   if (error || !data) return null;
-  return data as unknown as ImageRow;
+  return toImageRow(data as Record<string, unknown>);
 }
 
 export async function updateImageCategory(

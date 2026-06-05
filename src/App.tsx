@@ -2,6 +2,7 @@ import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useState }
 import {
   Bookmark,
   Clock3,
+  Copy,
   Download,
   ImagePlus,
   LoaderCircle,
@@ -59,9 +60,8 @@ interface DisplayImage extends GeneratedImagePayload {
 }
 
 const defaultModels: ModelInfo[] = [
-  { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '更高质量的 Banana 生成模型。' },
-  { id: 'Nano_Banana_2', name: 'Nano Banana2', description: '快速生成 2K 图片，适合日常创意出图。' },
-  { id: 'gpt-image-2', name: 'GPT Image 2', description: '通用图像生成，支持自动比例。' },
+  { id: 'gpt-image-2', name: 'GPT Image 2', description: 'OpenAI最强生图模型！' },
+  { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '谷歌最强生图模型！' },
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4';
@@ -145,49 +145,46 @@ function getModelCredits(model: Pick<ModelInfo, 'id' | 'creditsCost'> | null) {
   if (!model) return 0;
   if (typeof model.creditsCost === 'number') return model.creditsCost;
   if (model.id === 'gpt-image-2') return 20;
-  if (model.id === 'Nano_Banana_Pro') return 20;
-  if (model.id === 'Nano_Banana_2') return 17;
+  if (model.id === 'Nano_Banana_Pro') return 24;
   return 1;
 }
 
 function getModelSortOrder(modelId: string) {
-  if (modelId === 'Nano_Banana_Pro') return 0;
-  if (modelId === 'Nano_Banana_2') return 1;
-  if (modelId === 'gpt-image-2') return 2;
+  if (modelId === 'gpt-image-2') return 0;
+  if (modelId === 'Nano_Banana_Pro') return 1;
   return 99;
 }
 
 function CreditsSummary({
   user,
   selectedModel,
+  onOpenPurchase,
 }: {
   user: UserInfo | null;
   selectedModel: ModelInfo | null;
+  onOpenPurchase: () => void;
 }) {
   const creditsRemaining = typeof user?.creditsRemaining === 'number' ? user.creditsRemaining : null;
   const creditsCost = getModelCredits(selectedModel);
   const insufficientCredits = creditsRemaining !== null && creditsRemaining < creditsCost;
 
   return (
-    <div className="rounded-2xl border border-amber-400/20 bg-amber-400/8 px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">Credits</p>
-          <p className="mt-1 text-sm text-zinc-100">
-            {creditsRemaining !== null ? `当前余额 ${creditsRemaining} 积分` : '登录后可查看积分余额'}
-          </p>
-        </div>
-        {selectedModel ? (
-          <div className="text-right">
-            <p className="text-xs text-zinc-400">当前模型</p>
-            <p className="mt-1 text-sm font-semibold text-white">{selectedModel.name}</p>
-          </div>
-        ) : null}
+    <div className="space-y-1 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <span className="font-semibold text-zinc-300">
+          使用积分: <span className="text-white">{creditsCost}</span>/<span className="text-white">{creditsRemaining ?? '--'}</span>
+        </span>
+        <button
+          className="font-semibold text-sky-400 transition hover:text-sky-300"
+          type="button"
+          onClick={onOpenPurchase}
+        >
+          在线购买积分(25%优惠)
+        </button>
       </div>
       {selectedModel ? (
-        <p className={`mt-2 text-xs ${insufficientCredits ? 'text-rose-200' : 'text-amber-100'}`}>
-          本次生成预计消耗 {creditsCost} 积分
-          {insufficientCredits ? '，当前余额不足' : ''}
+        <p className={`text-sm ${insufficientCredits ? 'text-zinc-300' : 'text-zinc-400'}`}>
+          {insufficientCredits ? '当前积分已用完，暂时无法继续生成图片。' : `当前模型 ${selectedModel.name}，积分充足可继续生成图片。`}
         </p>
       ) : null}
     </div>
@@ -746,7 +743,7 @@ function AdminView({
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
-  const [selectedModel, setSelectedModel] = useState('Nano_Banana_Pro');
+  const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
   const [imageSize, setImageSize] = useState<ImageSizeOption>('2K');
@@ -774,6 +771,10 @@ export default function App() {
   const [healthText, setHealthText] = useState('正在检查本地服务...');
   const [healthError, setHealthError] = useState('');
   const [notice, setNotice] = useState('');
+  const [creditsPurchaseOpen, setCreditsPurchaseOpen] = useState(false);
+  const [copyToastVisible, setCopyToastVisible] = useState(false);
+  const [purchaseRedeemCode, setPurchaseRedeemCode] = useState('');
+  const [purchaseRedeemLoading, setPurchaseRedeemLoading] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'invite'>('login');
   const [authLoading, setAuthLoading] = useState(false);
@@ -850,8 +851,8 @@ export default function App() {
       setSelectedModel((current) => {
         const exists = modelPayload.models.some((item) => item.id === current);
         if (exists) return current;
-        const preferred = modelPayload.models.find((item) => item.id === 'Nano_Banana_Pro');
-        return preferred?.id || modelPayload.models[0]?.id || 'Nano_Banana_Pro';
+        const preferred = modelPayload.models.find((item) => item.id === 'gpt-image-2');
+        return preferred?.id || modelPayload.models[0]?.id || 'gpt-image-2';
       });
       setFavorites(favoritePayload.images);
       setBackup(backupPayload.images);
@@ -945,6 +946,38 @@ export default function App() {
 
   function removeReference(id: string) {
     setReferences((current) => current.filter((item) => item.id !== id));
+  }
+
+  async function handleCopyWechat() {
+    try {
+      await navigator.clipboard.writeText('lzp983813676');
+      setCopyToastVisible(false);
+      window.setTimeout(() => setCopyToastVisible(true), 10);
+      window.setTimeout(() => setCopyToastVisible(false), 2200);
+    } catch {
+      setNotice('复制失败，请手动添加微信：lzp983813676');
+    }
+  }
+
+  async function handlePurchaseRedeem() {
+    const code = purchaseRedeemCode.trim().toUpperCase();
+    if (!code) {
+      setNotice('请输入积分兑换码');
+      return;
+    }
+
+    setPurchaseRedeemLoading(true);
+    try {
+      const nextUser = await loginWithInvite({ code });
+      setUser(nextUser);
+      setCreditsPurchaseOpen(false);
+      setPurchaseRedeemCode('');
+      setNotice(`兑换成功，欢迎回来：${nextUser.username}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '兑换失败');
+    } finally {
+      setPurchaseRedeemLoading(false);
+    }
   }
 
   async function handleGenerate(event: FormEvent<HTMLFormElement>) {
@@ -1413,7 +1446,7 @@ export default function App() {
                 {healthError}
               </div>
             ) : null}
-            <CreditsSummary selectedModel={selectedModelInfo} user={user} />
+            <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={() => setCreditsPurchaseOpen(true)} />
 
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1747,7 +1780,7 @@ export default function App() {
                     {healthError}
                   </div>
                 ) : null}
-                <CreditsSummary selectedModel={selectedModelInfo} user={user} />
+                <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={() => setCreditsPurchaseOpen(true)} />
 
                 <button
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1894,6 +1927,83 @@ export default function App() {
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-4">
               <img alt={previewImage.prompt} className="max-h-[78vh] max-w-full object-contain" src={previewImage.imageUrl} />
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {creditsPurchaseOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/78 px-4 backdrop-blur-sm">
+          <button className="absolute inset-0" type="button" onClick={() => setCreditsPurchaseOpen(false)} />
+          <div className="relative z-10 w-full max-w-[640px] rounded-[38px] border border-white/10 bg-[#09090b] px-6 py-7 shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:px-8 sm:py-8">
+            {copyToastVisible ? (
+              <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
+                <div className="flex items-center gap-3 rounded-[22px] border border-emerald-400/20 bg-[#07372d] px-6 py-3 text-[15px] font-black text-emerald-100 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+                  <Copy size={22} className="text-[#67f0c8]" />
+                  <span>已复制微信号</span>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex items-start justify-between gap-4">
+              <h2 className="max-w-[420px] text-[28px] font-black tracking-tight text-white sm:text-[34px] sm:leading-[1.08]">
+                在线购买积分(25%优惠)
+              </h2>
+              <button
+                className="rounded-2xl p-2 text-zinc-500 transition hover:text-white"
+                type="button"
+                onClick={() => setCreditsPurchaseOpen(false)}
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="mt-7 rounded-[26px] border border-cyan-500/35 bg-[#0a2028] px-6 py-6 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.08)]">
+              <div className="flex flex-wrap items-center gap-3 text-[17px] font-black text-white">
+                <span>中国区客服微信：</span>
+                <span className="text-[18px] text-sky-300">lzp983813676</span>
+                <button
+                  className="rounded-full border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-sm font-bold text-sky-100 transition hover:bg-sky-500/20"
+                  type="button"
+                  onClick={() => void handleCopyWechat()}
+                >
+                  复制
+                </button>
+              </div>
+
+              <p className="mt-6 text-[18px] font-black text-white">现可自助购买积分！</p>
+              <p className="mt-4 max-w-[430px] text-[17px] font-bold leading-8 text-zinc-100">
+                降价公告：加量不加价！相同价格比原来多增加25%的积分！
+              </p>
+
+              <div className="mt-6">
+                <button
+                  className="inline-flex items-center rounded-full border border-amber-500/45 bg-[#4a2d14] px-6 py-3 text-[16px] font-black text-amber-50 transition hover:bg-[#5a3517]"
+                  type="button"
+                  onClick={() => void handleCopyWechat()}
+                >
+                  去购买
+                </button>
+              </div>
+            </div>
+
+            {/* <div className="mt-7 rounded-[26px] border border-amber-500/25 bg-[#341a0b] px-6 py-5 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.06)]">
+              <p className="text-[18px] font-black text-amber-50">积分兑换</p>
+              <div className="mt-5 flex items-center gap-4">
+                <input
+                  className="h-14 flex-1 rounded-[18px] border border-white/10 bg-[#201108] px-5 text-[16px] font-semibold text-white outline-none transition placeholder:text-zinc-500 focus:border-amber-500/30"
+                  placeholder="请输入积分兑换码"
+                  value={purchaseRedeemCode}
+                  onChange={(event) => setPurchaseRedeemCode(event.target.value.toUpperCase())}
+                />
+                <button
+                  className="h-14 min-w-[96px] rounded-full bg-white px-6 text-[16px] font-black text-[#2d190c] transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  disabled={purchaseRedeemLoading}
+                  onClick={() => void handlePurchaseRedeem()}
+                >
+                  {purchaseRedeemLoading ? '兑换中' : '兑换'}
+                </button>
+              </div>
+            </div> */}
           </div>
         </div>
       ) : null}

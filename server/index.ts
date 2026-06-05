@@ -85,6 +85,15 @@ type VisionaryGenerationResponse = {
     url?: string;
     content?: string;
   }>;
+  data?: Array<{
+    url?: string;
+    b64_json?: string;
+  }>;
+  output?: Array<{
+    url?: string;
+    content?: string;
+  }>;
+  url?: string;
   status?: string;
   error?: string;
   failure_reason?: string;
@@ -237,22 +246,16 @@ const SUPABASE_SYNC_TABLES = [
 
 const models = [
   {
-    id: 'Nano_Banana_Pro',
-    name: 'Nano Banana Pro',
-    description: 'Higher quality Banana image generation.',
-    creditsCost: 20,
-  },
-  {
-    id: 'Nano_Banana_2',
-    name: 'Nano Banana2',
-    description: 'Fast Banana image generation with 2K output.',
-    creditsCost: 17,
-  },
-  {
     id: 'gpt-image-2',
     name: 'GPT Image 2',
-    description: 'General image generation with automatic ratio support.',
+    description: 'OpenAI最强生图模型！',
     creditsCost: 20,
+  },
+  {
+    id: 'Nano_Banana_Pro',
+    name: 'Nano Banana Pro',
+    description: '谷歌最强生图模型！',
+    creditsCost: 24,
   },
 ] as const;
 
@@ -449,8 +452,7 @@ function toPublicUser(user: AuthUser): PublicUser {
 
 function getModelCredits(modelId: string) {
   if (modelId === 'gpt-image-2') return 20;
-  if (modelId === 'Nano_Banana_Pro') return 20;
-  if (modelId === 'Nano_Banana_2') return 17;
+  if (modelId === 'Nano_Banana_Pro') return 24;
   return 1;
 }
 
@@ -492,9 +494,9 @@ function modelNameFromId(modelId: string) {
 }
 
 function normalizeModelId(modelId: string) {
-  if (modelId === 'nano-banana2') return 'Nano_Banana_2';
-  if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_2';
-  return models.some((item) => item.id === modelId) ? modelId : 'Nano_Banana_Pro';
+  if (modelId === 'nano-banana2' || modelId === 'Nano_Banana_2') return 'Nano_Banana_Pro';
+  if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_Pro';
+  return models.some((item) => item.id === modelId) ? modelId : 'gpt-image-2';
 }
 
 function normalizeRatio(value: string, modelId: string) {
@@ -1053,22 +1055,40 @@ async function callVisionaryGeneration({
     throw new Error('VISIONARY_API_KEY is not configured');
   }
 
-  const body = {
-    prompt,
-    model: modelId,
-    ratio,
-    imageSize: modelId === 'gpt-image-2' ? undefined : imageSize,
-    images,
-  };
+  const aspectRatio = ratio || '1:1';
+  const requestConfig =
+    modelId === 'gpt-image-2'
+      ? {
+          endpointPath: '/v1/api/generate',
+          body: {
+            prompt,
+            model: 'gpt-image-2',
+            images,
+            aspectRatio,
+            replyType: 'json',
+          },
+        }
+      : {
+          endpointPath: '/v1/api/nano-banana',
+          body: {
+            prompt,
+            model: 'nano-banana-pro',
+            images,
+            aspectRatio,
+            imageSize: imageSize || '2K',
+            optimizeChineseText: false,
+            replyType: 'json',
+          },
+        };
 
-  const response = await fetch(`${VISIONARY_API_BASE_URL}/openapi/v1/images/generations`, {
+  const response = await fetch(`${VISIONARY_API_BASE_URL}${requestConfig.endpointPath}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Idempotency-Key': `req_${Date.now()}_${randomHex(8)}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestConfig.body),
   });
 
   const payload = (await response.json().catch(() => null)) as VisionaryGenerationResponse | null;
@@ -1077,7 +1097,14 @@ async function callVisionaryGeneration({
     throw new Error(message);
   }
 
-  const imageUrl = payload?.results?.find((item) => item.url || item.content)?.url || payload?.results?.[0]?.content;
+  const imageUrl =
+    payload?.results?.find((item) => item.url || item.content)?.url ||
+    payload?.results?.[0]?.content ||
+    payload?.output?.find((item) => item.url || item.content)?.url ||
+    payload?.output?.[0]?.content ||
+    payload?.data?.find((item) => item.url || item.b64_json)?.url ||
+    payload?.data?.[0]?.b64_json ||
+    payload?.url;
   if (!imageUrl) {
     throw new Error(`Visionary API returned no image URL${payload?.id ? `, response id: ${payload.id}` : ''}`);
   }
@@ -1436,13 +1463,17 @@ async function start() {
           return;
         }
 
-        const digest = sha256Digest(code);
-        const userId = redeemedBy || `invite-${digest}`;
         const username = `invite-${code.slice(-4).toLowerCase()}`;
+        const inviteUser = await db.findOrCreateInviteUser(username);
+        const userId = inviteUser.id;
 
         if (!redeemedBy) {
           await db.redeemInviteCode(code, userId);
           await db.ensureUserCredits(userId, username, credits);
+        } else if (redeemedBy !== userId) {
+          await db.migrateLegacyInviteUserId(redeemedBy, userId, username);
+          await db.redeemInviteCode(code, userId);
+          await db.ensureUserCredits(userId, username, 0);
         } else {
           await db.ensureUserCredits(userId, username, 0);
         }
