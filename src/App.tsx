@@ -36,7 +36,6 @@ import {
   moveImage,
   register,
   type AdminUserSummary,
-  type ApiCreditPool,
   type CreditSummary,
   type GeneratedImagePayload,
   type GenerationRecord,
@@ -72,6 +71,15 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'admin';
+type LegacyAdminPool = {
+  id: string;
+  name: string;
+  keyPreview?: string;
+  status: 'available' | 'missing';
+  remainingCredits: number;
+  totalCredits: number;
+  usedCredits: number;
+};
 
 interface AdminOverviewState {
   users: AdminUserSummary[];
@@ -80,7 +88,6 @@ interface AdminOverviewState {
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
-  apiCreditPools: ApiCreditPool[];
 }
 
 const emptyPage: PaginationInfo = {
@@ -526,7 +533,6 @@ function AdminView({
   inviteCodes,
   inviteCodesPage,
   adminCredits,
-  apiCreditPools,
   onCreateInviteCode,
   onDeleteInviteCode,
   onRecordsPageChange,
@@ -539,24 +545,26 @@ function AdminView({
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
-  apiCreditPools: ApiCreditPool[];
-  onCreateInviteCode: (apiCredits: Partial<Record<ApiCreditPool['id'], number>>) => Promise<void>;
+  onCreateInviteCode: (credits: number) => Promise<void>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onRecordsPageChange: (page: number) => void;
   onInviteCodesPageChange: (page: number) => void;
   onPreview: (item: GenerationRecord) => void;
 }) {
-  const [apiCredits, setApiCredits] = useState<Partial<Record<ApiCreditPool['id'], number>>>({});
+  const [credits, setCredits] = useState(100);
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
-  const inviteCreditsTotal = apiCreditPools.reduce((sum, pool) => sum + Math.max(0, Number(apiCredits[pool.id] || 0)), 0);
-  const hasInvalidInviteCredits = apiCreditPools.some((pool) => Math.max(0, Number(apiCredits[pool.id] || 0)) > pool.remainingCredits);
+  const normalizedCredits = Math.max(0, Number(credits) || 0);
+  const isInvalidCredits = normalizedCredits <= 0 || normalizedCredits > adminCredits.remainingCredits;
+  const inviteCreditsTotal = normalizedCredits;
+  const [apiCredits, setApiCredits] = useState<Record<string, number>>({});
+  const apiCreditPools: LegacyAdminPool[] = [];
 
   async function handleCreateInviteCode() {
     setSubmitting(true);
     try {
-      await onCreateInviteCode(apiCredits);
-      setApiCredits({});
+      await onCreateInviteCode(normalizedCredits);
+      setCredits(100);
     } finally {
       setSubmitting(false);
     }
@@ -587,12 +595,20 @@ function AdminView({
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className={hasInvalidInviteCredits || inviteCreditsTotal > adminCredits.remainingCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
+              <span className={isInvalidCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
                 本次分配 {inviteCreditsTotal} 积分
               </span>
+              <input
+                className={`w-28 rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${isInvalidCredits ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
+                min={1}
+                max={adminCredits.remainingCredits}
+                type="number"
+                value={credits}
+                onChange={(event) => setCredits(Math.max(0, Number(event.target.value) || 0))}
+              />
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
-                disabled={submitting || inviteCreditsTotal <= 0 || hasInvalidInviteCredits}
+                disabled={submitting || isInvalidCredits}
                 type="button"
                 onClick={() => void handleCreateInviteCode()}
               >
@@ -601,7 +617,7 @@ function AdminView({
             </div>
           </div>
 
-          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="hidden">
             {apiCreditPools.map((pool) => {
               const nextValue = Math.max(0, Number(apiCredits[pool.id] || 0));
               const overLimit = nextValue > pool.remainingCredits;
@@ -866,7 +882,6 @@ export default function App() {
     inviteCodes: [],
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
-    apiCreditPools: [],
   });
   const [adminRecordsPage, setAdminRecordsPage] = useState(1);
   const [adminInviteCodesPage, setAdminInviteCodesPage] = useState(1);
@@ -1052,14 +1067,13 @@ export default function App() {
     }
   }
 
-  async function handleCreateInviteCode(apiCredits: Partial<Record<ApiCreditPool['id'], number>>) {
+  async function handleCreateInviteCode(credits: number) {
     try {
-      const payload = await createInviteCode({ apiCredits });
+      const payload = await createInviteCode({ credits });
       setAdminOverview((current) => ({
         ...current,
         inviteCodes: payload.inviteCode ? [payload.inviteCode, ...current.inviteCodes] : current.inviteCodes,
         adminCredits: payload.adminCredits,
-        apiCreditPools: payload.apiCreditPools,
       }));
       setNotice(`已生成邀请码：${payload.inviteCode?.code || ''}`);
       void fetchMe().then(setUser).catch(() => undefined);
@@ -1080,7 +1094,6 @@ export default function App() {
           total: Math.max(0, current.inviteCodesPage.total - 1),
         },
         adminCredits: payload.adminCredits,
-        apiCreditPools: payload.apiCreditPools,
       }));
       setNotice(`已删除邀请码 ${code}，并将积分退回给 admin。`);
       void fetchMe().then(setUser).catch(() => undefined);
@@ -1441,7 +1454,6 @@ export default function App() {
       inviteCodes: [],
       inviteCodesPage: emptyPage,
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
-      apiCreditPools: [],
     });
     setAdminRecordsPage(1);
     setAdminInviteCodesPage(1);
@@ -2166,7 +2178,6 @@ export default function App() {
               inviteCodes={adminOverview.inviteCodes}
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
-              apiCreditPools={adminOverview.apiCreditPools}
               onCreateInviteCode={handleCreateInviteCode}
               onDeleteInviteCode={handleDeleteInviteCode}
               onRecordsPageChange={setAdminRecordsPage}

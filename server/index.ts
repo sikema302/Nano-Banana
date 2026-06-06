@@ -179,6 +179,8 @@ const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
+const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
+const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
   id: ApiCreditPoolId;
   name: string;
@@ -1166,6 +1168,226 @@ function userApiCreditSettingKey(userId: string) {
   return `${USER_API_CREDIT_SETTING_PREFIX}${userId}`;
 }
 
+function lowBalanceSinceForCredits(credits: number, existingValue: unknown) {
+  if (credits <= 0 || credits >= INVITE_RECLAIM_THRESHOLD) return null;
+  return normalizeString(existingValue) || nowIso();
+}
+
+function unifiedRemainingFromApiCreditMap(map: ApiCreditAllocationMap) {
+  return sumApiCreditTotals(map) > 0 ? sumApiCreditRemaining(map) : 0;
+}
+
+function parseStoredApiCreditMap(value: string) {
+  return normalizeAllocationMap(parseJsonSetting(value, {}));
+}
+
+function unifiedMigrationSummary(settings: Array<{ key: string; value: string }>) {
+  const adminSetting = settings.find((item) => item.key === API_CREDIT_POOL_SETTING_KEY);
+  const adminRemaining = adminSetting ? unifiedRemainingFromApiCreditMap(parseStoredApiCreditMap(adminSetting.value)) : 0;
+  const userSettings = settings.filter((item) => item.key.startsWith(USER_API_CREDIT_SETTING_PREFIX));
+  const inviteSettings = settings.filter((item) => item.key.startsWith(INVITE_API_CREDIT_SETTING_PREFIX));
+
+  return {
+    adminRemaining,
+    userSettings,
+    inviteSettings,
+  };
+}
+
+function getLegacyApiCreditSettingsSqlite(db: SqlDatabase) {
+  return runQuery<{ key: string; value: string }>(
+    db,
+    `
+      SELECT key, value
+      FROM app_settings
+      WHERE key = ?
+        OR key LIKE ?
+        OR key LIKE ?
+      ORDER BY key ASC
+    `,
+    [API_CREDIT_POOL_SETTING_KEY, `${USER_API_CREDIT_SETTING_PREFIX}%`, `${INVITE_API_CREDIT_SETTING_PREFIX}%`],
+  ).map((row) => ({ key: String(row.key || ''), value: String(row.value || '') }));
+}
+
+function migrateLegacyApiCreditsSqlite(db: SqlDatabase) {
+  const existing = getOne<{ value: string }>(
+    db,
+    'SELECT value FROM app_settings WHERE key = ?',
+    [UNIFIED_CREDIT_MIGRATION_SETTING_KEY],
+  );
+  if (existing?.value) return;
+
+  const settings = getLegacyApiCreditSettingsSqlite(db);
+  const summary = unifiedMigrationSummary(settings);
+  const migratedAt = nowIso();
+
+  setSetting(
+    db,
+    UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY,
+    JSON.stringify({
+      migratedAt,
+      settings,
+    }),
+  );
+
+  if (summary.adminRemaining > 0) {
+    const admin = getAdminCreditOwner(db);
+    if (admin?.user_id) {
+      const adminCredits = getUserCredits(db, String(admin.user_id));
+      setUserTotalCredits(db, String(admin.user_id), adminCredits.usedCredits + summary.adminRemaining);
+    }
+  }
+
+  for (const setting of summary.userSettings) {
+    const userId = setting.key.slice(USER_API_CREDIT_SETTING_PREFIX.length);
+    if (!userId) continue;
+
+    const remainingCredits = unifiedRemainingFromApiCreditMap(parseStoredApiCreditMap(setting.value));
+    if (remainingCredits <= 0) continue;
+
+    const credits = getUserCredits(db, userId);
+    setUserTotalCredits(db, userId, credits.usedCredits + remainingCredits);
+  }
+
+  for (const setting of summary.inviteSettings) {
+    const code = setting.key.slice(INVITE_API_CREDIT_SETTING_PREFIX.length);
+    if (!code) continue;
+
+    const remainingCredits = unifiedRemainingFromApiCreditMap(parseStoredApiCreditMap(setting.value));
+    const invite = getOne<Record<string, unknown>>(db, 'SELECT code, low_balance_since FROM invite_codes WHERE code = ?', [code]);
+    if (!invite?.code) continue;
+
+    db.run('UPDATE invite_codes SET credits = ?, low_balance_since = ? WHERE code = ?', [
+      remainingCredits,
+      lowBalanceSinceForCredits(remainingCredits, invite.low_balance_since),
+      code,
+    ]);
+  }
+
+  setSetting(
+    db,
+    UNIFIED_CREDIT_MIGRATION_SETTING_KEY,
+    JSON.stringify({
+      migratedAt,
+      adminRemaining: summary.adminRemaining,
+      userSettings: summary.userSettings.length,
+      inviteSettings: summary.inviteSettings.length,
+    }),
+  );
+}
+
+async function getLegacyApiCreditSettingsSupabase() {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client is not configured');
+  }
+
+  const settings: Array<{ key: string; value: string }> = [];
+  const adminSetting = await supabaseAdmin
+    .from('app_settings')
+    .select('key, value')
+    .eq('key', API_CREDIT_POOL_SETTING_KEY)
+    .maybeSingle();
+  if (adminSetting.error) throw new Error(`Fetch API credit pool setting failed: ${adminSetting.error.message}`);
+  if (adminSetting.data) {
+    settings.push({
+      key: String((adminSetting.data as Record<string, unknown>).key || ''),
+      value: String((adminSetting.data as Record<string, unknown>).value || ''),
+    });
+  }
+
+  for (const prefix of [USER_API_CREDIT_SETTING_PREFIX, INVITE_API_CREDIT_SETTING_PREFIX]) {
+    const { data, error } = await supabaseAdmin
+      .from('app_settings')
+      .select('key, value')
+      .like('key', `${prefix}%`);
+    if (error) throw new Error(`Fetch ${prefix} settings failed: ${error.message}`);
+    for (const row of (data || []) as Array<Record<string, unknown>>) {
+      settings.push({
+        key: String(row.key || ''),
+        value: String(row.value || ''),
+      });
+    }
+  }
+
+  return settings;
+}
+
+async function runUnifiedCreditMigrationSupabase() {
+  if (!USE_SUPABASE) return;
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client is not configured');
+  }
+
+  const existing = await supabaseAdmin
+    .from('app_settings')
+    .select('value')
+    .eq('key', UNIFIED_CREDIT_MIGRATION_SETTING_KEY)
+    .maybeSingle();
+  if (existing.error) throw new Error(`Fetch unified migration marker failed: ${existing.error.message}`);
+  if (existing.data) return;
+
+  const db = await getSupabaseDb();
+  const settings = await getLegacyApiCreditSettingsSupabase();
+  const summary = unifiedMigrationSummary(settings);
+  const migratedAt = nowIso();
+
+  await db.setSetting(
+    UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY,
+    JSON.stringify({
+      migratedAt,
+      settings,
+    }),
+  );
+
+  if (summary.adminRemaining > 0) {
+    const admin = await db.getAdminCreditOwner();
+    if (admin?.user_id) {
+      const adminCredits = await db.getUserCredits(String(admin.user_id));
+      await db.setUserTotalCredits(String(admin.user_id), adminCredits.usedCredits + summary.adminRemaining);
+    }
+  }
+
+  for (const setting of summary.userSettings) {
+    const userId = setting.key.slice(USER_API_CREDIT_SETTING_PREFIX.length);
+    if (!userId) continue;
+
+    const remainingCredits = unifiedRemainingFromApiCreditMap(parseStoredApiCreditMap(setting.value));
+    if (remainingCredits <= 0) continue;
+
+    const credits = await db.getUserCredits(userId);
+    await db.setUserTotalCredits(userId, credits.usedCredits + remainingCredits);
+  }
+
+  for (const setting of summary.inviteSettings) {
+    const code = setting.key.slice(INVITE_API_CREDIT_SETTING_PREFIX.length);
+    if (!code) continue;
+
+    const remainingCredits = unifiedRemainingFromApiCreditMap(parseStoredApiCreditMap(setting.value));
+    const invite = await db.getInviteCode(code);
+    if (!invite?.code) continue;
+
+    await db.updateInviteCodeCredits(
+      code,
+      remainingCredits,
+      lowBalanceSinceForCredits(remainingCredits, invite.low_balance_since),
+    );
+  }
+
+  await db.setSetting(
+    UNIFIED_CREDIT_MIGRATION_SETTING_KEY,
+    JSON.stringify({
+      migratedAt,
+      adminRemaining: summary.adminRemaining,
+      userSettings: summary.userSettings.length,
+      inviteSettings: summary.inviteSettings.length,
+    }),
+  );
+
+  console.log(
+    `[credits:migration] unified adminRemaining=${summary.adminRemaining} users=${summary.userSettings.length} invites=${summary.inviteSettings.length}`,
+  );
+}
+
 function getAdminCreditSummary(db: SqlDatabase) {
   return toCreditSummary(
     getOne<Record<string, unknown>>(
@@ -1425,6 +1647,7 @@ async function ensureRuntimeSchema() {
       );
       setUserTotalCredits(db, adminUserId, Math.max(0, ADMIN_INITIAL_CREDITS - outstandingInviteCredits));
     }
+    migrateLegacyApiCreditsSqlite(db);
     syncRedeemedInviteCodeBalances(db);
     reclaimLowBalanceInviteCodes(db);
   });
@@ -1677,12 +1900,14 @@ async function start() {
       try {
         const db = await getSupabaseDb();
         await db.ensureRuntimeSchema();
+        await runUnifiedCreditMigrationSupabase();
       } catch (schemaError) {
         console.error('Supabase schema initialization failed (will retry on first request):', schemaError);
       }
     } else {
       const db = await getSupabaseDb();
       await db.ensureRuntimeSchema();
+      await runUnifiedCreditMigrationSupabase();
     }
   } else if (!IS_VERCEL) {
     // SQLite 浠呭湪鎸佷箙鍖栨枃浠剁郴缁熺幆澧冧笅鍒濆鍖?    // await restoreSqliteFromSupabase();
@@ -1920,29 +2145,12 @@ async function start() {
         if (!redeemedBy) {
           await db.redeemInviteCode(code, userId);
           await db.ensureUserCredits(userId, username, credits);
-          const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
-          const userApiCredits =
-            sumApiCreditTotals(inviteApiCredits) > 0
-              ? inviteApiCredits
-              : normalizeRequestedApiCredits({ legacy: credits });
-          await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), userApiCredits);
         } else if (redeemedBy !== userId) {
           await db.migrateLegacyInviteUserId(redeemedBy, userId, username);
           await db.redeemInviteCode(code, userId);
           await db.ensureUserCredits(userId, username, 0);
-          const existingUserApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(redeemedBy));
-          if (sumApiCreditTotals(existingUserApiCredits) > 0) {
-            await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), existingUserApiCredits);
-          }
         } else {
           await db.ensureUserCredits(userId, username, 0);
-          const currentUserApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(userId));
-          if (sumApiCreditTotals(currentUserApiCredits) === 0) {
-            const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
-            if (sumApiCreditTotals(inviteApiCredits) > 0) {
-              await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), inviteApiCredits);
-            }
-          }
         }
 
         const authUser = { userId, username };
@@ -1970,21 +2178,8 @@ async function start() {
         if (!redeemedBy) {
           db.run('UPDATE invite_codes SET redeemed_by = ?, redeemed_at = ? WHERE code = ?', [userId, nowIso(), code]);
           ensureUserCredits(db, userId, username, credits);
-          const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
-          const userApiCredits =
-            sumApiCreditTotals(inviteApiCredits) > 0
-              ? inviteApiCredits
-              : normalizeRequestedApiCredits({ legacy: credits });
-          setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId), userApiCredits);
         } else {
           ensureUserCredits(db, userId, username, 0);
-          const currentUserApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId));
-          if (sumApiCreditTotals(currentUserApiCredits) === 0) {
-            const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
-            if (sumApiCreditTotals(inviteApiCredits) > 0) {
-              setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId), inviteApiCredits);
-            }
-          }
         }
 
         return { id: userId, username };
@@ -2049,7 +2244,6 @@ async function start() {
       let modelName = modelNameFromId(modelId);
       let imageSize = normalizeImageSize(requestedImageSize, modelId);
       let creditsUsed = getModelCredits(modelId, imageSize) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
-      const apiCreditPoolId = getApiCreditPoolId(modelId, imageSize);
 
       // Credits check
       if (creditsUsed > 0) {
@@ -2061,10 +2255,6 @@ async function start() {
           if (credits.remainingCredits < creditsUsed) {
             throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
           }
-          const userApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId));
-          if (sumApiCreditTotals(userApiCredits) > 0) {
-            deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
-          }
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
@@ -2073,10 +2263,6 @@ async function start() {
             const credits = getUserCredits(db, req.authUser!.userId);
             if (credits.remainingCredits < creditsUsed) {
               throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
-            }
-            const userApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId));
-            if (sumApiCreditTotals(userApiCredits) > 0) {
-              deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
             }
           });
         }
@@ -2113,15 +2299,6 @@ async function start() {
           await db.reclaimLowBalanceInviteCodes();
           await db.incrementUsedCredits(req.authUser!.userId, creditsUsed);
           await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
-          const userApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId));
-          if (sumApiCreditTotals(userApiCredits) > 0) {
-            deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
-            await setScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId), userApiCredits);
-            const invite = await db.getRedeemedInviteCodeForUser(req.authUser!.userId);
-            if (invite?.code) {
-              await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(invite.code), userApiCredits);
-            }
-          }
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
@@ -2132,25 +2309,6 @@ async function start() {
               req.authUser!.userId,
             ]);
             syncInviteCodeBalanceForUser(db, req.authUser!.userId);
-            const userApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId));
-            if (sumApiCreditTotals(userApiCredits) > 0) {
-              deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
-              setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId), userApiCredits);
-              const invite = getOne<Record<string, unknown>>(
-                db,
-                `
-                  SELECT code
-                  FROM invite_codes
-                  WHERE redeemed_by = ?
-                  ORDER BY datetime(redeemed_at) DESC, datetime(created_at) DESC
-                  LIMIT 1
-                `,
-                [req.authUser!.userId],
-              );
-              if (invite?.code) {
-                setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(String(invite.code)), userApiCredits);
-              }
-            }
           });
         }
       }
@@ -2370,26 +2528,18 @@ async function start() {
         }));
 
         const { codes: inviteCodeRows, total: inviteCodesTotal } = await db.listInviteCodes(inviteCodesPage, inviteCodesPageSize);
-        const inviteCodes = await Promise.all(inviteCodeRows.map(async (row) => ({
-          ...toInviteCode({
-            code: row.code,
-            credits: row.credits,
-            issued_credits: row.issued_credits,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            redeemed_by: row.redeemed_by,
-            redeemed_at: row.redeemed_at,
-            low_balance_since: row.low_balance_since,
-          }),
-          apiCredits: getInviteCodeApiCreditsForDisplay(
-            row.code,
-            row.credits,
-            await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(row.code)),
-          ),
-        })));
+        const inviteCodes = inviteCodeRows.map((row) => toInviteCode({
+          code: row.code,
+          credits: row.credits,
+          issued_credits: row.issued_credits,
+          created_by: row.created_by,
+          created_at: row.created_at,
+          redeemed_by: row.redeemed_by,
+          redeemed_at: row.redeemed_at,
+          low_balance_since: row.low_balance_since,
+        }));
 
         const adminCredits = await db.getAdminCreditSummary();
-        const apiCreditPools = toApiCreditPoolList(await getAdminApiCreditMapSupabase());
 
         res.json({
           users,
@@ -2398,7 +2548,6 @@ async function start() {
           inviteCodes,
           inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
           adminCredits,
-          apiCreditPools,
         });
         return;
       }
@@ -2579,14 +2728,7 @@ async function start() {
             LIMIT ? OFFSET ?
           `,
           [inviteCodesPageSize, (inviteCodesPage - 1) * inviteCodesPageSize],
-        ).map((row) => ({
-          ...toInviteCode(row),
-          apiCredits: getInviteCodeApiCreditsForDisplay(
-            String(row.code || ''),
-            Number(row.credits || 0),
-            getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(String(row.code || ''))),
-          ),
-        }));
+        ).map(toInviteCode);
 
         return {
           users,
@@ -2595,7 +2737,6 @@ async function start() {
           inviteCodes,
           inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
           adminCredits: getAdminCreditSummary(db),
-          apiCreditPools: toApiCreditPoolList(getAdminApiCreditMapSqlite(db)),
         };
       });
 
@@ -2608,11 +2749,10 @@ async function start() {
   // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
-    const requestedApiCredits = normalizeRequestedApiCredits(req.body?.apiCredits ?? req.body?.credits);
-    const requestedCredits = sumApiCreditTotals(requestedApiCredits);
+    const requestedCredits = Number(req.body?.credits);
 
-    if (requestedCredits <= 0) {
-      res.status(400).json({ error: 'At least one API key credit value must be positive' });
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
       return;
     }
 
@@ -2621,9 +2761,12 @@ async function start() {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
-        const adminApiCredits = await getAdminApiCreditMapSupabase();
-        const credits = requestedCredits;
-        deductAdminApiCreditPools(adminApiCredits, requestedApiCredits);
+        const adminCredits = await db.getAdminCreditSummary();
+        const credits = Math.floor(requestedCredits);
+
+        if (credits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
 
         let code = generateInviteCode();
         while (await db.getInviteCode(code)) {
@@ -2631,18 +2774,13 @@ async function start() {
         }
 
         await db.createInviteCode(code, credits, req.authUser!.username);
-        if (requestedApiCredits.legacy.totalCredits > 0) {
-          await db.adjustAdminTotalCredits(-requestedApiCredits.legacy.totalCredits);
-        }
-        await setAdminApiCreditMapSupabase(adminApiCredits);
-        await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code), requestedApiCredits);
+        await db.adjustAdminTotalCredits(-credits);
 
         const invite = await db.getInviteCode(code);
         const newAdminCredits = await db.getAdminCreditSummary();
 
         res.status(201).json({
-          inviteCode: invite ? {
-            ...toInviteCode({
+          inviteCode: invite ? toInviteCode({
               code: invite.code,
               credits: invite.credits,
               issued_credits: invite.issued_credits,
@@ -2651,11 +2789,8 @@ async function start() {
               redeemed_by: invite.redeemed_by,
               redeemed_at: invite.redeemed_at,
               low_balance_since: invite.low_balance_since,
-            }),
-            apiCredits: getInviteCodeApiCreditsForDisplay(invite.code, invite.credits, requestedApiCredits),
-          } : null,
+            }) : null,
           adminCredits: newAdminCredits,
-          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         });
         return;
       }
@@ -2664,9 +2799,12 @@ async function start() {
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
-        const adminApiCredits = getAdminApiCreditMapSqlite(db);
-        const credits = requestedCredits;
-        deductAdminApiCreditPools(adminApiCredits, requestedApiCredits);
+        const adminCredits = getAdminCreditSummary(db);
+        const credits = Math.floor(requestedCredits);
+
+        if (credits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
 
         let code = generateInviteCode();
         while (getOne(db, 'SELECT code FROM invite_codes WHERE code = ?', [code])) {
@@ -2684,20 +2822,12 @@ async function start() {
             credits < INVITE_RECLAIM_THRESHOLD ? nowIso() : null,
           ],
         );
-        if (requestedApiCredits.legacy.totalCredits > 0) {
-          adjustAdminTotalCredits(db, -requestedApiCredits.legacy.totalCredits);
-        }
-        setAdminApiCreditMapSqlite(db, adminApiCredits);
-        setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code), requestedApiCredits);
+        adjustAdminTotalCredits(db, -credits);
 
         const invite = getOne<Record<string, unknown>>(db, 'SELECT * FROM invite_codes WHERE code = ?', [code]);
         return {
-          inviteCode: invite ? {
-            ...toInviteCode(invite),
-            apiCredits: getInviteCodeApiCreditsForDisplay(code, credits, requestedApiCredits),
-          } : null,
+          inviteCode: invite ? toInviteCode(invite) : null,
           adminCredits: getAdminCreditSummary(db),
-          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         };
       });
 
@@ -2732,22 +2862,14 @@ async function start() {
         }
 
         const creditsToReturn = Number(invite.credits || 0);
-        const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
-        const apiCreditsToReturn =
-          sumApiCreditTotals(inviteApiCredits) > 0 ? inviteApiCredits : normalizeRequestedApiCredits({ legacy: creditsToReturn });
-        const adminApiCredits = await getAdminApiCreditMapSupabase();
-        returnAdminApiCreditPools(adminApiCredits, apiCreditsToReturn);
         await db.deleteInviteCode(code);
-        if (apiCreditsToReturn.legacy.remainingCredits > 0) {
-          await db.adjustAdminTotalCredits(apiCreditsToReturn.legacy.remainingCredits);
+        if (creditsToReturn > 0) {
+          await db.adjustAdminTotalCredits(creditsToReturn);
         }
-        await setAdminApiCreditMapSupabase(adminApiCredits);
-        await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code), normalizeAllocationMap({}));
 
         res.json({
           ok: true,
           adminCredits: await db.getAdminCreditSummary(),
-          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         });
         return;
       }
@@ -2771,22 +2893,14 @@ async function start() {
         }
 
         const creditsToReturn = Number(invite.credits || 0);
-        const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
-        const apiCreditsToReturn =
-          sumApiCreditTotals(inviteApiCredits) > 0 ? inviteApiCredits : normalizeRequestedApiCredits({ legacy: creditsToReturn });
-        const adminApiCredits = getAdminApiCreditMapSqlite(db);
-        returnAdminApiCreditPools(adminApiCredits, apiCreditsToReturn);
         db.run('DELETE FROM invite_codes WHERE code = ?', [code]);
-        if (apiCreditsToReturn.legacy.remainingCredits > 0) {
-          adjustAdminTotalCredits(db, apiCreditsToReturn.legacy.remainingCredits);
+        if (creditsToReturn > 0) {
+          adjustAdminTotalCredits(db, creditsToReturn);
         }
-        setAdminApiCreditMapSqlite(db, adminApiCredits);
-        setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code), normalizeAllocationMap({}));
 
         return {
           ok: true,
           adminCredits: getAdminCreditSummary(db),
-          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         };
       });
 
