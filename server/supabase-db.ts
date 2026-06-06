@@ -76,6 +76,7 @@ const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
 const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhrKpGbUUiHCaQrYCq';
+const IMAGE_RETENTION_DAYS = 10;
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
@@ -105,6 +106,10 @@ function getSupabase(): SupabaseClient {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function subtractDaysIso(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function normalizeSupabaseId(value: unknown): string {
@@ -1019,6 +1024,52 @@ export async function reclaimLowBalanceInviteCodes(): Promise<void> {
 }
 
 // ─── 初始化逻辑 ─────────────────────────────────────────────────────
+
+export async function purgeExpiredImageData(retentionDays = IMAGE_RETENTION_DAYS): Promise<{
+  deletedGenerations: number;
+  deletedImages: number;
+  cutoffIso: string;
+}> {
+  const cutoffIso = subtractDaysIso(retentionDays);
+
+  const { data: oldGenerations, error: generationsQueryError } = await getSupabase()
+    .from('generations')
+    .select('id')
+    .lt('created_at', cutoffIso);
+  if (generationsQueryError) {
+    throw new Error(`Query expired generations failed: ${generationsQueryError.message}`);
+  }
+
+  const { data: oldImages, error: imagesQueryError } = await getSupabase()
+    .from('images')
+    .select('id')
+    .lt('created_at', cutoffIso);
+  if (imagesQueryError) {
+    throw new Error(`Query expired images failed: ${imagesQueryError.message}`);
+  }
+
+  if ((oldGenerations || []).length > 0) {
+    const generationIds = oldGenerations.map((row) => normalizeSupabaseId((row as { id: string | number }).id));
+    const { error: deleteGenerationsError } = await getSupabase().from('generations').delete().in('id', generationIds);
+    if (deleteGenerationsError) {
+      throw new Error(`Delete expired generations failed: ${deleteGenerationsError.message}`);
+    }
+  }
+
+  if ((oldImages || []).length > 0) {
+    const imageIds = oldImages.map((row) => normalizeSupabaseId((row as { id: string | number }).id));
+    const { error: deleteImagesError } = await getSupabase().from('images').delete().in('id', imageIds);
+    if (deleteImagesError) {
+      throw new Error(`Delete expired images failed: ${deleteImagesError.message}`);
+    }
+  }
+
+  return {
+    deletedGenerations: (oldGenerations || []).length,
+    deletedImages: (oldImages || []).length,
+    cutoffIso,
+  };
+}
 
 export async function ensureRuntimeSchema(): Promise<void> {
   const bcrypt = await import('bcryptjs');

@@ -69,6 +69,17 @@ export interface CreditSummary {
   remainingCredits: number;
 }
 
+export interface ApiCreditPool {
+  id: 'gpt_hd' | 'gpt' | 'banana' | 'legacy';
+  name: string;
+  envName?: string;
+  keyPreview?: string;
+  status?: 'available' | 'missing';
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+}
+
 export interface InviteCodeInfo {
   code: string;
   credits: number;
@@ -76,6 +87,13 @@ export interface InviteCodeInfo {
   createdAt: string;
   redeemedBy: string;
   redeemedAt: string;
+  apiCredits?: Array<{
+    poolId: ApiCreditPool['id'];
+    name: string;
+    totalCredits: number;
+    usedCredits: number;
+    remainingCredits: number;
+  }>;
 }
 
 export interface PaginationInfo {
@@ -253,6 +271,8 @@ export async function generateImage(payload: {
   model: string;
   dimensions: string;
   imageSize?: string;
+  quality?: string;
+  optimizeChineseText?: boolean;
   reference_images: ReferenceUploadInput[];
 }) {
   const result = await request<{ image: GeneratedImagePayload }>(
@@ -297,6 +317,7 @@ export async function fetchAdminOverview(params: {
     inviteCodes: InviteCodeInfo[];
     inviteCodesPage: PaginationInfo;
     adminCredits: CreditSummary;
+    apiCreditPools: ApiCreditPool[];
   }>(`/api/admin/overview${suffix}`, {}, true);
   return {
     ...result,
@@ -304,8 +325,8 @@ export async function fetchAdminOverview(params: {
   };
 }
 
-export async function createInviteCode(payload: { credits: number }) {
-  return request<{ inviteCode: InviteCodeInfo; adminCredits: CreditSummary }>(
+export async function createInviteCode(payload: { credits?: number; apiCredits?: Partial<Record<ApiCreditPool['id'], number>> }) {
+  return request<{ inviteCode: InviteCodeInfo; adminCredits: CreditSummary; apiCreditPools: ApiCreditPool[] }>(
     '/api/admin/invite-codes',
     {
       method: 'POST',
@@ -316,7 +337,7 @@ export async function createInviteCode(payload: { credits: number }) {
 }
 
 export async function deleteInviteCode(code: string) {
-  return request<{ ok: boolean; adminCredits: CreditSummary }>(
+  return request<{ ok: boolean; adminCredits: CreditSummary; apiCreditPools: ApiCreditPool[] }>(
     `/api/admin/invite-codes/${encodeURIComponent(code)}`,
     {
       method: 'DELETE',

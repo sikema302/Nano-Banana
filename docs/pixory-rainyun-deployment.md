@@ -93,8 +93,17 @@ CORS_ORIGIN=http://154.9.24.91,http://154.9.24.91:3001,http://pixory.top,http://
 Server-only secrets should remain only on the server:
 
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `VISIONARY_API_KEY`
+- `VISIONARY_BANANA_PRO_API_KEY`
+- `VISIONARY_GPT_IMAGE_2_API_KEY`
+- `VISIONARY_GPT_IMAGE_2_HD_API_KEY`
+- `VISIONARY_API_KEY` as a fallback
 - `JWT_SECRET`
+
+Visionary key routing:
+
+- Nano Banana Pro uses `VISIONARY_BANANA_PRO_API_KEY`.
+- GPT Image 2 standard uses `VISIONARY_GPT_IMAGE_2_API_KEY`.
+- GPT Image 2 2K and 4K use `VISIONARY_GPT_IMAGE_2_HD_API_KEY`.
 
 ## Deploy flow
 

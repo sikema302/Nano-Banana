@@ -5,9 +5,12 @@ import {
   Copy,
   Download,
   ImagePlus,
+  Info,
   LoaderCircle,
   LogIn,
   LogOut,
+  Minus,
+  Plus,
   ShieldCheck,
   Sparkles,
   Star,
@@ -32,9 +35,10 @@ import {
   loginWithInvite,
   moveImage,
   register,
-  type GeneratedImagePayload,
   type AdminUserSummary,
+  type ApiCreditPool,
   type CreditSummary,
+  type GeneratedImagePayload,
   type GenerationRecord,
   type ImageCategory,
   type InviteCodeInfo,
@@ -60,12 +64,13 @@ interface DisplayImage extends GeneratedImagePayload {
 }
 
 const defaultModels: ModelInfo[] = [
-  { id: 'gpt-image-2', name: 'GPT Image 2', description: 'OpenAI最强生图模型！' },
-  { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '谷歌最强生图模型！' },
+  { id: 'gpt-image-2', name: 'GPT Image 2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
+  { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
 ];
 
-type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4';
-type ImageSizeOption = '2K' | '4K';
+type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
+type ImageSizeOption = 'STANDARD' | '2K' | '4K';
+type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'admin';
 
 interface AdminOverviewState {
@@ -75,6 +80,7 @@ interface AdminOverviewState {
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
+  apiCreditPools: ApiCreditPool[];
 }
 
 const emptyPage: PaginationInfo = {
@@ -84,21 +90,41 @@ const emptyPage: PaginationInfo = {
   totalPages: 1,
 };
 
+const MAX_REFERENCES = 9;
+const MAX_PROMPT_LENGTH = 8000;
+
 const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
   { value: '1:1', label: '1:1' },
   { value: '3:2', label: '3:2' },
   { value: '16:9', label: '16:9' },
   { value: '4:3', label: '4:3' },
+  { value: '21:9', label: '21:9' },
   { value: '9:16', label: '9:16' },
   { value: '3:4', label: '3:4' },
+  { value: '2:3', label: '2:3' },
+];
+
+const gptImageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
+  { value: 'STANDARD', label: '\u6807\u51c6', hint: '20 \u79ef\u5206' },
+  { value: '2K', label: '2K', hint: '28 \u79ef\u5206' },
+  { value: '4K', label: '4K', hint: '36 \u79ef\u5206' },
+];
+
+const gptQualityOptions: Array<{ value: GptQualityOption; label: string }> = [
+  { value: 'low', label: '\u4f4e' },
+  { value: 'medium', label: '\u4e2d' },
+  { value: 'high', label: '\u9ad8' },
 ];
 
 const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
-  { value: '2K', label: '2K', hint: '满血版 图片大小 4M-8M' },
-  { value: '4K', label: '4K', hint: '满血版 图片大小 15M-20M' },
+  { value: '2K', label: '2K', hint: '\u7a33\u5b9a\u9ad8\u6e05\u8f93\u51fa' },
+  { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
 ];
 
+const promptTemplate = ['\u4e3b\u4f53\uff1a', '\u573a\u666f\uff1a', '\u98ce\u683c\uff1a', '\u955c\u5934\uff1a', '\u5149\u7ebf\uff1a', '\u7ec6\u8282\uff1a'].join('\n');
+
 function fileToBase64(file: File) {
+
   return new Promise<UploadPreview>((resolve, reject) => {
     const reader = new FileReader();
 
@@ -141,11 +167,24 @@ function formatTime(value: string) {
   }).format(date);
 }
 
-function getModelCredits(model: Pick<ModelInfo, 'id' | 'creditsCost'> | null) {
+function getModelCredits(
+  model: Pick<ModelInfo, 'id' | 'creditsCost'> | null,
+  options?: {
+    imageSize?: ImageSizeOption;
+    optimizeChineseText?: boolean;
+  },
+) {
   if (!model) return 0;
+  if (model.id === 'gpt-image-2') {
+    if (options?.imageSize === '4K') return 36;
+    if (options?.imageSize === '2K') return 28;
+    return 20;
+  }
+  if (model.id === 'Nano_Banana_Pro') {
+    const baseCredits = typeof model.creditsCost === 'number' ? model.creditsCost : 24;
+    return baseCredits + (options?.optimizeChineseText ? 8 : 0);
+  }
   if (typeof model.creditsCost === 'number') return model.creditsCost;
-  if (model.id === 'gpt-image-2') return 20;
-  if (model.id === 'Nano_Banana_Pro') return 24;
   return 1;
 }
 
@@ -487,6 +526,7 @@ function AdminView({
   inviteCodes,
   inviteCodesPage,
   adminCredits,
+  apiCreditPools,
   onCreateInviteCode,
   onDeleteInviteCode,
   onRecordsPageChange,
@@ -499,20 +539,24 @@ function AdminView({
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
-  onCreateInviteCode: (credits: number) => Promise<void>;
+  apiCreditPools: ApiCreditPool[];
+  onCreateInviteCode: (apiCredits: Partial<Record<ApiCreditPool['id'], number>>) => Promise<void>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onRecordsPageChange: (page: number) => void;
   onInviteCodesPageChange: (page: number) => void;
   onPreview: (item: GenerationRecord) => void;
 }) {
-  const [credits, setCredits] = useState(100);
+  const [apiCredits, setApiCredits] = useState<Partial<Record<ApiCreditPool['id'], number>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
+  const inviteCreditsTotal = apiCreditPools.reduce((sum, pool) => sum + Math.max(0, Number(apiCredits[pool.id] || 0)), 0);
+  const hasInvalidInviteCredits = apiCreditPools.some((pool) => Math.max(0, Number(apiCredits[pool.id] || 0)) > pool.remainingCredits);
 
   async function handleCreateInviteCode() {
     setSubmitting(true);
     try {
-      await onCreateInviteCode(credits);
+      await onCreateInviteCode(apiCredits);
+      setApiCredits({});
     } finally {
       setSubmitting(false);
     }
@@ -539,27 +583,71 @@ function AdminView({
             <div>
               <h2 className="text-sm font-semibold text-white">邀请码与管理员积分</h2>
               <p className="mt-1 text-xs text-zinc-500">
-                总积分 {adminCredits.totalCredits} · 已分配 {adminCredits.usedCredits} · 剩余 {adminCredits.remainingCredits}
+                兼容总池 {adminCredits.totalCredits} · 已分配 {adminCredits.usedCredits} · 剩余 {adminCredits.remainingCredits}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                className="w-28 rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-sm outline-none"
-                min={1}
-                max={adminCredits.remainingCredits || 1}
-                type="number"
-                value={credits}
-                onChange={(event) => setCredits(Math.max(1, Number(event.target.value) || 1))}
-              />
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className={hasInvalidInviteCredits || inviteCreditsTotal > adminCredits.remainingCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
+                本次分配 {inviteCreditsTotal} 积分
+              </span>
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
-                disabled={submitting || credits > adminCredits.remainingCredits}
+                disabled={submitting || inviteCreditsTotal <= 0 || hasInvalidInviteCredits}
                 type="button"
                 onClick={() => void handleCreateInviteCode()}
               >
                 生成邀请码
               </button>
             </div>
+          </div>
+
+          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {apiCreditPools.map((pool) => {
+              const nextValue = Math.max(0, Number(apiCredits[pool.id] || 0));
+              const overLimit = nextValue > pool.remainingCredits;
+
+              return (
+                <div key={pool.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-white">{pool.name}</p>
+                      <p className="mt-1 font-mono text-[11px] text-zinc-500">{pool.keyPreview || '未配置'}</p>
+                    </div>
+                    <span className={pool.status === 'available' ? 'rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300' : 'rounded-full bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-300'}>
+                      {pool.status === 'available' ? '可用' : '缺失'}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-zinc-500">剩余</p>
+                      <p className="mt-1 text-base font-black text-sky-200">{pool.remainingCredits}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">总额</p>
+                      <p className="mt-1 text-base font-black text-white">{pool.totalCredits}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">已用</p>
+                      <p className="mt-1 text-base font-black text-amber-200">{pool.usedCredits}</p>
+                    </div>
+                  </div>
+                  <label className="mt-3 block text-[11px] font-semibold text-zinc-500">
+                    本码分配
+                    <input
+                      className={`mt-1 w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${overLimit ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
+                      min={0}
+                      max={pool.remainingCredits}
+                      type="number"
+                      value={apiCredits[pool.id] ?? ''}
+                      onChange={(event) => {
+                        const value = Math.max(0, Number(event.target.value) || 0);
+                        setApiCredits((current) => ({ ...current, [pool.id]: value }));
+                      }}
+                    />
+                  </label>
+                </div>
+              );
+            })}
           </div>
 
           <div className="overflow-x-auto">
@@ -579,7 +667,18 @@ function AdminView({
                   {inviteCodes.map((item) => (
                     <tr key={item.code} className="text-zinc-300">
                       <td className="px-3 py-3 font-mono font-semibold text-white">{item.code}</td>
-                      <td className="px-3 py-3 text-sky-200">{item.credits}</td>
+                      <td className="px-3 py-3">
+                        <div className="font-semibold text-sky-200">{item.credits}</div>
+                        {item.apiCredits?.length ? (
+                          <div className="mt-1 flex max-w-[260px] flex-wrap gap-1 text-[10px] text-zinc-500">
+                            {item.apiCredits.filter((pool) => pool.totalCredits > 0).map((pool) => (
+                              <span key={`${item.code}-${pool.poolId}`} className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5">
+                                {pool.name}: {pool.remainingCredits}/{pool.totalCredits}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-3">{item.redeemedBy ? '已使用' : '未使用'}</td>
                       <td className="max-w-[220px] truncate px-3 py-3 text-zinc-500">{item.redeemedBy || '-'}</td>
                       <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
@@ -746,7 +845,13 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
-  const [imageSize, setImageSize] = useState<ImageSizeOption>('2K');
+  const [imageSize, setImageSize] = useState<ImageSizeOption>('STANDARD');
+  const [gptQuality, setGptQuality] = useState<GptQualityOption>('medium');
+  const [optimizeChineseText, setOptimizeChineseText] = useState(false);
+  const [batchCount, setBatchCount] = useState(1);
+  const [autoPlace, setAutoPlace] = useState(true);
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [draggingReferences, setDraggingReferences] = useState(false);
   const [references, setReferences] = useState<UploadPreview[]>([]);
   const [favorites, setFavorites] = useState<SavedImage[]>([]);
   const [backup, setBackup] = useState<SavedImage[]>([]);
@@ -761,6 +866,7 @@ export default function App() {
     inviteCodes: [],
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
+    apiCreditPools: [],
   });
   const [adminRecordsPage, setAdminRecordsPage] = useState(1);
   const [adminInviteCodesPage, setAdminInviteCodesPage] = useState(1);
@@ -785,10 +891,12 @@ export default function App() {
   const sideBackupItems = user ? backup : [];
   const sideDiscardedItems = user ? discarded : [];
   const isNanoBananaPro = selectedModel === 'Nano_Banana_Pro';
+  const showGptQuality = selectedModel === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K');
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
-  const selectedModelCredits = getModelCredits(selectedModelInfo);
+  const selectedModelCredits = getModelCredits(selectedModelInfo, { imageSize, optimizeChineseText });
+  const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const hasEnoughCredits =
-    typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits : true;
+    typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
 
   useEffect(() => {
     fetchHealth()
@@ -834,6 +942,56 @@ export default function App() {
       setActiveTab('create');
     }
   }, [activeTab, user]);
+
+  function handleModelSelect(modelId: string) {
+    setSelectedModel(modelId);
+    setImageSize((current) => {
+      if (modelId === 'Nano_Banana_Pro') {
+        return current === '4K' ? '4K' : '2K';
+      }
+      return current === '2K' || current === '4K' ? current : 'STANDARD';
+    });
+    setGptQuality((current) => {
+      if (modelId !== 'gpt-image-2') return current;
+      if (imageSize === '4K') return 'high';
+      if (imageSize === '2K') return current === 'low' || current === 'medium' || current === 'high' ? current : 'medium';
+      return 'medium';
+    });
+    if (modelId !== 'Nano_Banana_Pro') {
+      setOptimizeChineseText(false);
+    }
+  }
+
+  async function appendReferenceFiles(files: File[]) {
+    if (files.length === 0) return;
+
+    const remaining = Math.max(0, MAX_REFERENCES - references.length);
+    if (remaining === 0) {
+      setNotice(`最多只能上传 ${MAX_REFERENCES} 张参考图`);
+      return;
+    }
+
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file)));
+    setReferences((current) => [...current, ...next].slice(0, MAX_REFERENCES));
+  }
+
+  function applyPromptTemplate() {
+    setPrompt((current) => (current.trim() ? `${current.trim()}\n\n${promptTemplate}` : promptTemplate));
+  }
+
+  function commitGeneratedImages(nextImages: DisplayImage[]) {
+    if (nextImages.length === 0) return;
+
+    if (autoPlace) {
+      const latestImage = nextImages[nextImages.length - 1];
+      const earlierImages = nextImages.slice(0, -1).reverse();
+      setHistoryQueue((current) => [...earlierImages, ...(currentImage ? [currentImage, ...current] : current)].slice(0, 7));
+      setCurrentImage(latestImage);
+      return;
+    }
+
+    setHistoryQueue((current) => [...nextImages.slice().reverse(), ...current].slice(0, 7));
+  }
 
   async function loadPrivateData() {
     setLoadingUserData(true);
@@ -894,13 +1052,14 @@ export default function App() {
     }
   }
 
-  async function handleCreateInviteCode(credits: number) {
+  async function handleCreateInviteCode(apiCredits: Partial<Record<ApiCreditPool['id'], number>>) {
     try {
-      const payload = await createInviteCode({ credits });
+      const payload = await createInviteCode({ apiCredits });
       setAdminOverview((current) => ({
         ...current,
         inviteCodes: payload.inviteCode ? [payload.inviteCode, ...current.inviteCodes] : current.inviteCodes,
         adminCredits: payload.adminCredits,
+        apiCreditPools: payload.apiCreditPools,
       }));
       setNotice(`已生成邀请码：${payload.inviteCode?.code || ''}`);
       void fetchMe().then(setUser).catch(() => undefined);
@@ -921,6 +1080,7 @@ export default function App() {
           total: Math.max(0, current.inviteCodesPage.total - 1),
         },
         adminCredits: payload.adminCredits,
+        apiCreditPools: payload.apiCreditPools,
       }));
       setNotice(`已删除邀请码 ${code}，并将积分退回给 admin。`);
       void fetchMe().then(setUser).catch(() => undefined);
@@ -935,12 +1095,21 @@ export default function App() {
     if (files.length === 0) return;
 
     try {
-      const next = await Promise.all(files.slice(0, 3).map((file) => fileToBase64(file)));
-      setReferences((current) => [...current, ...next].slice(0, 3));
+      await appendReferenceFiles(files);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '参考图片读取失败');
     } finally {
       event.target.value = '';
+    }
+  }
+
+  async function handleReferenceDrop(files: File[]) {
+    try {
+      await appendReferenceFiles(files);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '参考图读取失败');
+    } finally {
+      setDraggingReferences(false);
     }
   }
 
@@ -984,19 +1153,20 @@ export default function App() {
     event.preventDefault();
 
     if (!user) {
-      setNotice('请先登录后再生成图片');
+      setNotice('\u8bf7\u5148\u767b\u5f55\u540e\u518d\u751f\u6210\u56fe\u7247');
       setAuthMode('login');
       setAuthOpen(true);
       return;
     }
 
     if (!prompt.trim()) {
-      setNotice('请输入提示词');
+      setNotice('\u8bf7\u8f93\u5165\u63d0\u793a\u8bcd');
       return;
     }
 
     setLoading(true);
     setNotice('');
+    const generatedImages: DisplayImage[] = [];
 
     try {
       const referenceImages: ReferenceUploadInput[] = references.map((item) => ({
@@ -1005,16 +1175,24 @@ export default function App() {
         data: item.data,
       }));
 
-      const response = await generateImage({
-        prompt,
-        model: selectedModel,
-        dimensions,
-        imageSize: isNanoBananaPro ? imageSize : undefined,
-        reference_images: referenceImages,
-      });
+      for (let index = 0; index < batchCount; index += 1) {
+        const response = await generateImage({
+          prompt,
+          model: selectedModel,
+          dimensions,
+          imageSize,
+          quality: showGptQuality ? gptQuality : undefined,
+          optimizeChineseText: isNanoBananaPro ? optimizeChineseText : false,
+          reference_images: referenceImages,
+        });
 
-      setHistoryQueue((current) => (currentImage ? [currentImage, ...current].slice(0, 7) : current));
-      setCurrentImage(toDisplayImage(response.image));
+        generatedImages.push(toDisplayImage(response.image));
+      }
+
+      commitGeneratedImages(generatedImages);
+      if (batchCount > 1) {
+        setNotice(`\u5df2\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247`);
+      }
 
       void fetchMe().then(setUser).catch(() => undefined);
       void loadHistory();
@@ -1022,12 +1200,16 @@ export default function App() {
         void loadAdminOverview();
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '生成失败');
+      if (generatedImages.length > 0) {
+        commitGeneratedImages(generatedImages);
+        setNotice(`\u5df2\u6210\u529f\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247\uff0c\u540e\u7eed\u8bf7\u6c42\u5931\u8d25\uff1a${error instanceof Error ? error.message : '\u751f\u6210\u5931\u8d25'}`);
+      } else {
+        setNotice(error instanceof Error ? error.message : '\u751f\u6210\u5931\u8d25');
+      }
     } finally {
       setLoading(false);
     }
   }
-
   async function saveDisplayImage(targetImage: DisplayImage, category: ImageCategory) {
     if (!user) return;
 
@@ -1259,6 +1441,7 @@ export default function App() {
       inviteCodes: [],
       inviteCodesPage: emptyPage,
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
+      apiCreditPools: [],
     });
     setAdminRecordsPage(1);
     setAdminInviteCodesPage(1);
@@ -1612,85 +1795,231 @@ export default function App() {
               : 'min-h-0 flex-1 overflow-hidden'
           }
         >
-          <aside className={activeTab === 'create' ? 'h-full overflow-hidden border-r border-white/8 p-4' : 'hidden'}>
-            <form className="custom-scrollbar flex h-full min-h-0 flex-col gap-5 overflow-auto pr-1" onSubmit={handleGenerate}>
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500">模型</span>
-                  <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] font-semibold text-violet-300">
-                    v2.4
-                  </span>
+          <aside className={activeTab === 'create' ? 'h-full overflow-hidden border-r border-white/8 p-3' : 'hidden'}>
+            <form className="custom-scrollbar flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1" onSubmit={handleGenerate}>
+              <section className="space-y-2.5">
+                <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {models.map((item) => {
+                    const active = selectedModel === item.id;
+
+                    return (
+                      <button
+                        key={item.id}
+                        className={
+                          active
+                            ? 'rounded-2xl border border-[#ff8b2f] bg-[linear-gradient(180deg,#ff7a12_0%,#f05f00_100%)] px-3 py-3.5 text-white shadow-[0_10px_24px_rgba(255,111,12,0.22)]'
+                            : 'rounded-2xl border border-white/12 bg-[#080808] px-3 py-3.5 text-white transition hover:border-white/25 hover:bg-white/[0.03]'
+                        }
+                        type="button"
+                        onClick={() => handleModelSelect(item.id)}
+                      >
+                        <span className="block truncate text-[17px] font-black leading-none">{item.name}</span>
+                        <span className={active ? 'mt-1.5 block truncate text-[12px] font-bold text-orange-100' : 'mt-1.5 block truncate text-[12px] font-bold text-zinc-500'}>
+                          {item.description}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <select
-                  className="w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-zinc-200 outline-none transition focus:border-violet-500/40"
-                  value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value)}
-                >
-                  {models.map((item) => (
-                    <option key={item.id} value={item.id} className="bg-[#111111]">
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
               </section>
 
               <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500">参考图片</span>
-                  <span className="text-xs text-zinc-500">{references.length} / 3</span>
+                <div className="flex items-center justify-between gap-3 text-[13px] font-extrabold text-zinc-400">
+                  <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09\uff08\u53ef\u4ece\u6587\u4ef6\u5939\u62d6\u62fd\u5230\u6b64\u533a\u57df\uff09'}</span>
+                  <span className="shrink-0 text-[12px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
                 </div>
+                <div
+                  className={
+                    draggingReferences
+                      ? 'rounded-2xl border border-[#ff8b2f]/50 bg-[#120b05] p-3 shadow-[inset_0_0_0_1px_rgba(255,139,47,0.16)]'
+                      : 'rounded-2xl border border-white/8 bg-[#050505] p-3'
+                  }
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setDraggingReferences(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDraggingReferences(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    if (event.currentTarget === event.target) {
+                      setDraggingReferences(false);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void handleReferenceDrop(Array.from(event.dataTransfer.files || []));
+                  }}
+                >
+                  <div className="flex flex-wrap gap-2.5">
+                    <label className="flex h-[76px] w-[76px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/16 bg-[#080808] text-zinc-500 transition hover:border-[#ff8b2f]/45 hover:text-white">
+                      <input className="hidden" type="file" accept="image/*" multiple onChange={handleReferenceUpload} />
+                      <ImagePlus size={21} />
+                      <span className="mt-1.5 text-xs font-bold">{'\u6dfb\u52a0'}</span>
+                    </label>
 
-                <label className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:border-violet-500/30 hover:text-white">
-                  <input className="hidden" type="file" accept="image/*" multiple onChange={handleReferenceUpload} />
-                  <ImagePlus size={18} />
-                  <span className="mt-2 text-xs">添加</span>
-                </label>
-
-                {references.length > 0 ? (
-                  <div className="grid gap-2">
                     {references.map((item) => (
                       <button
                         key={item.id}
-                        className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.03] p-2 text-left"
+                        className="group relative h-[76px] w-[76px] overflow-hidden rounded-2xl border border-white/10 bg-[#101010]"
                         type="button"
                         onClick={() => removeReference(item.id)}
                       >
-                        <img alt={item.name} className="h-10 w-10 rounded-lg object-cover" src={item.previewUrl} />
-                        <span className="min-w-0 flex-1 truncate text-xs text-zinc-300">{item.name}</span>
-                        <X size={14} className="text-zinc-500" />
+                        <img alt={item.name} className="h-full w-full object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75" src={item.previewUrl} />
+                        <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
+                          {'\u5220\u9664'}
+                        </div>
                       </button>
                     ))}
                   </div>
-                ) : null}
-              </section>
-
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500">提示词</span>
-                  <span className="text-xs text-zinc-500">{prompt.length} / 3000</span>
                 </div>
-                <textarea
-                  className="min-h-[126px] w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-4 text-sm leading-7 text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-violet-500/40"
-                  placeholder="描述你想看到的画面..."
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value.slice(0, 3000))}
-                />
               </section>
 
               <section className="space-y-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500">画面比例</span>
-                <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
+                <div className="flex items-center justify-between text-[13px] font-extrabold text-zinc-400">
+                  <div className="flex items-center gap-3">
+                    <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
+                    <button className="text-[13px] text-[#ff9a2a] transition hover:text-[#ffb257]" type="button" onClick={applyPromptTemplate}>
+                      {'\u6211\u7684\u6a21\u7248'}
+                    </button>
+                  </div>
+                  <span className="text-[12px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
+                </div>
+                <div className="relative">
+                  <textarea
+                    className={
+                      promptExpanded
+                        ? 'min-h-[260px] w-full rounded-2xl border border-white/10 bg-[#050505] px-4 py-4 pr-14 text-[14px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8b2f]/45'
+                        : 'min-h-[150px] w-full rounded-2xl border border-white/10 bg-[#050505] px-4 py-4 pr-14 text-[14px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8b2f]/45'
+                    }
+                    placeholder="\u8bf7\u8be6\u7ec6\u63cf\u8ff0\u60a8\u60f3\u751f\u6210\u7684\u753b\u9762..."
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
+                  />
+                  <button
+                    className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-lg text-zinc-300 transition hover:border-white/20 hover:text-white"
+                    type="button"
+                    onClick={() => setPromptExpanded((current) => !current)}
+                    >
+                      {'\u2197'}
+                    </button>
+                </div>
+              </section>
+
+              <div className={isNanoBananaPro ? 'grid gap-3 xl:grid-cols-[1.15fr_1fr]' : 'space-y-3'}>
+                <section className="space-y-2">
+                  <div className="text-[13px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
+                  <div className={isNanoBananaPro ? 'grid grid-cols-2 gap-2.5' : 'grid grid-cols-3 gap-2.5'}>
+                    {selectedResolutionOptions.map((item) => {
+                      const active = imageSize === item.value;
+
+                      return (
+                        <button
+                          key={item.value}
+                          className={
+                            active
+                              ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
+                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                          }
+                          type="button"
+                          onClick={() => {
+                            setImageSize(item.value);
+                            if (selectedModel === 'gpt-image-2') {
+                              if (item.value === '4K') {
+                                setGptQuality('high');
+                              } else if (item.value === '2K') {
+                                setGptQuality('medium');
+                              }
+                            }
+                          }}
+                        >
+                          <span className="block text-[15px] font-black leading-none">{item.label}</span>
+                          <span className={active ? 'mt-1.5 block truncate text-[11px] font-semibold text-zinc-600' : 'mt-1.5 block truncate text-[11px] font-semibold text-zinc-500'}>
+                            {item.hint}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {showGptQuality ? (
+                  <section className="space-y-2">
+                    <div className="text-[13px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {gptQualityOptions.map((item) => {
+                        const active = gptQuality === item.value;
+
+                        return (
+                          <button
+                            key={item.value}
+                            className={
+                              active
+                                ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
+                                : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                            }
+                            type="button"
+                            onClick={() => setGptQuality(item.value)}
+                          >
+                            <span className="block text-[15px] font-black leading-none">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
+
+                {isNanoBananaPro ? (
+                  <section className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-[13px] font-extrabold text-zinc-400">
+                      <span>{'AI\u589e\u5f3a'}</span>
+                      <Info size={13} className="text-zinc-500" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        className={
+                          optimizeChineseText
+                            ? 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                            : 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
+                        }
+                        type="button"
+                        onClick={() => setOptimizeChineseText(false)}
+                      >
+                          <span className="block text-[15px] font-black leading-none">{'\u5173'}</span>
+                      </button>
+                      <button
+                        className={
+                          optimizeChineseText
+                            ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
+                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                        }
+                        type="button"
+                        onClick={() => setOptimizeChineseText(true)}
+                      >
+                          <span className="block text-[15px] font-black leading-none">{'\u5f00'}</span>
+                      </button>
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+
+              <section className="space-y-2">
+                <div className="text-[13px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
+                <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
                   {dimensionOptions.map(({ value, label }) => {
                     const active = value === dimensions;
 
                     return (
                       <button
                         key={value}
-                        className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                        className={
                           active
-                            ? 'border-white bg-white text-black'
-                            : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-white/20 hover:text-white'
-                        }`}
+                            ? 'rounded-xl bg-white px-2.5 py-2.5 text-[13px] font-black text-black shadow-[0_8px_18px_rgba(255,255,255,0.09)]'
+                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-2.5 py-2.5 text-[13px] font-black text-zinc-400 transition hover:border-white/20 hover:text-white'
+                        }
                         type="button"
                         onClick={() => setDimensions(value)}
                       >
@@ -1701,59 +2030,31 @@ export default function App() {
                 </div>
               </section>
 
-              {isNanoBananaPro ? (
-                <section className="space-y-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500">输出分辨率</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    {imageSizeOptions.map((item) => {
-                      const active = imageSize === item.value;
-
-                      return (
-                        <button
-                          key={item.value}
-                          className={`rounded-2xl border px-4 py-5 text-left transition ${
-                            active
-                              ? 'border-white bg-white text-black'
-                              : 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
-                          }`}
-                          type="button"
-                          onClick={() => setImageSize(item.value)}
-                        >
-                          <span className="block text-4xl font-black leading-none">{item.label}</span>
-                          <span
-                            className={`mt-2 block text-xs font-semibold leading-5 ${
-                              active ? 'text-emerald-600' : 'text-emerald-300'
-                            }`}
-                          >
-                            {item.hint}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : null}
-
-              <div className="mt-auto space-y-4">
-                <div className="text-xs leading-6 text-zinc-500">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[14px] font-extrabold text-zinc-400">
+                  <span>
+                    {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
+                  </span>
+                  <button className="text-[#18c8ff] transition hover:text-[#5adaff]" type="button" onClick={() => setCreditsPurchaseOpen(true)}>
+                    {'\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206(25%\u4f18\u60e0)'}
+                  </button>
+                </div>
+                <div className="space-y-1.5 text-[13px] leading-5 text-zinc-500">
                   {user ? (
-                    <p>当前账号：{user.username}。你现在可以生成、收藏、备份和丢弃图片。</p>
+                    <p>{'\u5f53\u524d\u8d26\u53f7\uff1a'}{user.username}{'\u3002\u4f60\u73b0\u5728\u53ef\u4ee5\u751f\u6210\u3001\u6536\u85cf\u3001\u5907\u4efd\u548c\u4e22\u5f03\u56fe\u7247\u3002'}</p>
                   ) : (
-                    <>
-                      <p>匿名访客只能浏览公开内容，暂不能生成图片。</p>
-                      <p>
-                        请先登录或填写内测邀请码。
-                        <button
-                          className="ml-2 font-semibold text-sky-400 transition hover:text-sky-300"
-                          type="button"
-                          onClick={() => {
-                            setAuthMode('login');
-                            setAuthOpen(true);
-                          }}
-                        >
-                          去登录
-                        </button>
-                      </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span>{'\u8bf7\u5148\u767b\u5f55\u6216\u586b\u5199\u9080\u8bf7\u7801\u540e\u518d\u751f\u6210\u56fe\u7247\u3002'}</span>
+                      <button
+                        className="font-semibold text-sky-400 transition hover:text-sky-300"
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('login');
+                          setAuthOpen(true);
+                        }}
+                      >
+                        {'\u53bb\u767b\u5f55'}
+                      </button>
                       <button
                         className="font-semibold text-sky-400 transition hover:text-sky-300"
                         type="button"
@@ -1762,33 +2063,76 @@ export default function App() {
                           setAuthOpen(true);
                         }}
                       >
-                        填写邀请码
+                        {'\u586b\u9080\u8bf7\u7801'}
                       </button>
-                    </>
+                    </div>
                   )}
-                  <p className="mt-1 text-zinc-400">{healthText}</p>
-                  {loadingUserData ? <p className="mt-1 text-zinc-400">正在同步你的图片数据...</p> : null}
+                  <p>{hasEnoughCredits ? healthText : '\u5f53\u524d\u79ef\u5206\u5df2\u7528\u5b8c\uff0c\u6682\u65f6\u65e0\u6cd5\u7ee7\u7eed\u751f\u6210\u56fe\u7247\u3002'}</p>
+                  {loadingUserData ? <p>{'\u6b63\u5728\u540c\u6b65\u4f60\u7684\u56fe\u7247\u6570\u636e...'}</p> : null}
+                </div>
+              </div>
+
+              {notice ? (
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-100">{notice}</div>
+              ) : null}
+              {healthError ? (
+                <div className="rounded-[24px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{healthError}</div>
+              ) : null}
+
+              <div className="mt-auto grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[14px] font-black text-white">{'\u6570\u91cf'}</span>
+                    <div className="flex items-center overflow-hidden rounded-xl border border-[#8b4a15] bg-[#2d190c]">
+                      <button
+                        className="flex h-9 w-9 items-center justify-center text-[#f3c58f] transition hover:bg-white/5 disabled:opacity-40"
+                        type="button"
+                        disabled={batchCount <= 1}
+                        onClick={() => setBatchCount((current) => Math.max(1, current - 1))}
+                      >
+                        <Minus size={15} />
+                      </button>
+                      <span className="flex h-9 w-10 items-center justify-center border-x border-[#8b4a15] text-[15px] font-black text-white">{batchCount}</span>
+                      <button
+                        className="flex h-9 w-9 items-center justify-center text-[#f3c58f] transition hover:bg-white/5 disabled:opacity-40"
+                        type="button"
+                        disabled={batchCount >= 9}
+                        onClick={() => setBatchCount((current) => Math.min(9, current + 1))}
+                      >
+                        <Plus size={15} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3.5 flex items-center justify-between">
+                    <span className="text-[14px] font-black text-white">{'\u81ea\u52a8\u4e0a\u684c'}</span>
+                    <button
+                      className={
+                        autoPlace
+                          ? 'relative h-8 w-14 rounded-full border border-white/12 bg-white/10 transition'
+                          : 'relative h-8 w-14 rounded-full border border-white/12 bg-white/5 transition'
+                      }
+                      type="button"
+                      onClick={() => setAutoPlace((current) => !current)}
+                    >
+                      <span
+                        className={
+                          autoPlace
+                            ? 'absolute left-[27px] top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-white shadow-[0_4px_10px_rgba(255,255,255,0.24)] transition'
+                            : 'absolute left-[3px] top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-white shadow-[0_4px_10px_rgba(255,255,255,0.14)] transition'
+                        }
+                      />
+                    </button>
+                  </div>
                 </div>
 
-                {notice ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-100">
-                    {notice}
-                  </div>
-                ) : null}
-                {healthError ? (
-                  <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                    {healthError}
-                  </div>
-                ) : null}
-                <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={() => setCreditsPurchaseOpen(true)} />
-
                 <button
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex min-h-[92px] items-center justify-center gap-2.5 rounded-2xl bg-[linear-gradient(90deg,#8f4100_0%,#aa5200_100%)] px-5 py-4 text-[18px] font-black text-white shadow-[0_16px_30px_rgba(148,71,0,0.28)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={loading || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
-                  {loading ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                  {loading ? '生成中...' : user ? '生成' : '登录后生成'}
+                  {loading ? <LoaderCircle className="animate-spin" size={20} /> : <Sparkles size={19} />}
+                  {loading ? '\u4e0b\u5355\u4e2d...' : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
                 </button>
               </div>
             </form>
@@ -1822,6 +2166,7 @@ export default function App() {
               inviteCodes={adminOverview.inviteCodes}
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
+              apiCreditPools={adminOverview.apiCreditPools}
               onCreateInviteCode={handleCreateInviteCode}
               onDeleteInviteCode={handleDeleteInviteCode}
               onRecordsPageChange={setAdminRecordsPage}
@@ -1978,7 +2323,7 @@ export default function App() {
                 <button
                   className="inline-flex items-center rounded-full border border-amber-500/45 bg-[#4a2d14] px-6 py-3 text-[16px] font-black text-amber-50 transition hover:bg-[#5a3517]"
                   type="button"
-                  onClick={() => void handleCopyWechat()}
+                  onClick={() => window.open('https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer')}
                 >
                   去购买
                 </button>

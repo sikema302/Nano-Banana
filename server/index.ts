@@ -106,6 +106,28 @@ type PaginationResult = {
   totalPages: number;
 };
 
+type ApiCreditPoolId = 'gpt_hd' | 'gpt' | 'banana' | 'legacy';
+
+type ApiCreditPool = {
+  id: ApiCreditPoolId;
+  name: string;
+  envName: string;
+  keyPreview: string;
+  status: 'available' | 'missing';
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+};
+
+type ApiCreditAllocation = {
+  poolId: ApiCreditPoolId;
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+};
+
+type ApiCreditAllocationMap = Record<ApiCreditPoolId, ApiCreditAllocation>;
+
 type SqlDatabase = {
   run: (sql: string, params?: unknown[]) => void;
   exec: (sql: string) => Array<{ columns: string[]; values: unknown[][] }>;
@@ -140,6 +162,8 @@ const EXAMPLES_DIR = path.join(UPLOADS_DIR, 'examples');
 const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
+const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 10));
+const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
@@ -148,6 +172,54 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
+const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_KEY);
+const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
+const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
+const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
+const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
+const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
+const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
+const API_CREDIT_POOL_DEFINITIONS: Array<{
+  id: ApiCreditPoolId;
+  name: string;
+  envName: string;
+  key: string;
+  defaultTotalCredits: number;
+  defaultUsedCredits: number;
+}> = [
+  {
+    id: 'gpt_hd',
+    name: 'gpt-2k-4k-key',
+    envName: 'VISIONARY_GPT_IMAGE_2_HD_API_KEY',
+    key: VISIONARY_GPT_IMAGE_2_HD_API_KEY,
+    defaultTotalCredits: Number(process.env.API_POOL_GPT_HD_TOTAL || 3800),
+    defaultUsedCredits: Number(process.env.API_POOL_GPT_HD_USED || 100),
+  },
+  {
+    id: 'gpt',
+    name: 'gpt-key',
+    envName: 'VISIONARY_GPT_IMAGE_2_API_KEY',
+    key: VISIONARY_GPT_IMAGE_2_API_KEY,
+    defaultTotalCredits: Number(process.env.API_POOL_GPT_TOTAL || 5000),
+    defaultUsedCredits: Number(process.env.API_POOL_GPT_USED || 20),
+  },
+  {
+    id: 'banana',
+    name: 'banana-key',
+    envName: 'VISIONARY_BANANA_PRO_API_KEY',
+    key: VISIONARY_BANANA_PRO_API_KEY,
+    defaultTotalCredits: Number(process.env.API_POOL_BANANA_TOTAL || 8000),
+    defaultUsedCredits: Number(process.env.API_POOL_BANANA_USED || 24),
+  },
+  {
+    id: 'legacy',
+    name: '666',
+    envName: 'VISIONARY_API_KEY',
+    key: VISIONARY_FALLBACK_API_KEY,
+    defaultTotalCredits: Number(process.env.API_POOL_LEGACY_TOTAL || 4020),
+    defaultUsedCredits: Number(process.env.API_POOL_LEGACY_USED || 1279),
+  },
+];
 const SUPABASE_URL = normalizeEnvValue(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const DATABASE_PROVIDER = normalizeEnvValue(process.env.DATABASE_PROVIDER || 'sqlite').toLowerCase();
@@ -259,8 +331,14 @@ const models = [
   },
 ] as const;
 
-const tokenSecret = process.env.JWT_SECRET || process.env.VISIONARY_API_KEY || 'visionary-local-dev-secret';
+const tokenSecret =
+  process.env.JWT_SECRET ||
+  VISIONARY_FALLBACK_API_KEY ||
+  VISIONARY_GPT_IMAGE_2_API_KEY ||
+  VISIONARY_BANANA_PRO_API_KEY ||
+  'visionary-local-dev-secret';
 let writeQueue = Promise.resolve();
+let imageCleanupPromise: Promise<void> | null = null;
 
 // 鈹€鈹€鈹€ 閫氱敤杈呭姪鍑芥暟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -398,6 +476,10 @@ function addDaysIso(base: string, days: number) {
   return date.toISOString();
 }
 
+function subtractDaysIso(days: number) {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function toCreditSummary(row: Record<string, unknown> | null) {
   const totalCredits = Number(row?.total_credits || 0);
   const usedCredits = Number(row?.used_credits || 0);
@@ -406,6 +488,144 @@ function toCreditSummary(row: Record<string, unknown> | null) {
     usedCredits,
     remainingCredits: Math.max(0, totalCredits - usedCredits),
   };
+}
+
+function apiCreditPoolIds(): ApiCreditPoolId[] {
+  return API_CREDIT_POOL_DEFINITIONS.map((item) => item.id);
+}
+
+function emptyApiCreditAllocation(poolId: ApiCreditPoolId): ApiCreditAllocation {
+  return {
+    poolId,
+    totalCredits: 0,
+    usedCredits: 0,
+    remainingCredits: 0,
+  };
+}
+
+function normalizeCreditNumber(value: unknown) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) ? Math.max(0, Math.floor(numberValue)) : 0;
+}
+
+function maskApiKey(value: string) {
+  if (!value) return '';
+  if (value.length <= 16) return value;
+  return `${value.slice(0, 11)}...${value.slice(-6)}`;
+}
+
+function normalizeAllocationMap(raw: unknown): ApiCreditAllocationMap {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return apiCreditPoolIds().reduce((result, poolId) => {
+    const entry = source[poolId] && typeof source[poolId] === 'object'
+      ? (source[poolId] as Record<string, unknown>)
+      : {};
+    const totalCredits = normalizeCreditNumber(entry.totalCredits);
+    const usedCredits = Math.min(totalCredits, normalizeCreditNumber(entry.usedCredits));
+    result[poolId] = {
+      poolId,
+      totalCredits,
+      usedCredits,
+      remainingCredits: Math.max(0, totalCredits - usedCredits),
+    };
+    return result;
+  }, {} as ApiCreditAllocationMap);
+}
+
+function parseJsonSetting<T>(value: string, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function serializeAllocationMap(value: ApiCreditAllocationMap) {
+  return JSON.stringify(value);
+}
+
+function getApiCreditPoolId(modelId: string, imageSize: string): ApiCreditPoolId {
+  if (modelId === 'Nano_Banana_Pro') return 'banana';
+  if (modelId === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K')) return 'gpt_hd';
+  if (modelId === 'gpt-image-2') return 'gpt';
+  return 'legacy';
+}
+
+function defaultAdminApiCreditPools(): ApiCreditAllocationMap {
+  return API_CREDIT_POOL_DEFINITIONS.reduce((result, item) => {
+    const totalCredits = normalizeCreditNumber(item.defaultTotalCredits);
+    const usedCredits = Math.min(totalCredits, normalizeCreditNumber(item.defaultUsedCredits));
+    result[item.id] = {
+      poolId: item.id,
+      totalCredits,
+      usedCredits,
+      remainingCredits: Math.max(0, totalCredits - usedCredits),
+    };
+    return result;
+  }, {} as ApiCreditAllocationMap);
+}
+
+function toApiCreditPoolList(map: ApiCreditAllocationMap): ApiCreditPool[] {
+  return API_CREDIT_POOL_DEFINITIONS.map((definition) => {
+    const allocation = map[definition.id] || emptyApiCreditAllocation(definition.id);
+    return {
+      id: definition.id,
+      name: definition.name,
+      envName: definition.envName,
+      keyPreview: maskApiKey(definition.key),
+      status: definition.key ? 'available' : 'missing',
+      totalCredits: allocation.totalCredits,
+      usedCredits: allocation.usedCredits,
+      remainingCredits: allocation.remainingCredits,
+    };
+  });
+}
+
+function normalizeRequestedApiCredits(input: unknown): ApiCreditAllocationMap {
+  if (input && typeof input === 'object') {
+    const source = input as Record<string, unknown>;
+    return apiCreditPoolIds().reduce((result, poolId) => {
+      const totalCredits = normalizeCreditNumber(source[poolId]);
+      result[poolId] = {
+        poolId,
+        totalCredits,
+        usedCredits: 0,
+        remainingCredits: totalCredits,
+      };
+      return result;
+    }, {} as ApiCreditAllocationMap);
+  }
+
+  const legacyCredits = normalizeCreditNumber(input);
+  const map = normalizeAllocationMap({});
+  map.legacy = {
+    poolId: 'legacy',
+    totalCredits: legacyCredits,
+    usedCredits: 0,
+    remainingCredits: legacyCredits,
+  };
+  return map;
+}
+
+function sumApiCreditTotals(map: ApiCreditAllocationMap) {
+  return apiCreditPoolIds().reduce((sum, poolId) => sum + map[poolId].totalCredits, 0);
+}
+
+function sumApiCreditRemaining(map: ApiCreditAllocationMap) {
+  return apiCreditPoolIds().reduce((sum, poolId) => sum + map[poolId].remainingCredits, 0);
+}
+
+function getInviteCodeApiCreditsForDisplay(code: string, credits: number, map: ApiCreditAllocationMap) {
+  const normalized = sumApiCreditTotals(map) > 0 ? map : normalizeRequestedApiCredits({ legacy: credits });
+  return toApiCreditPoolList(normalized).map((pool) => ({
+    poolId: pool.id,
+    name: pool.name,
+    totalCredits: pool.totalCredits,
+    usedCredits: pool.usedCredits,
+    remainingCredits: pool.remainingCredits,
+    code,
+  }));
 }
 
 function validateCategory(value: unknown): value is ImageCategory {
@@ -450,15 +670,54 @@ function toPublicUser(user: AuthUser): PublicUser {
   };
 }
 
-function getModelCredits(modelId: string) {
-  if (modelId === 'gpt-image-2') return 20;
+function getModelCredits(modelId: string, imageSize = '') {
+  if (modelId === 'gpt-image-2') {
+    if (imageSize === '4K') return 36;
+    if (imageSize === '2K') return 28;
+    return 20;
+  }
   if (modelId === 'Nano_Banana_Pro') return 24;
   return 1;
 }
 
 function normalizeImageSize(value: string, modelId: string) {
-  if (modelId !== 'Nano_Banana_Pro') return modelId === 'gpt-image-2' ? '' : VISIONARY_IMAGE_SIZE;
+  if (modelId === 'gpt-image-2') {
+    if (value === '2K' || value === '4K') return value;
+    return 'STANDARD';
+  }
+  if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
   return value === '4K' ? '4K' : '2K';
+}
+
+function normalizeGptQuality(value: string, imageSize: string) {
+  if (imageSize !== '2K' && imageSize !== '4K') return 'auto';
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  if (imageSize === '4K') return 'high';
+  if (imageSize === '2K') return 'medium';
+  return 'auto';
+}
+
+function getVisionaryApiKey(modelId: string, imageSize: string) {
+  if (modelId === 'Nano_Banana_Pro') {
+    return VISIONARY_BANANA_PRO_API_KEY || VISIONARY_FALLBACK_API_KEY;
+  }
+
+  if (modelId === 'gpt-image-2') {
+    if (imageSize === '2K' || imageSize === '4K') {
+      return VISIONARY_GPT_IMAGE_2_HD_API_KEY || VISIONARY_FALLBACK_API_KEY;
+    }
+
+    return VISIONARY_GPT_IMAGE_2_API_KEY || VISIONARY_FALLBACK_API_KEY;
+  }
+
+  return VISIONARY_FALLBACK_API_KEY;
+}
+
+function getVisionaryApiKeyLabel(modelId: string, imageSize: string) {
+  if (modelId === 'Nano_Banana_Pro') return 'VISIONARY_BANANA_PRO_API_KEY';
+  if (modelId === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K')) return 'VISIONARY_GPT_IMAGE_2_HD_API_KEY';
+  if (modelId === 'gpt-image-2') return 'VISIONARY_GPT_IMAGE_2_API_KEY';
+  return 'VISIONARY_API_KEY';
 }
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -500,7 +759,7 @@ function normalizeModelId(modelId: string) {
 }
 
 function normalizeRatio(value: string, modelId: string) {
-  const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'];
+  const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'];
   if (value === 'auto') {
     return modelId === 'gpt-image-2' ? 'auto' : '1:1';
   }
@@ -820,6 +1079,93 @@ function setSetting(db: SqlDatabase, key: string, value: string) {
   );
 }
 
+function getAdminApiCreditMapSqlite(db: SqlDatabase) {
+  const fallback = defaultAdminApiCreditPools();
+  const raw = getSetting(db, API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(fallback));
+  const map = normalizeAllocationMap(parseJsonSetting(raw, fallback));
+  setSetting(db, API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(map));
+  return map;
+}
+
+function setAdminApiCreditMapSqlite(db: SqlDatabase, map: ApiCreditAllocationMap) {
+  setSetting(db, API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(normalizeAllocationMap(map)));
+}
+
+function getScopedApiCreditMapSqlite(db: SqlDatabase, settingKey: string) {
+  const raw = getSetting(db, settingKey, serializeAllocationMap(normalizeAllocationMap({})));
+  return normalizeAllocationMap(parseJsonSetting(raw, {}));
+}
+
+function setScopedApiCreditMapSqlite(db: SqlDatabase, settingKey: string, map: ApiCreditAllocationMap) {
+  setSetting(db, settingKey, serializeAllocationMap(normalizeAllocationMap(map)));
+}
+
+function deductAdminApiCreditPools(map: ApiCreditAllocationMap, requested: ApiCreditAllocationMap) {
+  for (const poolId of apiCreditPoolIds()) {
+    if (requested[poolId].totalCredits > map[poolId].remainingCredits) {
+      const poolName = API_CREDIT_POOL_DEFINITIONS.find((item) => item.id === poolId)?.name || poolId;
+      throw new Error(`${poolName} available credits are not enough`);
+    }
+  }
+
+  for (const poolId of apiCreditPoolIds()) {
+    map[poolId].usedCredits += requested[poolId].totalCredits;
+    map[poolId].remainingCredits = Math.max(0, map[poolId].totalCredits - map[poolId].usedCredits);
+  }
+}
+
+function returnAdminApiCreditPools(map: ApiCreditAllocationMap, returned: ApiCreditAllocationMap) {
+  for (const poolId of apiCreditPoolIds()) {
+    map[poolId].usedCredits = Math.max(0, map[poolId].usedCredits - returned[poolId].remainingCredits);
+    map[poolId].remainingCredits = Math.max(0, map[poolId].totalCredits - map[poolId].usedCredits);
+  }
+}
+
+function deductUserApiCreditPool(map: ApiCreditAllocationMap, poolId: ApiCreditPoolId, creditsUsed: number) {
+  const pool = map[poolId] || emptyApiCreditAllocation(poolId);
+  if (pool.remainingCredits < creditsUsed) {
+    const poolName = API_CREDIT_POOL_DEFINITIONS.find((item) => item.id === poolId)?.name || poolId;
+    throw new Error(`${poolName} credits are not enough, need ${creditsUsed}, remaining ${pool.remainingCredits}`);
+  }
+
+  pool.usedCredits += creditsUsed;
+  pool.remainingCredits = Math.max(0, pool.totalCredits - pool.usedCredits);
+  map[poolId] = pool;
+}
+
+async function getAdminApiCreditMapSupabase() {
+  const db = await getSupabaseDb();
+  const fallback = defaultAdminApiCreditPools();
+  const raw = await db.getSetting(API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(fallback));
+  const map = normalizeAllocationMap(parseJsonSetting(raw, fallback));
+  await db.setSetting(API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(map));
+  return map;
+}
+
+async function setAdminApiCreditMapSupabase(map: ApiCreditAllocationMap) {
+  const db = await getSupabaseDb();
+  await db.setSetting(API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(normalizeAllocationMap(map)));
+}
+
+async function getScopedApiCreditMapSupabase(settingKey: string) {
+  const db = await getSupabaseDb();
+  const raw = await db.getSetting(settingKey, serializeAllocationMap(normalizeAllocationMap({})));
+  return normalizeAllocationMap(parseJsonSetting(raw, {}));
+}
+
+async function setScopedApiCreditMapSupabase(settingKey: string, map: ApiCreditAllocationMap) {
+  const db = await getSupabaseDb();
+  await db.setSetting(settingKey, serializeAllocationMap(normalizeAllocationMap(map)));
+}
+
+function inviteApiCreditSettingKey(code: string) {
+  return `${INVITE_API_CREDIT_SETTING_PREFIX}${code}`;
+}
+
+function userApiCreditSettingKey(userId: string) {
+  return `${USER_API_CREDIT_SETTING_PREFIX}${userId}`;
+}
+
 function getAdminCreditSummary(db: SqlDatabase) {
   return toCreditSummary(
     getOne<Record<string, unknown>>(
@@ -957,6 +1303,97 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
   }
 }
 
+function purgeExpiredImageDataSqlite(db: SqlDatabase, retentionDays = IMAGE_RETENTION_DAYS) {
+  ensureSchema(db);
+  const cutoffIso = subtractDaysIso(retentionDays);
+  const deletedGenerations = Number(
+    getOne<{ total: number }>(
+      db,
+      'SELECT COUNT(*) AS total FROM generations WHERE datetime(created_at) < datetime(?)',
+      [cutoffIso],
+    )?.total || 0,
+  );
+  const deletedImages = Number(
+    getOne<{ total: number }>(
+      db,
+      'SELECT COUNT(*) AS total FROM images WHERE datetime(created_at) < datetime(?)',
+      [cutoffIso],
+    )?.total || 0,
+  );
+
+  if (deletedGenerations > 0) {
+    db.run('DELETE FROM generations WHERE datetime(created_at) < datetime(?)', [cutoffIso]);
+  }
+  if (deletedImages > 0) {
+    db.run('DELETE FROM images WHERE datetime(created_at) < datetime(?)', [cutoffIso]);
+  }
+
+  return {
+    deletedGenerations,
+    deletedImages,
+    cutoffIso,
+  };
+}
+
+async function purgeExpiredReferenceFiles(retentionDays = IMAGE_RETENTION_DAYS) {
+  if (IS_VERCEL) {
+    return 0;
+  }
+
+  const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const entries = await fs.readdir(REFERENCES_DIR, { withFileTypes: true }).catch(() => []);
+  let deletedFiles = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+
+    const filePath = path.join(REFERENCES_DIR, entry.name);
+    const stats = await fs.stat(filePath).catch(() => null);
+    if (!stats || stats.mtimeMs >= cutoffTime) continue;
+
+    await fs.unlink(filePath).catch(() => undefined);
+    deletedFiles += 1;
+  }
+
+  return deletedFiles;
+}
+
+async function runImageRetentionCleanup(reason: string) {
+  if (imageCleanupPromise) {
+    return imageCleanupPromise;
+  }
+
+  imageCleanupPromise = (async () => {
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const result = await db.purgeExpiredImageData(IMAGE_RETENTION_DAYS);
+        const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
+        if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0) {
+          console.log(
+            `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles}`,
+          );
+        }
+        return;
+      }
+
+      const result = await withWriteDb((db) => purgeExpiredImageDataSqlite(db, IMAGE_RETENTION_DAYS));
+      const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
+      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0) {
+        console.log(
+          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles}`,
+        );
+      }
+    } catch (error) {
+      console.error(`[image-cleanup:${reason}] failed`, error);
+    } finally {
+      imageCleanupPromise = null;
+    }
+  })();
+
+  return imageCleanupPromise;
+}
+
 async function ensureRuntimeSchema() {
   await withWriteDb(async (db) => {
     ensureSchema(db);
@@ -1042,17 +1479,21 @@ async function callVisionaryGeneration({
   modelId,
   ratio,
   imageSize,
+  quality,
+  optimizeChineseText,
   images,
 }: {
   prompt: string;
   modelId: string;
   ratio: string;
   imageSize: string;
+  quality: string;
+  optimizeChineseText: boolean;
   images: string[];
 }) {
-  const apiKey = normalizeString(process.env.VISIONARY_API_KEY);
+  const apiKey = getVisionaryApiKey(modelId, imageSize);
   if (!apiKey) {
-    throw new Error('VISIONARY_API_KEY is not configured');
+    throw new Error(`${getVisionaryApiKeyLabel(modelId, imageSize)} is not configured`);
   }
 
   const aspectRatio = ratio || '1:1';
@@ -1065,6 +1506,8 @@ async function callVisionaryGeneration({
             model: 'gpt-image-2',
             images,
             aspectRatio,
+            imageSize: imageSize === 'STANDARD' ? undefined : imageSize,
+            quality: normalizeGptQuality(quality, imageSize),
             replyType: 'json',
           },
         }
@@ -1076,7 +1519,7 @@ async function callVisionaryGeneration({
             images,
             aspectRatio,
             imageSize: imageSize || '2K',
-            optimizeChineseText: false,
+            optimizeChineseText,
             replyType: 'json',
           },
         };
@@ -1200,14 +1643,14 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
   // Vercel 鐜涓嬩笉淇濆瓨鍙傝€冨浘鐗囧埌鏈湴鏂囦欢绯荤粺锛岀洿鎺ヨ繑鍥炲師濮?data URL
   if (IS_VERCEL) {
     return referenceImages
-      .slice(0, 3)
+      .slice(0, 9)
       .map((item) => normalizeString(item.data))
       .filter(Boolean);
   }
 
   const output: string[] = [];
 
-  for (const item of referenceImages.slice(0, 3)) {
+  for (const item of referenceImages.slice(0, 9)) {
     const base64 = typeof item.data === 'string' ? item.data.split(',').pop() || '' : '';
     if (!base64) continue;
 
@@ -1246,6 +1689,13 @@ async function start() {
     await ensureRuntimeSchema();
   } else if (IS_VERCEL) {
     throw new Error('SQLite persistence is not supported in the Vercel serverless runtime.');
+  }
+
+  await runImageRetentionCleanup('startup');
+  if (!IS_VERCEL) {
+    setInterval(() => {
+      void runImageRetentionCleanup('interval');
+    }, IMAGE_CLEANUP_INTERVAL_MS);
   }
 
   const app = express();
@@ -1470,12 +1920,29 @@ async function start() {
         if (!redeemedBy) {
           await db.redeemInviteCode(code, userId);
           await db.ensureUserCredits(userId, username, credits);
+          const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
+          const userApiCredits =
+            sumApiCreditTotals(inviteApiCredits) > 0
+              ? inviteApiCredits
+              : normalizeRequestedApiCredits({ legacy: credits });
+          await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), userApiCredits);
         } else if (redeemedBy !== userId) {
           await db.migrateLegacyInviteUserId(redeemedBy, userId, username);
           await db.redeemInviteCode(code, userId);
           await db.ensureUserCredits(userId, username, 0);
+          const existingUserApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(redeemedBy));
+          if (sumApiCreditTotals(existingUserApiCredits) > 0) {
+            await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), existingUserApiCredits);
+          }
         } else {
           await db.ensureUserCredits(userId, username, 0);
+          const currentUserApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(userId));
+          if (sumApiCreditTotals(currentUserApiCredits) === 0) {
+            const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
+            if (sumApiCreditTotals(inviteApiCredits) > 0) {
+              await setScopedApiCreditMapSupabase(userApiCreditSettingKey(userId), inviteApiCredits);
+            }
+          }
         }
 
         const authUser = { userId, username };
@@ -1503,8 +1970,21 @@ async function start() {
         if (!redeemedBy) {
           db.run('UPDATE invite_codes SET redeemed_by = ?, redeemed_at = ? WHERE code = ?', [userId, nowIso(), code]);
           ensureUserCredits(db, userId, username, credits);
+          const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
+          const userApiCredits =
+            sumApiCreditTotals(inviteApiCredits) > 0
+              ? inviteApiCredits
+              : normalizeRequestedApiCredits({ legacy: credits });
+          setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId), userApiCredits);
         } else {
           ensureUserCredits(db, userId, username, 0);
+          const currentUserApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId));
+          if (sumApiCreditTotals(currentUserApiCredits) === 0) {
+            const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
+            if (sumApiCreditTotals(inviteApiCredits) > 0) {
+              setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(userId), inviteApiCredits);
+            }
+          }
         }
 
         return { id: userId, username };
@@ -1552,6 +2032,8 @@ async function start() {
     const model = normalizeString(req.body?.model);
     const dimensions = normalizeString(req.body?.dimensions) || '1:1';
     const requestedImageSize = normalizeString(req.body?.imageSize);
+    const requestedQuality = normalizeString(req.body?.quality).toLowerCase();
+    const optimizeChineseText = Boolean(req.body?.optimizeChineseText);
     const referenceImagesInput = Array.isArray(req.body?.reference_images)
       ? (req.body.reference_images as ReferenceUploadInput[])
       : [];
@@ -1566,7 +2048,8 @@ async function start() {
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
       let imageSize = normalizeImageSize(requestedImageSize, modelId);
-      let creditsUsed = getModelCredits(modelId);
+      let creditsUsed = getModelCredits(modelId, imageSize) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const apiCreditPoolId = getApiCreditPoolId(modelId, imageSize);
 
       // Credits check
       if (creditsUsed > 0) {
@@ -1578,6 +2061,10 @@ async function start() {
           if (credits.remainingCredits < creditsUsed) {
             throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
           }
+          const userApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId));
+          if (sumApiCreditTotals(userApiCredits) > 0) {
+            deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
+          }
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
@@ -1586,6 +2073,10 @@ async function start() {
             const credits = getUserCredits(db, req.authUser!.userId);
             if (credits.remainingCredits < creditsUsed) {
               throw new Error(`绉垎涓嶈冻锛屾湰娆￠渶瑕?${creditsUsed} 绉垎锛屽綋鍓嶅墿浣?${credits.remainingCredits} 绉垎`);
+            }
+            const userApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId));
+            if (sumApiCreditTotals(userApiCredits) > 0) {
+              deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
             }
           });
         }
@@ -1598,6 +2089,8 @@ async function start() {
         modelId,
         ratio,
         imageSize,
+        quality: modelId === 'gpt-image-2' ? requestedQuality : '',
+        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: referenceImagesInput
           .map((item) => normalizeString(item.data))
           .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
@@ -1620,6 +2113,15 @@ async function start() {
           await db.reclaimLowBalanceInviteCodes();
           await db.incrementUsedCredits(req.authUser!.userId, creditsUsed);
           await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
+          const userApiCredits = await getScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId));
+          if (sumApiCreditTotals(userApiCredits) > 0) {
+            deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
+            await setScopedApiCreditMapSupabase(userApiCreditSettingKey(req.authUser!.userId), userApiCredits);
+            const invite = await db.getRedeemedInviteCodeForUser(req.authUser!.userId);
+            if (invite?.code) {
+              await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(invite.code), userApiCredits);
+            }
+          }
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
@@ -1630,6 +2132,25 @@ async function start() {
               req.authUser!.userId,
             ]);
             syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+            const userApiCredits = getScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId));
+            if (sumApiCreditTotals(userApiCredits) > 0) {
+              deductUserApiCreditPool(userApiCredits, apiCreditPoolId, creditsUsed);
+              setScopedApiCreditMapSqlite(db, userApiCreditSettingKey(req.authUser!.userId), userApiCredits);
+              const invite = getOne<Record<string, unknown>>(
+                db,
+                `
+                  SELECT code
+                  FROM invite_codes
+                  WHERE redeemed_by = ?
+                  ORDER BY datetime(redeemed_at) DESC, datetime(created_at) DESC
+                  LIMIT 1
+                `,
+                [req.authUser!.userId],
+              );
+              if (invite?.code) {
+                setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(String(invite.code)), userApiCredits);
+              }
+            }
           });
         }
       }
@@ -1849,18 +2370,26 @@ async function start() {
         }));
 
         const { codes: inviteCodeRows, total: inviteCodesTotal } = await db.listInviteCodes(inviteCodesPage, inviteCodesPageSize);
-        const inviteCodes = inviteCodeRows.map((row) => toInviteCode({
-          code: row.code,
-          credits: row.credits,
-          issued_credits: row.issued_credits,
-          created_by: row.created_by,
-          created_at: row.created_at,
-          redeemed_by: row.redeemed_by,
-          redeemed_at: row.redeemed_at,
-          low_balance_since: row.low_balance_since,
-        }));
+        const inviteCodes = await Promise.all(inviteCodeRows.map(async (row) => ({
+          ...toInviteCode({
+            code: row.code,
+            credits: row.credits,
+            issued_credits: row.issued_credits,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            redeemed_by: row.redeemed_by,
+            redeemed_at: row.redeemed_at,
+            low_balance_since: row.low_balance_since,
+          }),
+          apiCredits: getInviteCodeApiCreditsForDisplay(
+            row.code,
+            row.credits,
+            await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(row.code)),
+          ),
+        })));
 
         const adminCredits = await db.getAdminCreditSummary();
+        const apiCreditPools = toApiCreditPoolList(await getAdminApiCreditMapSupabase());
 
         res.json({
           users,
@@ -1869,6 +2398,7 @@ async function start() {
           inviteCodes,
           inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
           adminCredits,
+          apiCreditPools,
         });
         return;
       }
@@ -2049,7 +2579,14 @@ async function start() {
             LIMIT ? OFFSET ?
           `,
           [inviteCodesPageSize, (inviteCodesPage - 1) * inviteCodesPageSize],
-        ).map(toInviteCode);
+        ).map((row) => ({
+          ...toInviteCode(row),
+          apiCredits: getInviteCodeApiCreditsForDisplay(
+            String(row.code || ''),
+            Number(row.credits || 0),
+            getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(String(row.code || ''))),
+          ),
+        }));
 
         return {
           users,
@@ -2058,6 +2595,7 @@ async function start() {
           inviteCodes,
           inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
           adminCredits: getAdminCreditSummary(db),
+          apiCreditPools: toApiCreditPoolList(getAdminApiCreditMapSqlite(db)),
         };
       });
 
@@ -2070,10 +2608,11 @@ async function start() {
   // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
-    const requestedCredits = Number(req.body?.credits);
+    const requestedApiCredits = normalizeRequestedApiCredits(req.body?.apiCredits ?? req.body?.credits);
+    const requestedCredits = sumApiCreditTotals(requestedApiCredits);
 
-    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
-      res.status(400).json({ error: 'Credits must be a positive number' });
+    if (requestedCredits <= 0) {
+      res.status(400).json({ error: 'At least one API key credit value must be positive' });
       return;
     }
 
@@ -2082,12 +2621,9 @@ async function start() {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
-        const adminCredits = await db.getAdminCreditSummary();
-        const credits = Math.floor(requestedCredits);
-
-        if (credits > adminCredits.remainingCredits) {
-          throw new Error(`绠＄悊鍛樺墿浣欑Н鍒嗕笉瓒筹紝褰撳墠鍓╀綑 ${adminCredits.remainingCredits} 绉垎`);
-        }
+        const adminApiCredits = await getAdminApiCreditMapSupabase();
+        const credits = requestedCredits;
+        deductAdminApiCreditPools(adminApiCredits, requestedApiCredits);
 
         let code = generateInviteCode();
         while (await db.getInviteCode(code)) {
@@ -2095,23 +2631,31 @@ async function start() {
         }
 
         await db.createInviteCode(code, credits, req.authUser!.username);
-        await db.adjustAdminTotalCredits(-credits);
+        if (requestedApiCredits.legacy.totalCredits > 0) {
+          await db.adjustAdminTotalCredits(-requestedApiCredits.legacy.totalCredits);
+        }
+        await setAdminApiCreditMapSupabase(adminApiCredits);
+        await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code), requestedApiCredits);
 
         const invite = await db.getInviteCode(code);
         const newAdminCredits = await db.getAdminCreditSummary();
 
         res.status(201).json({
-          inviteCode: invite ? toInviteCode({
-            code: invite.code,
-            credits: invite.credits,
-            issued_credits: invite.issued_credits,
-            created_by: invite.created_by,
-            created_at: invite.created_at,
-            redeemed_by: invite.redeemed_by,
-            redeemed_at: invite.redeemed_at,
-            low_balance_since: invite.low_balance_since,
-          }) : null,
+          inviteCode: invite ? {
+            ...toInviteCode({
+              code: invite.code,
+              credits: invite.credits,
+              issued_credits: invite.issued_credits,
+              created_by: invite.created_by,
+              created_at: invite.created_at,
+              redeemed_by: invite.redeemed_by,
+              redeemed_at: invite.redeemed_at,
+              low_balance_since: invite.low_balance_since,
+            }),
+            apiCredits: getInviteCodeApiCreditsForDisplay(invite.code, invite.credits, requestedApiCredits),
+          } : null,
           adminCredits: newAdminCredits,
+          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         });
         return;
       }
@@ -2120,12 +2664,9 @@ async function start() {
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
-        const adminCredits = getAdminCreditSummary(db);
-        const credits = Math.floor(requestedCredits);
-
-        if (credits > adminCredits.remainingCredits) {
-          throw new Error(`绠＄悊鍛樺墿浣欑Н鍒嗕笉瓒筹紝褰撳墠鍓╀綑 ${adminCredits.remainingCredits} 绉垎`);
-        }
+        const adminApiCredits = getAdminApiCreditMapSqlite(db);
+        const credits = requestedCredits;
+        deductAdminApiCreditPools(adminApiCredits, requestedApiCredits);
 
         let code = generateInviteCode();
         while (getOne(db, 'SELECT code FROM invite_codes WHERE code = ?', [code])) {
@@ -2143,12 +2684,20 @@ async function start() {
             credits < INVITE_RECLAIM_THRESHOLD ? nowIso() : null,
           ],
         );
-        adjustAdminTotalCredits(db, -credits);
+        if (requestedApiCredits.legacy.totalCredits > 0) {
+          adjustAdminTotalCredits(db, -requestedApiCredits.legacy.totalCredits);
+        }
+        setAdminApiCreditMapSqlite(db, adminApiCredits);
+        setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code), requestedApiCredits);
 
         const invite = getOne<Record<string, unknown>>(db, 'SELECT * FROM invite_codes WHERE code = ?', [code]);
         return {
-          inviteCode: invite ? toInviteCode(invite) : null,
+          inviteCode: invite ? {
+            ...toInviteCode(invite),
+            apiCredits: getInviteCodeApiCreditsForDisplay(code, credits, requestedApiCredits),
+          } : null,
           adminCredits: getAdminCreditSummary(db),
+          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         };
       });
 
@@ -2183,14 +2732,22 @@ async function start() {
         }
 
         const creditsToReturn = Number(invite.credits || 0);
+        const inviteApiCredits = await getScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code));
+        const apiCreditsToReturn =
+          sumApiCreditTotals(inviteApiCredits) > 0 ? inviteApiCredits : normalizeRequestedApiCredits({ legacy: creditsToReturn });
+        const adminApiCredits = await getAdminApiCreditMapSupabase();
+        returnAdminApiCreditPools(adminApiCredits, apiCreditsToReturn);
         await db.deleteInviteCode(code);
-        if (creditsToReturn > 0) {
-          await db.adjustAdminTotalCredits(creditsToReturn);
+        if (apiCreditsToReturn.legacy.remainingCredits > 0) {
+          await db.adjustAdminTotalCredits(apiCreditsToReturn.legacy.remainingCredits);
         }
+        await setAdminApiCreditMapSupabase(adminApiCredits);
+        await setScopedApiCreditMapSupabase(inviteApiCreditSettingKey(code), normalizeAllocationMap({}));
 
         res.json({
           ok: true,
           adminCredits: await db.getAdminCreditSummary(),
+          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         });
         return;
       }
@@ -2214,14 +2771,22 @@ async function start() {
         }
 
         const creditsToReturn = Number(invite.credits || 0);
+        const inviteApiCredits = getScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code));
+        const apiCreditsToReturn =
+          sumApiCreditTotals(inviteApiCredits) > 0 ? inviteApiCredits : normalizeRequestedApiCredits({ legacy: creditsToReturn });
+        const adminApiCredits = getAdminApiCreditMapSqlite(db);
+        returnAdminApiCreditPools(adminApiCredits, apiCreditsToReturn);
         db.run('DELETE FROM invite_codes WHERE code = ?', [code]);
-        if (creditsToReturn > 0) {
-          adjustAdminTotalCredits(db, creditsToReturn);
+        if (apiCreditsToReturn.legacy.remainingCredits > 0) {
+          adjustAdminTotalCredits(db, apiCreditsToReturn.legacy.remainingCredits);
         }
+        setAdminApiCreditMapSqlite(db, adminApiCredits);
+        setScopedApiCreditMapSqlite(db, inviteApiCreditSettingKey(code), normalizeAllocationMap({}));
 
         return {
           ok: true,
           adminCredits: getAdminCreditSummary(db),
+          apiCreditPools: toApiCreditPoolList(adminApiCredits),
         };
       });
 
