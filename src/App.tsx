@@ -1772,6 +1772,7 @@ export default function App() {
           </nav>
 
           <div className="flex items-center gap-3">
+            {/* 购买积分按钮 - 头部导航栏 */}
             <button
               className="hidden rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-400 transition hover:bg-rose-500/20 hover:text-rose-300 md:block"
               type="button"
