@@ -168,6 +168,10 @@ const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IM
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 
+const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 'pixory.top';
+const CANONICAL_WEB_ORIGIN =
+  normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN) || `https://${CANONICAL_WEB_HOST}`;
+
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
@@ -1939,6 +1943,30 @@ async function start() {
       res.status(204).end();
       return;
     }
+    next();
+  });
+
+  app.use((req, res, next) => {
+    const rawHost = normalizeString(req.headers.host);
+    const hostname = rawHost.replace(/:\d+$/, '');
+    const acceptHeader = normalizeString(req.headers.accept).toLowerCase();
+    const prefersHtml = acceptHeader.includes('text/html') || acceptHeader.includes('*/*');
+    const isHtmlRequest = (req.method === 'GET' || req.method === 'HEAD') && prefersHtml;
+    const isAssetRequest =
+      req.path.startsWith('/api') || req.path.startsWith('/assets') || req.path.startsWith('/uploads');
+    const isLocalHost =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === DEFAULT_HOST ||
+      hostname === '';
+    const isCanonicalHost =
+      hostname === CANONICAL_WEB_HOST || hostname === `www.${CANONICAL_WEB_HOST}`;
+
+    if (CANONICAL_WEB_HOST && isHtmlRequest && !isAssetRequest && !isLocalHost && !isCanonicalHost) {
+      res.redirect(301, `${CANONICAL_WEB_ORIGIN}${req.originalUrl}`);
+      return;
+    }
+
     next();
   });
 
