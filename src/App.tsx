@@ -34,6 +34,7 @@ import {
   login,
   loginWithInvite,
   moveImage,
+  reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
   type AdminUserSummary,
   type CreditSummary,
@@ -71,15 +72,6 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'admin';
-type LegacyAdminPool = {
-  id: string;
-  name: string;
-  keyPreview?: string;
-  status: 'available' | 'missing';
-  remainingCredits: number;
-  totalCredits: number;
-  usedCredits: number;
-};
 
 interface AdminOverviewState {
   users: AdminUserSummary[];
@@ -92,7 +84,7 @@ interface AdminOverviewState {
 
 const emptyPage: PaginationInfo = {
   page: 1,
-  pageSize: 20,
+  pageSize: 10,
   total: 0,
   totalPages: 1,
 };
@@ -533,8 +525,10 @@ function AdminView({
   inviteCodes,
   inviteCodesPage,
   adminCredits,
+  loading,
   onCreateInviteCode,
   onDeleteInviteCode,
+  onReclaimInviteCode,
   onRecordsPageChange,
   onInviteCodesPageChange,
   onPreview,
@@ -545,20 +539,224 @@ function AdminView({
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
+  loading: boolean;
   onCreateInviteCode: (credits: number) => Promise<void>;
   onDeleteInviteCode: (code: string) => Promise<void>;
+  onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
   onRecordsPageChange: (page: number) => void;
   onInviteCodesPageChange: (page: number) => void;
   onPreview: (item: GenerationRecord) => void;
 }) {
+  type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'settings';
+  type InviteStatusFilter = 'all' | 'unused' | 'used';
+  type InviteSortMode = 'created-desc' | 'created-asc' | 'credits-desc' | 'credits-asc';
+  type UserSortMode = 'recent-desc' | 'recent-asc';
+  type RecordRange = 'all' | '24h' | '7d' | '30d';
+
+  const [section, setSection] = useState<AdminSection>('dashboard');
   const [credits, setCredits] = useState(100);
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
+  const [reclaimingCode, setReclaimingCode] = useState('');
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
+  const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
+  const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
+  const [userSearch, setUserSearch] = useState('');
+  const [userSortMode, setUserSortMode] = useState<UserSortMode>('recent-desc');
+  const [userPage, setUserPage] = useState(1);
+  const [recordUserFilter, setRecordUserFilter] = useState('');
+  const [recordModelFilter, setRecordModelFilter] = useState('all');
+  const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
+  const [recordRange, setRecordRange] = useState<RecordRange>('all');
   const normalizedCredits = Math.max(0, Number(credits) || 0);
   const isInvalidCredits = normalizedCredits <= 0 || normalizedCredits > adminCredits.remainingCredits;
   const inviteCreditsTotal = normalizedCredits;
-  const [apiCredits, setApiCredits] = useState<Record<string, number>>({});
-  const apiCreditPools: LegacyAdminPool[] = [];
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  const todayRecords = records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+  const todayCreditsUsed = todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const lowCreditUsers = users.filter((item) => item.remainingCredits <= 50);
+  const totalInviteCodes = inviteCodes.length;
+  const usedInviteCodes = inviteCodes.filter((item) => Boolean(item.redeemedBy)).length;
+  const currentInviteUsageRate = totalInviteCodes > 0 ? Math.round((usedInviteCodes / totalInviteCodes) * 100) : 0;
+
+  const usersById = users.reduce<Record<string, AdminUserSummary>>((accumulator, item) => {
+    accumulator[item.userId] = item;
+    return accumulator;
+  }, {});
+
+  const invitePrefixesByUserId = records.reduce<Record<string, string[]>>((accumulator, item) => {
+    if (!item.inviteCode) return accumulator;
+    const next = accumulator[item.userId] || [];
+    if (!next.includes(item.inviteCode)) {
+      next.push(item.inviteCode);
+    }
+    accumulator[item.userId] = next;
+    return accumulator;
+  }, {});
+
+  const usageTrendByUserId = users.reduce<Record<string, number[]>>((accumulator, item) => {
+    const buckets = Array.from({ length: 7 }, () => 0);
+    for (const record of records) {
+      if (record.userId !== item.userId) continue;
+      const diff = Math.floor((today.getTime() - new Date(record.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+      if (diff >= 0 && diff < 7) {
+        buckets[6 - diff] += record.creditsUsed;
+      }
+    }
+    accumulator[item.userId] = buckets;
+    return accumulator;
+  }, {});
+
+  const filteredInviteCodes = [...inviteCodes]
+    .filter((item) => {
+      if (inviteStatusFilter === 'used') return Boolean(item.redeemedBy);
+      if (inviteStatusFilter === 'unused') return !item.redeemedBy;
+      return true;
+    })
+    .sort((left, right) => {
+      if (inviteSortMode === 'credits-desc') return right.credits - left.credits;
+      if (inviteSortMode === 'credits-asc') return left.credits - right.credits;
+      if (inviteSortMode === 'created-asc') return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+
+  const searchableUsers = [...users]
+    .filter((item) => {
+      const keyword = userSearch.trim().toLowerCase();
+      if (!keyword) return true;
+      const inviteText = (invitePrefixesByUserId[item.userId] || []).join(' ').toLowerCase();
+      return (
+        item.username.toLowerCase().includes(keyword) ||
+        item.userId.toLowerCase().includes(keyword) ||
+        inviteText.includes(keyword)
+      );
+    })
+    .sort((left, right) => {
+      const leftTime = left.lastGeneratedAt ? new Date(left.lastGeneratedAt).getTime() : 0;
+      const rightTime = right.lastGeneratedAt ? new Date(right.lastGeneratedAt).getTime() : 0;
+      return userSortMode === 'recent-asc' ? leftTime - rightTime : rightTime - leftTime;
+    });
+
+  const modelOptions = Array.from(new Set(records.map((item) => item.modelName))).sort();
+  const resolutionOptions = Array.from(
+    new Set(records.map((item) => (item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions))),
+  ).sort();
+
+  const filteredRecords = [...records].filter((item) => {
+    if (recordModelFilter !== 'all' && item.modelName !== recordModelFilter) return false;
+
+    const resolutionLabel = item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions;
+    if (recordResolutionFilter !== 'all' && resolutionLabel !== recordResolutionFilter) return false;
+
+    const keyword = recordUserFilter.trim().toLowerCase();
+    if (
+      keyword &&
+      !item.username.toLowerCase().includes(keyword) &&
+      !item.userId.toLowerCase().includes(keyword) &&
+      !item.prompt.toLowerCase().includes(keyword) &&
+      !(item.inviteCode || '').toLowerCase().includes(keyword)
+    ) {
+      return false;
+    }
+
+    if (recordRange !== 'all') {
+      const diffHours = (today.getTime() - new Date(item.createdAt).getTime()) / (60 * 60 * 1000);
+      if (recordRange === '24h' && diffHours > 24) return false;
+      if (recordRange === '7d' && diffHours > 24 * 7) return false;
+      if (recordRange === '30d' && diffHours > 24 * 30) return false;
+    }
+
+    return true;
+  });
+
+  const filteredRecordCredits = filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const userPageSize = 10;
+  const userTotalPages = Math.max(1, Math.ceil(searchableUsers.length / userPageSize));
+  const currentUserPage = Math.min(userPage, userTotalPages);
+  const pagedUsers = searchableUsers.slice((currentUserPage - 1) * userPageSize, currentUserPage * userPageSize);
+  const modelUsageCounter = filteredRecords.reduce<Record<string, number>>((accumulator, item) => {
+    accumulator[item.modelName] = (accumulator[item.modelName] || 0) + 1;
+    return accumulator;
+  }, {});
+  const mostUsedModel = Object.entries(modelUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '暂无';
+  const hourUsageCounter = filteredRecords.reduce<Record<string, number>>((accumulator, item) => {
+    const hour = String(new Date(item.createdAt).getHours()).padStart(2, '0');
+    accumulator[hour] = (accumulator[hour] || 0) + 1;
+    return accumulator;
+  }, {});
+  const mostActiveHour = Object.entries(hourUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0];
+
+  const canSelectInviteCodes = filteredInviteCodes.map((item) => item.code);
+  const allSelectableChecked =
+    canSelectInviteCodes.length > 0 && canSelectInviteCodes.every((code) => selectedInviteCodes.includes(code));
+
+  function formatPercent(value: number) {
+    return `${Math.max(0, Math.min(100, Math.round(value)))}%`;
+  }
+
+  function toggleInviteCode(code: string) {
+    setSelectedInviteCodes((current) =>
+      current.includes(code) ? current.filter((item) => item !== code) : [...current, code],
+    );
+  }
+
+  function toggleAllInviteCodes() {
+    setSelectedInviteCodes((current) =>
+      allSelectableChecked ? current.filter((code) => !canSelectInviteCodes.includes(code)) : canSelectInviteCodes,
+    );
+  }
+
+  function getStatusBadge(used: boolean) {
+    return (
+      <span
+        className={
+          used
+            ? 'inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-zinc-300'
+            : 'inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300'
+        }
+      >
+        <span className={used ? 'h-2 w-2 rounded-full bg-zinc-400' : 'h-2 w-2 rounded-full bg-emerald-400'} />
+        {used ? '已使用' : '未使用'}
+      </span>
+    );
+  }
+
+  function getCreditsTone(creditsUsed: number) {
+    if (creditsUsed > 50) return 'text-rose-300';
+    if (creditsUsed >= 20) return 'text-amber-300';
+    return 'text-emerald-300';
+  }
+
+  function truncatePrompt(prompt: string) {
+    return prompt.length > 20 ? `${prompt.slice(0, 20)}...` : prompt;
+  }
+
+  function renderSparkline(points: number[]) {
+    const width = 132;
+    const height = 44;
+    const maxValue = Math.max(...points, 1);
+    const path = points
+      .map((point, index) => {
+        const x = (index / Math.max(points.length - 1, 1)) * width;
+        const y = height - (point / maxValue) * (height - 8) - 4;
+        return `${index === 0 ? 'M' : 'L'}${x},${y}`;
+      })
+      .join(' ');
+
+    return (
+      <svg className="h-12 w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+        <path d={path} fill="none" stroke="url(#trend-gradient)" strokeLinecap="round" strokeWidth="2.5" />
+        <defs>
+          <linearGradient id="trend-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" stopColor="#38bdf8" />
+            <stop offset="100%" stopColor="#34d399" />
+          </linearGradient>
+        </defs>
+      </svg>
+    );
+  }
 
   async function handleCreateInviteCode() {
     setSubmitting(true);
@@ -578,276 +776,568 @@ function AdminView({
     setDeletingCode(code);
     try {
       await onDeleteInviteCode(code);
+      setSelectedInviteCodes((current) => current.filter((item) => item !== code));
     } finally {
       setDeletingCode('');
     }
   }
 
+  async function handleReclaimInviteCode(code: string) {
+    const rawValue = window.prompt(`请输入要从 ${code} 回收的积分数量`, '10');
+    if (rawValue === null) return;
+
+    const credits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(credits) || credits <= 0) {
+      window.alert('请输入大于 0 的整数积分');
+      return;
+    }
+
+    setReclaimingCode(code);
+    try {
+      await onReclaimInviteCode(code, credits);
+    } finally {
+      setReclaimingCode('');
+    }
+  }
+
+  async function handleBulkDeleteInviteCodes() {
+    const availableCodes = selectedInviteCodes.filter((code) => inviteCodes.some((item) => item.code === code));
+
+    if (availableCodes.length === 0) return;
+    if (!window.confirm(`确认批量删除 ${availableCodes.length} 个邀请码吗？删除后积分会退回 admin。`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    try {
+      for (const code of availableCodes) {
+        await onDeleteInviteCode(code);
+      }
+      setSelectedInviteCodes([]);
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  const menuItems: Array<{ id: AdminSection; label: string; hint: string }> = [
+    { id: 'dashboard', label: '看板', hint: '今日概览' },
+    { id: 'invites', label: '邀请码', hint: '发码与回收' },
+    { id: 'users', label: '用户', hint: '余额与活跃' },
+    { id: 'records', label: '生图记录', hint: '模型与消耗' },
+    { id: 'settings', label: '设置', hint: '运行状态' },
+  ];
+
   return (
-    <section className="h-full overflow-hidden px-5 py-4">
-      <div className="custom-scrollbar grid h-full gap-4 overflow-auto pr-1 xl:grid-rows-[auto_auto_1fr]">
-        <div className="rounded-[20px] border border-white/8 bg-black/35 p-4">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-white">邀请码与管理员积分</h2>
-              <p className="mt-1 text-xs text-zinc-500">
-                兼容总池 {adminCredits.totalCredits} · 已分配 {adminCredits.usedCredits} · 剩余 {adminCredits.remainingCredits}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className={isInvalidCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
-                本次分配 {inviteCreditsTotal} 积分
-              </span>
-              <input
-                className={`w-28 rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${isInvalidCredits ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
-                min={1}
-                max={adminCredits.remainingCredits}
-                type="number"
-                value={credits}
-                onChange={(event) => setCredits(Math.max(0, Number(event.target.value) || 0))}
-              />
-              <button
-                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
-                disabled={submitting || isInvalidCredits}
-                type="button"
-                onClick={() => void handleCreateInviteCode()}
-              >
-                生成邀请码
-              </button>
-            </div>
+    <section className="h-full overflow-hidden px-4 py-4 lg:px-5">
+      <div className="grid h-full min-h-0 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+        <aside className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04)_0%,rgba(255,255,255,0.02)_100%)] p-3">
+          <div className="mb-4 rounded-[18px] border border-white/8 bg-black/20 p-4">
+            <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
+            <p className="mt-2 text-lg font-black text-white">后台管理</p>
+            <p className="mt-1 text-xs leading-5 text-zinc-500">邀请码、用户、记录和运行状态集中处理。</p>
           </div>
-
-          <div className="hidden">
-            {apiCreditPools.map((pool) => {
-              const nextValue = Math.max(0, Number(apiCredits[pool.id] || 0));
-              const overLimit = nextValue > pool.remainingCredits;
-
+          <div className="grid gap-2">
+            {menuItems.map((item) => {
+              const active = section === item.id;
               return (
-                <div key={pool.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-bold text-white">{pool.name}</p>
-                      <p className="mt-1 font-mono text-[11px] text-zinc-500">{pool.keyPreview || '未配置'}</p>
-                    </div>
-                    <span className={pool.status === 'available' ? 'rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300' : 'rounded-full bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-300'}>
-                      {pool.status === 'available' ? '可用' : '缺失'}
-                    </span>
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-zinc-500">剩余</p>
-                      <p className="mt-1 text-base font-black text-sky-200">{pool.remainingCredits}</p>
-                    </div>
-                    <div>
-                      <p className="text-zinc-500">总额</p>
-                      <p className="mt-1 text-base font-black text-white">{pool.totalCredits}</p>
-                    </div>
-                    <div>
-                      <p className="text-zinc-500">已用</p>
-                      <p className="mt-1 text-base font-black text-amber-200">{pool.usedCredits}</p>
-                    </div>
-                  </div>
-                  <label className="mt-3 block text-[11px] font-semibold text-zinc-500">
-                    本码分配
-                    <input
-                      className={`mt-1 w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${overLimit ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
-                      min={0}
-                      max={pool.remainingCredits}
-                      type="number"
-                      value={apiCredits[pool.id] ?? ''}
-                      onChange={(event) => {
-                        const value = Math.max(0, Number(event.target.value) || 0);
-                        setApiCredits((current) => ({ ...current, [pool.id]: value }));
-                      }}
-                    />
-                  </label>
-                </div>
+                <button
+                  key={item.id}
+                  className={
+                    active
+                      ? 'rounded-[18px] border border-sky-400/30 bg-sky-400/12 px-4 py-3 text-left'
+                      : 'rounded-[18px] border border-white/8 bg-white/[0.03] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.05]'
+                  }
+                  type="button"
+                  onClick={() => setSection(item.id)}
+                >
+                  <span className={active ? 'block text-sm font-black text-white' : 'block text-sm font-black text-zinc-200'}>{item.label}</span>
+                  <span className={active ? 'mt-1 block text-[11px] text-sky-100/80' : 'mt-1 block text-[11px] text-zinc-500'}>{item.hint}</span>
+                </button>
               );
             })}
           </div>
+        </aside>
 
-          <div className="overflow-x-auto">
-            {inviteCodes.length > 0 ? (
-              <table className="min-w-full text-left text-xs">
-                <thead className="text-zinc-500">
-                  <tr className="border-b border-white/8">
-                    <th className="px-3 py-2 font-medium">邀请码</th>
-                    <th className="px-3 py-2 font-medium">积分</th>
-                    <th className="px-3 py-2 font-medium">状态</th>
-                    <th className="px-3 py-2 font-medium">使用者</th>
-                    <th className="px-3 py-2 font-medium">创建时间</th>
-                    <th className="px-3 py-2 text-right font-medium">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/6">
-                  {inviteCodes.map((item) => (
-                    <tr key={item.code} className="text-zinc-300">
-                      <td className="px-3 py-3 font-mono font-semibold text-white">{item.code}</td>
-                      <td className="px-3 py-3">
-                        <div className="font-semibold text-sky-200">{item.credits}</div>
-                        {item.apiCredits?.length ? (
-                          <div className="mt-1 flex max-w-[260px] flex-wrap gap-1 text-[10px] text-zinc-500">
-                            {item.apiCredits.filter((pool) => pool.totalCredits > 0).map((pool) => (
-                              <span key={`${item.code}-${pool.poolId}`} className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5">
-                                {pool.name}: {pool.remainingCredits}/{pool.totalCredits}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-3 py-3">{item.redeemedBy ? '已使用' : '未使用'}</td>
-                      <td className="max-w-[220px] truncate px-3 py-3 text-zinc-500">{item.redeemedBy || '-'}</td>
-                      <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                          disabled={Boolean(item.redeemedBy) || deletingCode === item.code}
-                          type="button"
-                          onClick={() => void handleDeleteInviteCode(item.code)}
-                        >
-                          {deletingCode === item.code ? '删除中...' : '删除'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="py-8 text-center text-sm text-zinc-500">暂无邀请码</div>
-            )}
-          </div>
-          <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-            <span>共 {inviteCodesPage.total} 条邀请码</span>
-            <div className="flex items-center gap-2">
-              <button
-                className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                disabled={inviteCodesPage.page <= 1}
-                type="button"
-                onClick={() => onInviteCodesPageChange(inviteCodesPage.page - 1)}
-              >
-                上一页
-              </button>
-              <span>{inviteCodesPage.page} / {inviteCodesPage.totalPages}</span>
-              <button
-                className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                disabled={inviteCodesPage.page >= inviteCodesPage.totalPages}
-                type="button"
-                onClick={() => onInviteCodesPageChange(inviteCodesPage.page + 1)}
-              >
-                下一页
-              </button>
+        <div className="custom-scrollbar min-h-0 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="grid gap-4">
+            <div className="grid gap-3 xl:grid-cols-4">
+              {[
+                { label: '今日生成次数', value: String(todayRecords.length), hint: '按当前记录页统计' },
+                { label: '今日消耗积分', value: String(todayCreditsUsed), hint: '统一积分池计费' },
+                { label: '本页邀请码使用率', value: formatPercent(currentInviteUsageRate), hint: `${usedInviteCodes}/${Math.max(totalInviteCodes, 1)}` },
+                { label: '低积分用户提醒', value: String(lowCreditUsers.length), hint: '剩余 <= 50 积分' },
+              ].map((card) => (
+                <div key={card.label} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">{card.label}</p>
+                  <p className="mt-3 text-3xl font-black text-white">{card.value}</p>
+                  <p className="mt-2 text-xs text-zinc-500">{card.hint}</p>
+                </div>
+              ))}
             </div>
-          </div>
-        </div>
 
-        <div className="rounded-[20px] border border-white/8 bg-black/35 p-4">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">用户信息与 Key 使用情况</h2>
-            <span className="text-xs text-zinc-500">{users.length} 人</span>
-          </div>
-          <div className="overflow-x-auto">
-            {users.length > 0 ? (
-              <table className="min-w-full text-left text-xs">
-                <thead className="text-zinc-500">
-                  <tr className="border-b border-white/8">
-                    <th className="px-3 py-2 font-medium">用户</th>
-                    <th className="px-3 py-2 font-medium">用户 ID</th>
-                    <th className="px-3 py-2 font-medium">生成次数</th>
-                    <th className="px-3 py-2 font-medium">用户积分</th>
-                    <th className="px-3 py-2 font-medium">Key 积分消耗</th>
-                    <th className="px-3 py-2 font-medium">最近生成</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/6">
-                  {users.map((item) => (
-                    <tr key={item.userId} className="text-zinc-300">
-                      <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                      <td className="max-w-[260px] truncate px-3 py-3 text-zinc-500">{item.userId}</td>
-                      <td className="px-3 py-3">{item.generations}</td>
-                      <td className="px-3 py-3">
-                        {item.remainingCredits} / {item.totalCredits}
-                      </td>
-                      <td className="px-3 py-3 text-sky-200">{item.creditsUsed} 点</td>
-                      <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="py-10 text-center text-sm text-zinc-500">暂无用户生图数据</div>
-            )}
-          </div>
-        </div>
+            {loading ? (
+              <div className="grid gap-4">
+                {[0, 1, 2].map((item) => (
+                  <div key={item} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                    <div className="h-5 w-40 animate-pulse rounded-full bg-white/10" />
+                    <div className="mt-4 space-y-3">
+                      {[0, 1, 2, 3].map((row) => (
+                        <div key={row} className="h-12 animate-pulse rounded-2xl bg-white/[0.05]" />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
-        <div className="rounded-[20px] border border-white/8 bg-black/35 p-4">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">生图记录</h2>
-            <span className="text-xs text-zinc-500">共 {recordsPage.total} 条</span>
-          </div>
-          <div className="overflow-x-auto">
-            {records.length > 0 ? (
-              <table className="min-w-[1060px] text-left text-xs">
-                <thead className="text-zinc-500">
-                  <tr className="border-b border-white/8">
-                    <th className="px-3 py-2 font-medium">图片</th>
-                    <th className="px-3 py-2 font-medium">用户</th>
-                    <th className="px-3 py-2 font-medium">邀请码</th>
-                    <th className="px-3 py-2 font-medium">模型</th>
-                    <th className="px-3 py-2 font-medium">比例/分辨率</th>
-                    <th className="px-3 py-2 font-medium">积分</th>
-                    <th className="px-3 py-2 font-medium">提示词/描述</th>
-                    <th className="px-3 py-2 font-medium">时间</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/6">
-                  {records.map((item) => (
-                    <tr key={item.id} className="align-top text-zinc-300">
-                      <td className="px-3 py-3">
-                        <button className="h-16 w-16 overflow-hidden rounded-xl bg-black" type="button" onClick={() => onPreview(item)}>
-                          <img alt={item.prompt} className="h-full w-full object-cover" src={item.imageUrl} />
-                        </button>
-                      </td>
-                      <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                      <td className="max-w-[180px] truncate px-3 py-3 font-mono text-zinc-500">{item.inviteCode || '-'}</td>
-                      <td className="px-3 py-3">{item.modelName}</td>
-                      <td className="px-3 py-3">
-                        {item.dimensions}
-                        {item.imageSize ? ` / ${item.imageSize}` : ''}
-                      </td>
-                      <td className="px-3 py-3 text-sky-200">{item.creditsUsed}</td>
-                      <td className="max-w-[360px] px-3 py-3 leading-5">{item.prompt}</td>
-                      <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
-                    </tr>
+            {!loading && (section === 'dashboard' || section === 'invites') ? (
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-black text-white">邀请码管理</h2>
+                    <p className="mt-1 text-xs text-zinc-500">总池 / 已分配 / 剩余 一眼看清，支持筛选、排序和批量删除。</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={isInvalidCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
+                      本次发放 {inviteCreditsTotal} 积分
+                    </span>
+                    <input
+                      className={`w-28 rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${isInvalidCredits ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
+                      min={1}
+                      max={adminCredits.remainingCredits}
+                      type="number"
+                      value={credits}
+                      onChange={(event) => setCredits(Math.max(0, Number(event.target.value) || 0))}
+                    />
+                    <button
+                      className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
+                      disabled={submitting || isInvalidCredits}
+                      type="button"
+                      onClick={() => void handleCreateInviteCode()}
+                    >
+                      {submitting ? '生成中...' : '生成邀请码'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {[
+                    { label: '总池', value: adminCredits.totalCredits, tone: 'text-white' },
+                    { label: '已分配', value: adminCredits.usedCredits, tone: 'text-amber-300' },
+                    { label: '剩余', value: adminCredits.remainingCredits, tone: 'text-sky-300' },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                      <p className="text-xs font-semibold text-zinc-500">{item.label}</p>
+                      <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="py-10 text-center text-sm text-zinc-500">暂无生图记录</div>
-            )}
-          </div>
-          <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-            <span>
-              第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                disabled={recordsPage.page <= 1}
-                type="button"
-                onClick={() => onRecordsPageChange(recordsPage.page - 1)}
-              >
-                上一页
-              </button>
-              <span>{recordsPage.page} / {recordsPage.totalPages}</span>
-              <button
-                className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                disabled={recordsPage.page >= recordsPage.totalPages}
-                type="button"
-                onClick={() => onRecordsPageChange(recordsPage.page + 1)}
-              >
-                下一页
-              </button>
-            </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] border border-white/8 bg-white/[0.02] p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      value={inviteStatusFilter}
+                      onChange={(event) => setInviteStatusFilter(event.target.value as InviteStatusFilter)}
+                    >
+                      <option value="all">全部状态</option>
+                      <option value="unused">未使用</option>
+                      <option value="used">已使用</option>
+                    </select>
+                    <select
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      value={inviteSortMode}
+                      onChange={(event) => setInviteSortMode(event.target.value as InviteSortMode)}
+                    >
+                      <option value="created-desc">创建时间：最新</option>
+                      <option value="created-asc">创建时间：最早</option>
+                      <option value="credits-desc">积分：高到低</option>
+                      <option value="credits-asc">积分：低到高</option>
+                    </select>
+                  </div>
+                  <button
+                    className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={bulkDeleting || selectedInviteCodes.length === 0}
+                    type="button"
+                    onClick={() => void handleBulkDeleteInviteCodes()}
+                  >
+                    {bulkDeleting ? '批量删除中...' : `批量删除 (${selectedInviteCodes.length})`}
+                  </button>
+                </div>
+
+                <div className="mt-4 overflow-hidden">
+                  {filteredInviteCodes.length > 0 ? (
+                    <table className="w-full table-fixed text-left text-xs">
+                      <thead className="text-zinc-500">
+                        <tr className="border-b border-white/8">
+                          <th className="w-10 px-3 py-2 font-medium">
+                            <input checked={allSelectableChecked} type="checkbox" onChange={toggleAllInviteCodes} />
+                          </th>
+                          <th className="px-3 py-2 font-medium">邀请码</th>
+                          <th className="px-3 py-2 font-medium">积分</th>
+                          <th className="px-3 py-2 font-medium">状态</th>
+                          <th className="px-3 py-2 font-medium">使用者</th>
+                          <th className="px-3 py-2 font-medium">后续消耗积分</th>
+                          <th className="px-3 py-2 font-medium">创建时间</th>
+                          <th className="px-3 py-2 text-right font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/6">
+                        {filteredInviteCodes.map((item) => {
+                          const consumedAfterRedeem = item.redeemedBy ? usersById[item.redeemedBy]?.creditsUsed || 0 : 0;
+                          return (
+                            <tr key={item.code} className="text-zinc-300">
+                              <td className="px-3 py-3 align-top">
+                                <input
+                                  checked={selectedInviteCodes.includes(item.code)}
+                                  type="checkbox"
+                                  onChange={() => toggleInviteCode(item.code)}
+                                />
+                              </td>
+                              <td className="break-all px-3 py-3 font-mono font-semibold text-white">{item.code}</td>
+                              <td className="px-3 py-3 font-semibold text-sky-200">{item.credits}</td>
+                              <td className="px-3 py-3">{getStatusBadge(Boolean(item.redeemedBy))}</td>
+                              <td className="truncate px-3 py-3 text-zinc-400">{item.redeemedBy || '-'}</td>
+                              <td className={`px-3 py-3 font-semibold ${consumedAfterRedeem > 150 ? 'text-rose-300' : 'text-zinc-200'}`}>
+                                {consumedAfterRedeem}
+                              </td>
+                              <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
+                              <td className="px-3 py-3 text-right">
+                                <button
+                                  className="mr-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                  disabled={reclaimingCode === item.code}
+                                  type="button"
+                                  onClick={() => void handleReclaimInviteCode(item.code)}
+                                >
+                                  {reclaimingCode === item.code ? '回收中...' : '扣积分'}
+                                </button>
+                                <button
+                                  className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                  disabled={deletingCode === item.code}
+                                  type="button"
+                                  onClick={() => void handleDeleteInviteCode(item.code)}
+                                >
+                                  {deletingCode === item.code ? '删除中...' : '删除'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无邀请码</div>
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                  <span>共 {inviteCodesPage.total} 条邀请码</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={inviteCodesPage.page <= 1}
+                      type="button"
+                      onClick={() => onInviteCodesPageChange(inviteCodesPage.page - 1)}
+                    >
+                      上一页
+                    </button>
+                    <span>{inviteCodesPage.page} / {inviteCodesPage.totalPages}</span>
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={inviteCodesPage.page >= inviteCodesPage.totalPages}
+                      type="button"
+                      onClick={() => onInviteCodesPageChange(inviteCodesPage.page + 1)}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                  <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={currentUserPage <= 1}
+                      type="button"
+                      onClick={() => setUserPage((current) => Math.max(1, current - 1))}
+                    >
+                      上一页
+                    </button>
+                    <span>{currentUserPage} / {userTotalPages}</span>
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={currentUserPage >= userTotalPages}
+                      type="button"
+                      onClick={() => setUserPage((current) => Math.min(userTotalPages, current + 1))}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {!loading && (section === 'dashboard' || section === 'users') ? (
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-black text-white">用户信息与 Key 使用页</h2>
+                    <p className="mt-1 text-xs text-zinc-500">支持按用户 ID / 邀请码前缀搜索，点击最近生成可切换活跃排序。</p>
+                  </div>
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none md:w-72"
+                    placeholder="搜索用户 ID、用户名、invite-/admin/credit-"
+                    value={userSearch}
+                    onChange={(event) => {
+                      setUserSearch(event.target.value);
+                      setUserPage(1);
+                    }}
+                  />
+                </div>
+
+                <div className="mt-4 overflow-hidden">
+                  {searchableUsers.length > 0 ? (
+                    <table className="w-full table-fixed text-left text-xs">
+                      <thead className="text-zinc-500">
+                        <tr className="border-b border-white/8">
+                          <th className="px-3 py-2 font-medium">用户</th>
+                          <th className="px-3 py-2 font-medium">用户 ID</th>
+                          <th className="px-3 py-2 font-medium">生成次数</th>
+                          <th className="px-3 py-2 font-medium">剩余 / 总额</th>
+                          <th className="px-3 py-2 font-medium">Key 积分消耗</th>
+                          <th className="px-3 py-2 font-medium">
+                            <button
+                              className="inline-flex items-center gap-1 text-zinc-400 transition hover:text-white"
+                              type="button"
+                              onClick={() => {
+                                setUserSortMode((current) => (current === 'recent-desc' ? 'recent-asc' : 'recent-desc'));
+                                setUserPage(1);
+                              }}
+                            >
+                              最近生成 {userSortMode === 'recent-desc' ? '↓' : '↑'}
+                            </button>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/6">
+                        {pagedUsers.map((item) => {
+                          const usageRate = item.totalCredits > 0 ? (item.usedCredits / item.totalCredits) * 100 : 0;
+                          const trend = usageTrendByUserId[item.userId] || Array.from({ length: 7 }, () => 0);
+                          return (
+                            <tr key={item.userId} className="text-zinc-300">
+                              <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
+                              <td className="max-w-[240px] truncate px-3 py-3 text-zinc-500">{item.userId}</td>
+                              <td className="px-3 py-3">{item.generations}</td>
+                              <td className="px-3 py-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="font-semibold text-white">{item.remainingCredits}</span>
+                                  <span className="text-zinc-500">/ {item.totalCredits}</span>
+                                </div>
+                                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/8">
+                                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#38bdf8_0%,#22d3ee_100%)]" style={{ width: `${100 - usageRate}%` }} />
+                                </div>
+                                <div className="mt-1 text-[11px] text-zinc-500">使用率 {formatPercent(usageRate)}</div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="group relative inline-flex cursor-default items-center gap-2 font-semibold text-sky-200">
+                                  <span>{item.creditsUsed} 点</span>
+                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">近 7 天</span>
+                                  <div className="pointer-events-none absolute left-0 top-full z-10 hidden w-44 rounded-2xl border border-white/10 bg-[#0b0b0b] p-3 text-[11px] text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.35)] group-hover:block">
+                                    <div className="mb-2 flex items-center justify-between">
+                                      <span>最近 7 天消耗</span>
+                                      <span>{trend.reduce((sum, value) => sum + value, 0)} 点</span>
+                                    </div>
+                                    {renderSparkline(trend)}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-10 text-center text-sm text-zinc-500">暂无符合条件的用户</div>
+                  )}
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                  <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={currentUserPage <= 1}
+                      type="button"
+                      onClick={() => setUserPage((current) => Math.max(1, current - 1))}
+                    >
+                      上一页
+                    </button>
+                    <span>{currentUserPage} / {userTotalPages}</span>
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={currentUserPage >= userTotalPages}
+                      type="button"
+                      onClick={() => setUserPage((current) => Math.min(userTotalPages, current + 1))}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {!loading && (section === 'dashboard' || section === 'records') ? (
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-black text-white">生图记录页</h2>
+                    <p className="mt-1 text-xs text-zinc-500">按模型、时间、用户和分辨率筛选，快速找出高消耗和高活跃记录。</p>
+                  </div>
+                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-4">
+                    <input
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      placeholder="搜索用户 / 邀请码 / 提示词"
+                      value={recordUserFilter}
+                      onChange={(event) => setRecordUserFilter(event.target.value)}
+                    />
+                    <select
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      value={recordModelFilter}
+                      onChange={(event) => setRecordModelFilter(event.target.value)}
+                    >
+                      <option value="all">全部模型</option>
+                      {modelOptions.map((item) => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      value={recordResolutionFilter}
+                      onChange={(event) => setRecordResolutionFilter(event.target.value)}
+                    >
+                      <option value="all">全部分辨率</option>
+                      {resolutionOptions.map((item) => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
+                      value={recordRange}
+                      onChange={(event) => setRecordRange(event.target.value as RecordRange)}
+                    >
+                      <option value="all">全部时间</option>
+                      <option value="24h">近 24 小时</option>
+                      <option value="7d">近 7 天</option>
+                      <option value="30d">近 30 天</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">总消耗积分</p>
+                    <p className="mt-2 text-2xl font-black text-white">{filteredRecordCredits}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">最常用模型</p>
+                    <p className="mt-2 text-2xl font-black text-amber-200">{mostUsedModel}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">最活跃时段</p>
+                    <p className="mt-2 text-2xl font-black text-emerald-200">{mostActiveHour ? `${mostActiveHour}:00` : '暂无'}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-hidden">
+                  {filteredRecords.length > 0 ? (
+                    <table className="w-full table-fixed text-left text-xs">
+                      <thead className="text-zinc-500">
+                        <tr className="border-b border-white/8">
+                          <th className="w-24 px-3 py-2 font-medium">图片</th>
+                          <th className="px-3 py-2 font-medium">用户</th>
+                          <th className="px-3 py-2 font-medium">邀请码</th>
+                          <th className="px-3 py-2 font-medium">模型</th>
+                          <th className="px-3 py-2 font-medium">比例 / 分辨率</th>
+                          <th className="px-3 py-2 font-medium">积分消耗</th>
+                          <th className="px-3 py-2 font-medium">提示词</th>
+                          <th className="px-3 py-2 font-medium">时间</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/6">
+                        {filteredRecords.map((item) => (
+                          <tr key={item.id} className="align-top text-zinc-300">
+                            <td className="px-3 py-3">
+                              <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
+                                <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.imageUrl} />
+                              </button>
+                            </td>
+                            <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
+                            <td className="max-w-[180px] truncate px-3 py-3 font-mono text-zinc-500">{item.inviteCode || '-'}</td>
+                            <td className="px-3 py-3">{item.modelName}</td>
+                            <td className="px-3 py-3">
+                              {item.dimensions}
+                              {item.imageSize ? ` / ${item.imageSize}` : ''}
+                            </td>
+                            <td className={`px-3 py-3 font-black ${getCreditsTone(item.creditsUsed)}`}>{item.creditsUsed}</td>
+                            <td className="max-w-[360px] px-3 py-3 leading-5" title={item.prompt}>{truncatePrompt(item.prompt)}</td>
+                            <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无生图记录</div>
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                  <span>第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={recordsPage.page <= 1}
+                      type="button"
+                      onClick={() => onRecordsPageChange(recordsPage.page - 1)}
+                    >
+                      上一页
+                    </button>
+                    <span>{recordsPage.page} / {recordsPage.totalPages}</span>
+                    <button
+                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                      disabled={recordsPage.page >= recordsPage.totalPages}
+                      type="button"
+                      onClick={() => onRecordsPageChange(recordsPage.page + 1)}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {!loading && section === 'settings' ? (
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <h2 className="text-base font-black text-white">设置</h2>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">用户总数</p>
+                    <p className="mt-2 text-2xl font-black text-white">{users.length}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">当前页邀请码</p>
+                    <p className="mt-2 text-2xl font-black text-white">{inviteCodes.length}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">当前页记录</p>
+                    <p className="mt-2 text-2xl font-black text-white">{records.length}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">低积分提醒</p>
+                    <p className="mt-2 text-2xl font-black text-amber-200">{lowCreditUsers.length}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -889,6 +1379,7 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingUserData, setLoadingUserData] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [healthText, setHealthText] = useState('正在检查本地服务...');
   const [healthError, setHealthError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1054,6 +1545,7 @@ export default function App() {
   async function loadAdminOverview() {
     if (!user?.isAdmin) return;
 
+    setAdminLoading(true);
     try {
       const payload = await fetchAdminOverview({
         recordsPage: adminRecordsPage,
@@ -1064,6 +1556,8 @@ export default function App() {
       setAdminOverview(payload);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '后台数据加载失败');
+    } finally {
+      setAdminLoading(false);
     }
   }
 
@@ -1100,6 +1594,21 @@ export default function App() {
       void loadAdminOverview();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除邀请码失败');
+    }
+  }
+
+  async function handleReclaimInviteCode(code: string, credits: number) {
+    try {
+      const payload = await reclaimInviteCodeCreditsRequest(code, credits);
+      setAdminOverview((current) => ({
+        ...current,
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已从邀请码 ${code} 回收 ${credits} 积分到 admin 总池`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadAdminOverview();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '邀请码积分回收失败');
     }
   }
 
@@ -1780,8 +2289,11 @@ export default function App() {
             >
               购买积分
             </button>
-            <div className="hidden rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-zinc-400 md:block">
-              {healthText}
+            <div
+              className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 md:inline-flex"
+              title={healthError || healthText}
+            >
+              <span className={healthError ? 'h-2.5 w-2.5 rounded-full bg-rose-400' : 'h-2.5 w-2.5 rounded-full bg-emerald-400'} />
             </div>
             {user ? (
               <button
@@ -2186,8 +2698,10 @@ export default function App() {
               inviteCodes={adminOverview.inviteCodes}
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
+              loading={adminLoading}
               onCreateInviteCode={handleCreateInviteCode}
               onDeleteInviteCode={handleDeleteInviteCode}
+              onReclaimInviteCode={handleReclaimInviteCode}
               onRecordsPageChange={setAdminRecordsPage}
               onInviteCodesPageChange={setAdminInviteCodesPage}
               onPreview={setPreviewImage}

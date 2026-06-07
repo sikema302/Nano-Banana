@@ -2424,9 +2424,9 @@ async function start() {
 
   app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
     const recordsPage = parsePaginationValue(req.query.recordsPage, 1, 1, 100000);
-    const recordsPageSize = parsePaginationValue(req.query.recordsPageSize, 20, 1, 100);
+    const recordsPageSize = parsePaginationValue(req.query.recordsPageSize, 10, 1, 100);
     const inviteCodesPage = parsePaginationValue(req.query.inviteCodesPage, 1, 1, 100000);
-    const inviteCodesPageSize = parsePaginationValue(req.query.inviteCodesPageSize, 20, 1, 100);
+    const inviteCodesPageSize = parsePaginationValue(req.query.inviteCodesPageSize, 10, 1, 100);
 
     try {
       if (USE_SUPABASE) {
@@ -2856,12 +2856,20 @@ async function start() {
           return;
         }
 
-        if (invite.redeemed_by) {
-          res.status(400).json({ error: 'Only unused invite codes can be deleted' });
-          return;
+        let creditsToReturn = Math.max(0, Number(invite.credits || 0));
+        const redeemedBy = normalizeString(invite.redeemed_by);
+
+        if (redeemedBy) {
+          const userCredits = await db.getUserCredits(redeemedBy);
+          creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
+          if (creditsToReturn > 0) {
+            await db.setUserTotalCredits(
+              redeemedBy,
+              Math.max(userCredits.usedCredits, userCredits.totalCredits - creditsToReturn),
+            );
+          }
         }
 
-        const creditsToReturn = Number(invite.credits || 0);
         await db.deleteInviteCode(code);
         if (creditsToReturn > 0) {
           await db.adjustAdminTotalCredits(creditsToReturn);
@@ -2888,11 +2896,21 @@ async function start() {
           throw new Error('Invite code not found');
         }
 
-        if (normalizeString(invite.redeemed_by)) {
-          throw new Error('Only unused invite codes can be deleted');
+        let creditsToReturn = Math.max(0, Number(invite.credits || 0));
+        const redeemedBy = normalizeString(invite.redeemed_by);
+
+        if (redeemedBy) {
+          const userCredits = getUserCredits(db, redeemedBy);
+          creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
+          if (creditsToReturn > 0) {
+            setUserTotalCredits(
+              db,
+              redeemedBy,
+              Math.max(userCredits.usedCredits, userCredits.totalCredits - creditsToReturn),
+            );
+          }
         }
 
-        const creditsToReturn = Number(invite.credits || 0);
         db.run('DELETE FROM invite_codes WHERE code = ?', [code]);
         if (creditsToReturn > 0) {
           adjustAdminTotalCredits(db, creditsToReturn);
@@ -2907,6 +2925,136 @@ async function start() {
       res.json(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Delete invite code failed';
+      if (message === 'Invite code not found') {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.post('/api/admin/invite-codes/:code/reclaim', requireAuth, requireAdmin, async (req, res) => {
+    const code = normalizeString(req.params.code);
+    const requestedCredits = Math.floor(Number(req.body?.credits));
+
+    if (!code) {
+      res.status(400).json({ error: 'Invite code is required' });
+      return;
+    }
+
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const invite = await db.getInviteCode(code);
+        if (!invite) {
+          res.status(404).json({ error: 'Invite code not found' });
+          return;
+        }
+
+        const currentCredits = Math.max(0, Number(invite.credits || 0));
+        const redeemedBy = normalizeString(invite.redeemed_by);
+        let reclaimableCredits = Math.min(requestedCredits, currentCredits);
+
+        if (reclaimableCredits <= 0) {
+          res.status(400).json({ error: 'No remaining credits can be reclaimed' });
+          return;
+        }
+
+        if (redeemedBy) {
+          const userCredits = await db.getUserCredits(redeemedBy);
+          reclaimableCredits = Math.min(reclaimableCredits, userCredits.remainingCredits);
+          if (reclaimableCredits <= 0) {
+            res.status(400).json({ error: 'No remaining credits can be reclaimed' });
+            return;
+          }
+
+          await db.setUserTotalCredits(
+            redeemedBy,
+            Math.max(userCredits.usedCredits, userCredits.totalCredits - reclaimableCredits),
+          );
+          await db.syncInviteCodeBalanceForUser(redeemedBy);
+        } else {
+          const nextCredits = currentCredits - reclaimableCredits;
+          const nextLowBalanceSince =
+            nextCredits > 0 && nextCredits < INVITE_RECLAIM_THRESHOLD
+              ? invite.low_balance_since || nowIso()
+              : null;
+          await db.updateInviteCodeCredits(code, nextCredits, nextLowBalanceSince);
+        }
+
+        await db.adjustAdminTotalCredits(reclaimableCredits);
+        res.json({
+          ok: true,
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+
+        const invite = getOne<Record<string, unknown>>(
+          db,
+          'SELECT code, credits, redeemed_by, low_balance_since FROM invite_codes WHERE code = ?',
+          [code],
+        );
+
+        if (!invite) {
+          throw new Error('Invite code not found');
+        }
+
+        const currentCredits = Math.max(0, Number(invite.credits || 0));
+        const redeemedBy = normalizeString(invite.redeemed_by);
+        let reclaimableCredits = Math.min(requestedCredits, currentCredits);
+
+        if (reclaimableCredits <= 0) {
+          throw new Error('No remaining credits can be reclaimed');
+        }
+
+        if (redeemedBy) {
+          const userCredits = getUserCredits(db, redeemedBy);
+          reclaimableCredits = Math.min(reclaimableCredits, userCredits.remainingCredits);
+          if (reclaimableCredits <= 0) {
+            throw new Error('No remaining credits can be reclaimed');
+          }
+
+          setUserTotalCredits(
+            db,
+            redeemedBy,
+            Math.max(userCredits.usedCredits, userCredits.totalCredits - reclaimableCredits),
+          );
+          syncInviteCodeBalanceForUser(db, redeemedBy);
+        } else {
+          const nextCredits = currentCredits - reclaimableCredits;
+          const nextLowBalanceSince =
+            nextCredits > 0 && nextCredits < INVITE_RECLAIM_THRESHOLD
+              ? normalizeString(invite.low_balance_since) || nowIso()
+              : null;
+          db.run(
+            'UPDATE invite_codes SET credits = ?, low_balance_since = ? WHERE code = ?',
+            [nextCredits, nextLowBalanceSince, code],
+          );
+        }
+
+        adjustAdminTotalCredits(db, reclaimableCredits);
+
+        return {
+          ok: true,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Reclaim invite credits failed';
       if (message === 'Invite code not found') {
         res.status(404).json({ error: message });
         return;

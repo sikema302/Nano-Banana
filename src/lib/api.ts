@@ -333,6 +333,17 @@ export async function deleteInviteCode(code: string) {
   );
 }
 
+export async function reclaimInviteCodeCredits(code: string, credits: number) {
+  return request<{ ok: boolean; adminCredits: CreditSummary }>(
+    `/api/admin/invite-codes/${encodeURIComponent(code)}/reclaim`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
 export async function moveImage(payload: {
   imageId?: number;
   image?: GeneratedImagePayload;
