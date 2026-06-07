@@ -828,9 +828,9 @@ function AdminView({
   ];
 
   return (
-    <section className="h-full overflow-hidden px-4 py-4 lg:px-5">
-      <div className="grid h-full min-h-0 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
-        <aside className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04)_0%,rgba(255,255,255,0.02)_100%)] p-3">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden px-4 py-4 lg:px-5">
+      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+        <aside className="flex flex-col rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04)_0%,rgba(255,255,255,0.02)_100%)] p-3">
           <div className="mb-4 rounded-[18px] border border-white/8 bg-black/20 p-4">
             <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
             <p className="mt-2 text-lg font-black text-white">后台管理</p>
@@ -858,8 +858,10 @@ function AdminView({
           </div>
         </aside>
 
-        <div className="custom-scrollbar min-h-0 overflow-y-auto overflow-x-hidden pr-1">
-          <div className="grid gap-4">
+        <div className="flex min-h-0 flex-col overflow-hidden pr-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            {section === 'dashboard' ? (
+            <>
             <div className="grid gap-3 xl:grid-cols-4">
               {[
                 { label: '今日生成次数', value: String(todayRecords.length), hint: '按当前记录页统计' },
@@ -874,6 +876,29 @@ function AdminView({
                 </div>
               ))}
             </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <h2 className="text-base font-black text-white">数据概览</h2>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">用户总数</p>
+                  <p className="mt-2 text-2xl font-black text-white">{users.length}</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">当前页邀请码</p>
+                  <p className="mt-2 text-2xl font-black text-white">{inviteCodes.length}</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">当前页记录</p>
+                  <p className="mt-2 text-2xl font-black text-white">{records.length}</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">低积分提醒</p>
+                  <p className="mt-2 text-2xl font-black text-amber-200">{lowCreditUsers.length}</p>
+                </div>
+              </div>
+            </div>
+            </>
+            ) : null}
 
             {loading ? (
               <div className="grid gap-4">
@@ -890,8 +915,8 @@ function AdminView({
               </div>
             ) : null}
 
-            {!loading && (section === 'dashboard' || section === 'invites') ? (
-              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {!loading && section === 'invites' ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">邀请码管理</h2>
@@ -965,10 +990,12 @@ function AdminView({
                   </button>
                 </div>
 
-                <div className="mt-4 overflow-hidden">
+                <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {filteredInviteCodes.length > 0 ? (
+                    <>
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
                     <table className="w-full table-fixed text-left text-xs">
-                      <thead className="text-zinc-500">
+                      <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-10 px-3 py-2 font-medium">
                             <input checked={allSelectableChecked} type="checkbox" onChange={toggleAllInviteCodes} />
@@ -1025,60 +1052,39 @@ function AdminView({
                         })}
                       </tbody>
                     </table>
+                    </div>
+                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                      <span>共 {inviteCodesPage.total} 条邀请码</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={inviteCodesPage.page <= 1}
+                          type="button"
+                          onClick={() => onInviteCodesPageChange(inviteCodesPage.page - 1)}
+                        >
+                          上一页
+                        </button>
+                        <span>{inviteCodesPage.page} / {inviteCodesPage.totalPages}</span>
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={inviteCodesPage.page >= inviteCodesPage.totalPages}
+                          type="button"
+                          onClick={() => onInviteCodesPageChange(inviteCodesPage.page + 1)}
+                        >
+                          下一页
+                        </button>
+                      </div>
+                    </div>
+                    </>
                   ) : (
                     <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无邀请码</div>
                   )}
                 </div>
-
-                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-                  <span>共 {inviteCodesPage.total} 条邀请码</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={inviteCodesPage.page <= 1}
-                      type="button"
-                      onClick={() => onInviteCodesPageChange(inviteCodesPage.page - 1)}
-                    >
-                      上一页
-                    </button>
-                    <span>{inviteCodesPage.page} / {inviteCodesPage.totalPages}</span>
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={inviteCodesPage.page >= inviteCodesPage.totalPages}
-                      type="button"
-                      onClick={() => onInviteCodesPageChange(inviteCodesPage.page + 1)}
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-                  <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={currentUserPage <= 1}
-                      type="button"
-                      onClick={() => setUserPage((current) => Math.max(1, current - 1))}
-                    >
-                      上一页
-                    </button>
-                    <span>{currentUserPage} / {userTotalPages}</span>
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={currentUserPage >= userTotalPages}
-                      type="button"
-                      onClick={() => setUserPage((current) => Math.min(userTotalPages, current + 1))}
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
               </div>
             ) : null}
 
-            {!loading && (section === 'dashboard' || section === 'users') ? (
-              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {!loading && section === 'users' ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">用户信息与 Key 使用页</h2>
@@ -1095,10 +1101,12 @@ function AdminView({
                   />
                 </div>
 
-                <div className="mt-4 overflow-hidden">
+                <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {searchableUsers.length > 0 ? (
+                    <>
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
                     <table className="w-full table-fixed text-left text-xs">
-                      <thead className="text-zinc-500">
+                      <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
                           <th className="px-3 py-2 font-medium">用户 ID</th>
@@ -1157,37 +1165,39 @@ function AdminView({
                         })}
                       </tbody>
                     </table>
+                    </div>
+                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                      <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={currentUserPage <= 1}
+                          type="button"
+                          onClick={() => setUserPage((current) => Math.max(1, current - 1))}
+                        >
+                          上一页
+                        </button>
+                        <span>{currentUserPage} / {userTotalPages}</span>
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={currentUserPage >= userTotalPages}
+                          type="button"
+                          onClick={() => setUserPage((current) => Math.min(userTotalPages, current + 1))}
+                        >
+                          下一页
+                        </button>
+                      </div>
+                    </div>
+                    </>
                   ) : (
                     <div className="py-10 text-center text-sm text-zinc-500">暂无符合条件的用户</div>
                   )}
                 </div>
-                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-                  <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={currentUserPage <= 1}
-                      type="button"
-                      onClick={() => setUserPage((current) => Math.max(1, current - 1))}
-                    >
-                      上一页
-                    </button>
-                    <span>{currentUserPage} / {userTotalPages}</span>
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={currentUserPage >= userTotalPages}
-                      type="button"
-                      onClick={() => setUserPage((current) => Math.min(userTotalPages, current + 1))}
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
               </div>
             ) : null}
 
-            {!loading && (section === 'dashboard' || section === 'records') ? (
-              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {!loading && section === 'records' ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">生图记录页</h2>
@@ -1248,10 +1258,12 @@ function AdminView({
                   </div>
                 </div>
 
-                <div className="mt-4 overflow-hidden">
+                <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {filteredRecords.length > 0 ? (
+                    <>
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
                     <table className="w-full table-fixed text-left text-xs">
-                      <thead className="text-zinc-500">
+                      <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-24 px-3 py-2 font-medium">图片</th>
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -1285,57 +1297,41 @@ function AdminView({
                         ))}
                       </tbody>
                     </table>
+                    </div>
+                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                      <span>第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={recordsPage.page <= 1}
+                          type="button"
+                          onClick={() => onRecordsPageChange(recordsPage.page - 1)}
+                        >
+                          上一页
+                        </button>
+                        <span>{recordsPage.page} / {recordsPage.totalPages}</span>
+                        <button
+                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+                          disabled={recordsPage.page >= recordsPage.totalPages}
+                          type="button"
+                          onClick={() => onRecordsPageChange(recordsPage.page + 1)}
+                        >
+                          下一页
+                        </button>
+                      </div>
+                    </div>
+                    </>
                   ) : (
                     <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无生图记录</div>
                   )}
-                </div>
-
-                <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
-                  <span>第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={recordsPage.page <= 1}
-                      type="button"
-                      onClick={() => onRecordsPageChange(recordsPage.page - 1)}
-                    >
-                      上一页
-                    </button>
-                    <span>{recordsPage.page} / {recordsPage.totalPages}</span>
-                    <button
-                      className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                      disabled={recordsPage.page >= recordsPage.totalPages}
-                      type="button"
-                      onClick={() => onRecordsPageChange(recordsPage.page + 1)}
-                    >
-                      下一页
-                    </button>
-                  </div>
                 </div>
               </div>
             ) : null}
 
             {!loading && section === 'settings' ? (
-              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div className="flex flex-col rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <h2 className="text-base font-black text-white">设置</h2>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">用户总数</p>
-                    <p className="mt-2 text-2xl font-black text-white">{users.length}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">当前页邀请码</p>
-                    <p className="mt-2 text-2xl font-black text-white">{inviteCodes.length}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">当前页记录</p>
-                    <p className="mt-2 text-2xl font-black text-white">{records.length}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">低积分提醒</p>
-                    <p className="mt-2 text-2xl font-black text-amber-200">{lowCreditUsers.length}</p>
-                  </div>
-                </div>
+                <p className="mt-2 text-sm text-zinc-500">设置内容已合并到看板页面</p>
               </div>
             ) : null}
           </div>
