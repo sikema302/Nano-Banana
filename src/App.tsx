@@ -104,9 +104,9 @@ const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
 ];
 
 const gptImageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
-  { value: 'STANDARD', label: '\u6807\u51c6', hint: '20 \u79ef\u5206' },
-  { value: '2K', label: '2K', hint: '28 \u79ef\u5206' },
-  { value: '4K', label: '4K', hint: '36 \u79ef\u5206' },
+  { value: 'STANDARD', label: '\u6807\u51c6', hint: '' },
+  { value: '2K', label: '2K', hint: '' },
+  { value: '4K', label: '4K', hint: '' },
 ];
 
 const gptQualityOptions: Array<{ value: GptQualityOption; label: string }> = [
@@ -119,8 +119,6 @@ const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: str
   { value: '2K', label: '2K', hint: '\u7a33\u5b9a\u9ad8\u6e05\u8f93\u51fa' },
   { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
 ];
-
-const promptTemplate = ['\u4e3b\u4f53\uff1a', '\u573a\u666f\uff1a', '\u98ce\u683c\uff1a', '\u955c\u5934\uff1a', '\u5149\u7ebf\uff1a', '\u7ec6\u8282\uff1a'].join('\n');
 
 function fileToBase64(file: File) {
 
@@ -217,7 +215,7 @@ function CreditsSummary({
           type="button"
           onClick={onOpenPurchase}
         >
-          在线购买积分(25%优惠)
+          在线购买积分(20%优惠)
         </button>
       </div>
       {selectedModel ? (
@@ -247,23 +245,23 @@ function StageCard({
   onPreview?: (item: DisplayImage) => void;
 }) {
   return (
-    <article className="stage-card relative flex h-[140px] overflow-hidden rounded-[22px] border border-white/8 bg-[#080808] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+    <article className="stage-card relative flex h-[118px] overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
       <div
         className={`relative h-full w-[112px] shrink-0 overflow-hidden rounded-[18px] border ${
-          loading ? 'border-sky-400/25 bg-sky-400/10' : 'border-white/8 bg-black/45'
+          loading ? 'border-pink-300/25 bg-pink-300/10' : 'border-white/8 bg-black/45'
         }`}
       >
         {loading ? (
           <div className="generation-orbit flex h-full w-full items-center justify-center">
-            <Sparkles size={18} className="text-sky-100" />
+            <Sparkles size={18} className="text-pink-100" />
           </div>
         ) : item ? (
           <button className="h-full w-full" type="button" onClick={() => onPreview?.(item)}>
             <img alt={item.prompt} className="h-full w-full object-cover" src={item.imageUrl} />
           </button>
         ) : (
-          <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-xs font-semibold text-zinc-400">
-            灶台空闲中
+          <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-semibold text-zinc-400">
+            Empty
           </div>
         )}
       </div>
@@ -271,18 +269,18 @@ function StageCard({
       {loading ? (
         <div className="ml-3 flex min-w-0 flex-1 flex-col justify-center rounded-[18px] border border-white/6 bg-black/35 px-4">
           <div className="flex items-center gap-3 text-sm font-semibold text-white">
-            <LoaderCircle className="animate-spin text-sky-200" size={16} />
-            等待下单...
+            <LoaderCircle className="animate-spin text-pink-200" size={16} />
+            Preparing your canvas...
           </div>
           <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-            <div className="generation-scan h-full w-1/2 rounded-full bg-[linear-gradient(90deg,transparent,#38bdf8,#f8fafc,transparent)]" />
+            <div className="generation-scan h-full w-1/2 rounded-full bg-[linear-gradient(90deg,transparent,#ff8fcd,#fff1f8,transparent)]" />
           </div>
         </div>
       ) : item ? (
         <div className="ml-3 flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3">
           <div className="min-w-0">
             <button
-              className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-sky-200"
+              className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-pink-200"
               type="button"
               onClick={() => onPreview?.(item)}
             >
@@ -304,7 +302,7 @@ function StageCard({
                 满意
               </button>
               <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-fuchsia-400/25 bg-fuchsia-500/10 px-2.5 py-1.5 text-xs text-fuchsia-100 transition hover:bg-fuchsia-500/20"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-pink-400/25 bg-pink-500/10 px-2.5 py-1.5 text-xs text-pink-100 transition hover:bg-pink-500/20"
                 type="button"
                 onClick={() => onSave?.('backup')}
               >
@@ -331,8 +329,8 @@ function StageCard({
           ) : null}
         </div>
       ) : (
-        <div className="ml-3 flex min-w-0 flex-1 items-center rounded-[18px] border border-white/6 bg-black/35 px-4 text-sm font-semibold text-white">
-          等待下单...
+        <div className="ml-3 flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 text-sm font-semibold text-pink-100">
+          Ready for your next prompt
         </div>
       )}
     </article>
@@ -1351,8 +1349,7 @@ export default function App() {
   const [gptQuality, setGptQuality] = useState<GptQualityOption>('medium');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
   const [batchCount, setBatchCount] = useState(1);
-  const [autoPlace, setAutoPlace] = useState(true);
-  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [autoPlace] = useState(true);
   const [draggingReferences, setDraggingReferences] = useState(false);
   const [references, setReferences] = useState<UploadPreview[]>([]);
   const [favorites, setFavorites] = useState<SavedImage[]>([]);
@@ -1379,10 +1376,7 @@ export default function App() {
   const [healthText, setHealthText] = useState('正在检查本地服务...');
   const [healthError, setHealthError] = useState('');
   const [notice, setNotice] = useState('');
-  const [creditsPurchaseOpen, setCreditsPurchaseOpen] = useState(false);
-  const [copyToastVisible, setCopyToastVisible] = useState(false);
-  const [purchaseRedeemCode, setPurchaseRedeemCode] = useState('');
-  const [purchaseRedeemLoading, setPurchaseRedeemLoading] = useState(false);
+  const [wechatCopied, setWechatCopied] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'invite'>('login');
   const [authLoading, setAuthLoading] = useState(false);
@@ -1475,10 +1469,6 @@ export default function App() {
 
     const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file)));
     setReferences((current) => [...current, ...next].slice(0, MAX_REFERENCES));
-  }
-
-  function applyPromptTemplate() {
-    setPrompt((current) => (current.trim() ? `${current.trim()}\n\n${promptTemplate}` : promptTemplate));
   }
 
   function commitGeneratedImages(nextImages: DisplayImage[]) {
@@ -1635,35 +1625,39 @@ export default function App() {
     setReferences((current) => current.filter((item) => item.id !== id));
   }
 
-  async function handleCopyWechat() {
-    try {
-      await navigator.clipboard.writeText('lzp983813676');
-      setCopyToastVisible(false);
-      window.setTimeout(() => setCopyToastVisible(true), 10);
-      window.setTimeout(() => setCopyToastVisible(false), 2200);
-    } catch {
-      setNotice('复制失败，请手动添加微信：lzp983813676');
-    }
+  function openPurchasePage() {
+    window.open('https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer');
   }
 
-  async function handlePurchaseRedeem() {
-    const code = purchaseRedeemCode.trim().toUpperCase();
-    if (!code) {
-      setNotice('请输入积分兑换码');
-      return;
-    }
+  async function handleCopyWechat() {
+    const wechatId = 'lzp983813676';
 
-    setPurchaseRedeemLoading(true);
     try {
-      const nextUser = await loginWithInvite({ code });
-      setUser(nextUser);
-      setCreditsPurchaseOpen(false);
-      setPurchaseRedeemCode('');
-      setNotice(`兑换成功，欢迎回来：${nextUser.username}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '兑换失败');
-    } finally {
-      setPurchaseRedeemLoading(false);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(wechatId);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = wechatId;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error('copy_failed');
+        }
+      }
+
+      setWechatCopied(false);
+      window.setTimeout(() => setWechatCopied(true), 10);
+      window.setTimeout(() => setWechatCopied(false), 1800);
+      setNotice(`已复制客服微信：${wechatId}`);
+    } catch {
+      setNotice(`复制失败，请手动添加微信：${wechatId}`);
     }
   }
 
@@ -1968,7 +1962,7 @@ export default function App() {
     setNotice('已退出登录');
   }
 
-  const stageCards = Array.from({ length: 8 }, (_, index) =>
+  const stageCards = Array.from({ length: 4 }, (_, index) =>
     index === 0 ? currentImage : historyQueue[index - 1] || null,
   );
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
@@ -2146,7 +2140,7 @@ export default function App() {
                 {healthError}
               </div>
             ) : null}
-            <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={() => setCreditsPurchaseOpen(true)} />
+            <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={openPurchasePage} />
 
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2243,11 +2237,11 @@ export default function App() {
   );
 
   return (
-    <main className="h-screen overflow-hidden bg-[#060606] text-white">
-      <div className="flex h-screen flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)]">
-        <header className="shrink-0 flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-3 py-3 sm:px-5">
+    <main className="h-[100dvh] overflow-hidden bg-[#060606] text-white">
+      <div className="flex h-[100dvh] flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)]">
+        <header className="shrink-0 flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
-            <div className="h-7 w-7 rounded-lg bg-[linear-gradient(135deg,#6d2fff_0%,#8a49ff_42%,#2ad4ff_100%)]" />
+            <div className="h-8 w-8 rounded-xl border border-pink-300/25 bg-[linear-gradient(135deg,#ffb3da_0%,#ff8fcd_45%,#db5ca8_100%)] shadow-[0_0_24px_rgba(255,143,205,0.32)]" />
             <div className="flex items-end gap-2">
               <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
               <span className="pb-0.5 text-sm text-zinc-500">/ Studio</span>
@@ -2277,11 +2271,33 @@ export default function App() {
           </nav>
 
           <div className="flex items-center gap-3">
+            <div className="hidden items-center overflow-hidden rounded-2xl border border-pink-300/20 bg-[linear-gradient(135deg,rgba(255,143,205,0.14)_0%,rgba(219,92,168,0.08)_100%)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:inline-flex">
+              <div className="flex items-center gap-2 border-r border-pink-300/12 px-3 py-2.5">
+                <div className="h-2 w-2 rounded-full bg-pink-300 shadow-[0_0_12px_rgba(255,143,205,0.7)]" />
+                <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-pink-200/75">Support</span>
+              </div>
+              <div className="flex items-center gap-3 px-3 py-2.5">
+                <span className="text-sm font-black text-white">微信</span>
+                <span className="rounded-lg bg-white/[0.03] px-2.5 py-1 text-sm font-black tracking-[0.06em] text-pink-50">lzp983813676</span>
+                <button
+                  className={
+                    wechatCopied
+                      ? 'inline-flex items-center gap-1.5 rounded-xl border border-emerald-300/20 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-100 transition'
+                      : 'inline-flex items-center gap-1.5 rounded-xl border border-pink-300/20 bg-pink-500/10 px-2.5 py-1.5 text-[11px] font-bold text-pink-100 transition hover:bg-pink-500/20'
+                  }
+                  type="button"
+                  onClick={() => void handleCopyWechat()}
+                >
+                  <Copy size={12} />
+                  {wechatCopied ? '已复制' : '复制'}
+                </button>
+              </div>
+            </div>
             {/* 购买积分按钮 - 头部导航栏 */}
             <button
-              className="hidden rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-400 transition hover:bg-rose-500/20 hover:text-rose-300 md:block"
+              className="hidden rounded-xl border border-pink-300/35 bg-[linear-gradient(135deg,#ff8fcd_0%,#db5ca8_100%)] px-3.5 py-2 text-xs font-black text-white shadow-[0_10px_22px_rgba(219,92,168,0.24)] transition hover:brightness-110 md:block"
               type="button"
-              onClick={() => setCreditsPurchaseOpen(true)}
+              onClick={openPurchasePage}
             >
               购买积分
             </button>
@@ -2323,45 +2339,33 @@ export default function App() {
               : 'min-h-0 flex-1 overflow-hidden'
           }
         >
-          <aside className={activeTab === 'create' ? 'h-full overflow-hidden border-r border-white/8 p-3' : 'hidden'}>
-            <form className="custom-scrollbar flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1" onSubmit={handleGenerate}>
-              <section className="space-y-2.5">
+          <aside className={activeTab === 'create' ? 'h-full overflow-hidden border-r border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.015)_0%,rgba(255,255,255,0)_100%)] px-3 pb-[calc(env(safe-area-inset-bottom)+8px)] pt-2' : 'hidden'}>
+            <form className="flex h-full min-h-0 flex-col gap-2.5 overflow-hidden pr-1" onSubmit={handleGenerate}>
+              <section className="space-y-2">
                 <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {models.map((item) => {
-                    const active = selectedModel === item.id;
-
-                    return (
-                      <button
-                        key={item.id}
-                        className={
-                          active
-                            ? 'rounded-2xl border border-[#ff8b2f] bg-[linear-gradient(180deg,#ff7a12_0%,#f05f00_100%)] px-3 py-3.5 text-white shadow-[0_10px_24px_rgba(255,111,12,0.22)]'
-                            : 'rounded-2xl border border-white/12 bg-[#080808] px-3 py-3.5 text-white transition hover:border-white/25 hover:bg-white/[0.03]'
-                        }
-                        type="button"
-                        onClick={() => handleModelSelect(item.id)}
-                      >
-                        <span className="block truncate text-[17px] font-black leading-none">{item.name}</span>
-                        <span className={active ? 'mt-1.5 block truncate text-[12px] font-bold text-orange-100' : 'mt-1.5 block truncate text-[12px] font-bold text-zinc-500'}>
-                          {item.description}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <select
+                  className="w-full rounded-2xl border border-white/12 bg-[#080808] px-4 py-2.5 text-[13px] font-semibold text-white outline-none transition focus:border-[#ff8fcd]/45"
+                  value={selectedModel}
+                  onChange={(event) => handleModelSelect(event.target.value)}
+                >
+                  {models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
               </section>
 
-              <section className="space-y-3">
-                <div className="flex items-center justify-between gap-3 text-[13px] font-extrabold text-zinc-400">
+              <section className="space-y-2">
+                <div className="flex items-center justify-between gap-3 text-[12px] font-extrabold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09\uff08\u53ef\u4ece\u6587\u4ef6\u5939\u62d6\u62fd\u5230\u6b64\u533a\u57df\uff09'}</span>
-                  <span className="shrink-0 text-[12px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
+                  <span className="shrink-0 text-[11px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
                 </div>
                 <div
                   className={
                     draggingReferences
-                      ? 'rounded-2xl border border-[#ff8b2f]/50 bg-[#120b05] p-3 shadow-[inset_0_0_0_1px_rgba(255,139,47,0.16)]'
-                      : 'rounded-2xl border border-white/8 bg-[#050505] p-3'
+                      ? 'rounded-2xl border border-[#ff8fcd]/45 bg-[#130a12] p-2 shadow-[inset_0_0_0_1px_rgba(255,143,205,0.14)]'
+                      : 'rounded-2xl border border-white/8 bg-[#050505] p-2'
                   }
                   onDragEnter={(event) => {
                     event.preventDefault();
@@ -2382,17 +2386,17 @@ export default function App() {
                     void handleReferenceDrop(Array.from(event.dataTransfer.files || []));
                   }}
                 >
-                  <div className="flex flex-wrap gap-2.5">
-                    <label className="flex h-[76px] w-[76px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/16 bg-[#080808] text-zinc-500 transition hover:border-[#ff8b2f]/45 hover:text-white">
+                  <div className="flex flex-wrap gap-2">
+                    <label className="flex h-[56px] w-[56px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/16 bg-[#080808] text-zinc-500 transition hover:border-[#ff8fcd]/45 hover:text-white">
                       <input className="hidden" type="file" accept="image/*" multiple onChange={handleReferenceUpload} />
-                      <ImagePlus size={21} />
-                      <span className="mt-1.5 text-xs font-bold">{'\u6dfb\u52a0'}</span>
+                      <ImagePlus size={18} />
+                      <span className="mt-1 text-[11px] font-bold">{'\u6dfb\u52a0'}</span>
                     </label>
 
                     {references.map((item) => (
                       <button
                         key={item.id}
-                        className="group relative h-[76px] w-[76px] overflow-hidden rounded-2xl border border-white/10 bg-[#101010]"
+                        className="group relative h-[56px] w-[56px] overflow-hidden rounded-2xl border border-white/10 bg-[#101010]"
                         type="button"
                         onClick={() => removeReference(item.id)}
                       >
@@ -2406,41 +2410,25 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="space-y-3">
-                <div className="flex items-center justify-between text-[13px] font-extrabold text-zinc-400">
-                  <div className="flex items-center gap-3">
-                    <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
-                    <button className="text-[13px] text-[#ff9a2a] transition hover:text-[#ffb257]" type="button" onClick={applyPromptTemplate}>
-                      {'\u6211\u7684\u6a21\u7248'}
-                    </button>
-                  </div>
-                  <span className="text-[12px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
+              <section className="space-y-2">
+                <div className="flex items-center justify-between text-[12px] font-extrabold text-zinc-400">
+                  <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
+                  <span className="text-[11px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
                 </div>
-                <div className="relative">
+                <div>
                   <textarea
-                    className={
-                      promptExpanded
-                        ? 'min-h-[260px] w-full rounded-2xl border border-white/10 bg-[#050505] px-4 py-4 pr-14 text-[14px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8b2f]/45'
-                        : 'min-h-[150px] w-full rounded-2xl border border-white/10 bg-[#050505] px-4 py-4 pr-14 text-[14px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8b2f]/45'
-                    }
+                    className="h-[96px] w-full resize-none rounded-2xl border border-white/10 bg-[#050505] px-4 py-3 text-[13px] leading-5 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8fcd]/45"
                     placeholder="\u8bf7\u8be6\u7ec6\u63cf\u8ff0\u60a8\u60f3\u751f\u6210\u7684\u753b\u9762..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
                   />
-                  <button
-                    className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-lg text-zinc-300 transition hover:border-white/20 hover:text-white"
-                    type="button"
-                    onClick={() => setPromptExpanded((current) => !current)}
-                    >
-                      {'\u2197'}
-                    </button>
                 </div>
               </section>
 
-              <div className={isNanoBananaPro ? 'grid gap-3 xl:grid-cols-[1.15fr_1fr]' : 'space-y-3'}>
+              <div className={isNanoBananaPro ? 'grid gap-2 xl:grid-cols-[1.15fr_1fr]' : 'space-y-2'}>
                 <section className="space-y-2">
-                  <div className="text-[13px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
-                  <div className={isNanoBananaPro ? 'grid grid-cols-2 gap-2.5' : 'grid grid-cols-3 gap-2.5'}>
+                  <div className="text-[12px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
+                  <div className={isNanoBananaPro ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-3 gap-2'}>
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
 
@@ -2449,8 +2437,8 @@ export default function App() {
                           key={item.value}
                           className={
                             active
-                              ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
-                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                              ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
+                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
                           }
                           type="button"
                           onClick={() => {
@@ -2464,10 +2452,12 @@ export default function App() {
                             }
                           }}
                         >
-                          <span className="block text-[15px] font-black leading-none">{item.label}</span>
-                          <span className={active ? 'mt-1.5 block truncate text-[11px] font-semibold text-zinc-600' : 'mt-1.5 block truncate text-[11px] font-semibold text-zinc-500'}>
-                            {item.hint}
-                          </span>
+                          <span className="block text-[13px] font-black leading-none">{item.label}</span>
+                          {item.hint ? (
+                            <span className={active ? 'mt-1 block truncate text-[10px] font-semibold text-[#744960]' : 'mt-1 block truncate text-[10px] font-semibold text-zinc-500'}>
+                              {item.hint}
+                            </span>
+                          ) : null}
                         </button>
                       );
                     })}
@@ -2476,58 +2466,58 @@ export default function App() {
 
                 {showGptQuality ? (
                   <section className="space-y-2">
-                    <div className="text-[13px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
-                    <div className="grid grid-cols-3 gap-2.5">
+                    <div className="text-[12px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
+                    <div className="grid grid-cols-3 gap-2">
                       {gptQualityOptions.map((item) => {
                         const active = gptQuality === item.value;
 
                         return (
                           <button
                             key={item.value}
-                            className={
-                              active
-                                ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
-                                : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
-                            }
-                            type="button"
-                            onClick={() => setGptQuality(item.value)}
-                          >
-                            <span className="block text-[15px] font-black leading-none">{item.label}</span>
-                          </button>
-                        );
-                      })}
+                          className={
+                            active
+                                ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
+                                : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                          }
+                          type="button"
+                          onClick={() => setGptQuality(item.value)}
+                        >
+                          <span className="block text-[13px] font-black leading-none">{item.label}</span>
+                        </button>
+                      );
+                    })}
                     </div>
                   </section>
                 ) : null}
 
                 {isNanoBananaPro ? (
                   <section className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-[13px] font-extrabold text-zinc-400">
+                    <div className="flex items-center gap-1.5 text-[12px] font-extrabold text-zinc-400">
                       <span>{'AI\u589e\u5f3a'}</span>
                       <Info size={13} className="text-zinc-500" />
                     </div>
-                    <div className="grid grid-cols-2 gap-2.5">
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         className={
                           optimizeChineseText
-                            ? 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
-                            : 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
+                            ? 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                            : 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(false)}
                       >
-                          <span className="block text-[15px] font-black leading-none">{'\u5173'}</span>
+                          <span className="block text-[13px] font-black leading-none">{'\u5173'}</span>
                       </button>
                       <button
                         className={
                           optimizeChineseText
-                            ? 'rounded-xl bg-white px-3 py-3 text-black shadow-[0_10px_22px_rgba(255,255,255,0.1)]'
-                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-3 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                            ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
+                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(true)}
                       >
-                          <span className="block text-[15px] font-black leading-none">{'\u5f00'}</span>
+                          <span className="block text-[13px] font-black leading-none">{'\u5f00'}</span>
                       </button>
                     </div>
                   </section>
@@ -2535,19 +2525,19 @@ export default function App() {
               </div>
 
               <section className="space-y-2">
-                <div className="text-[13px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
-                <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
+                <div className="text-[12px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
+                <div className="grid grid-cols-4 gap-1.5 md:grid-cols-8">
                   {dimensionOptions.map(({ value, label }) => {
                     const active = value === dimensions;
 
                     return (
                       <button
                         key={value}
-                        className={
-                          active
-                            ? 'rounded-xl bg-white px-2.5 py-2.5 text-[13px] font-black text-black shadow-[0_8px_18px_rgba(255,255,255,0.09)]'
-                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-2.5 py-2.5 text-[13px] font-black text-zinc-400 transition hover:border-white/20 hover:text-white'
-                        }
+                          className={
+                            active
+                              ? 'rounded-xl bg-[#ffd9ef] px-2.5 py-2 text-[12px] font-black text-[#341425] shadow-[0_8px_18px_rgba(255,217,239,0.08)]'
+                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-2.5 py-2 text-[12px] font-black text-zinc-400 transition hover:border-white/20 hover:text-white'
+                          }
                         type="button"
                         onClick={() => setDimensions(value)}
                       >
@@ -2558,71 +2548,37 @@ export default function App() {
                 </div>
               </section>
 
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[14px] font-extrabold text-zinc-400">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] font-extrabold text-zinc-400">
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
                   </span>
-                  <button className="text-[#18c8ff] transition hover:text-[#5adaff]" type="button" onClick={() => setCreditsPurchaseOpen(true)}>
-                    {'\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206(25%\u4f18\u60e0)'}
+                  <button className="text-[#ff8fcd] transition hover:text-[#ffb0dd]" type="button" onClick={openPurchasePage}>
+                    {'\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206(20%\u4f18\u60e0)'}
                   </button>
-                </div>
-                <div className="space-y-1.5 text-[13px] leading-5 text-zinc-500">
-                  {user ? (
-                    <p>{'\u5f53\u524d\u8d26\u53f7\uff1a'}{user.username}{'\u3002\u4f60\u73b0\u5728\u53ef\u4ee5\u751f\u6210\u3001\u6536\u85cf\u3001\u5907\u4efd\u548c\u4e22\u5f03\u56fe\u7247\u3002'}</p>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span>{'\u8bf7\u5148\u767b\u5f55\u6216\u586b\u5199\u9080\u8bf7\u7801\u540e\u518d\u751f\u6210\u56fe\u7247\u3002'}</span>
-                      <button
-                        className="font-semibold text-sky-400 transition hover:text-sky-300"
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('login');
-                          setAuthOpen(true);
-                        }}
-                      >
-                        {'\u53bb\u767b\u5f55'}
-                      </button>
-                      <button
-                        className="font-semibold text-sky-400 transition hover:text-sky-300"
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('invite');
-                          setAuthOpen(true);
-                        }}
-                      >
-                        {'\u586b\u9080\u8bf7\u7801'}
-                      </button>
-                    </div>
-                  )}
-                  <p>{hasEnoughCredits ? healthText : '\u5f53\u524d\u79ef\u5206\u5df2\u7528\u5b8c\uff0c\u6682\u65f6\u65e0\u6cd5\u7ee7\u7eed\u751f\u6210\u56fe\u7247\u3002'}</p>
-                  {loadingUserData ? <p>{'\u6b63\u5728\u540c\u6b65\u4f60\u7684\u56fe\u7247\u6570\u636e...'}</p> : null}
                 </div>
               </div>
 
-              {notice ? (
-                <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-100">{notice}</div>
-              ) : null}
               {healthError ? (
-                <div className="rounded-[24px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{healthError}</div>
+                <div className="rounded-[20px] border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-[12px] text-rose-100">{healthError}</div>
               ) : null}
 
-              <div className="mt-auto grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
-                <div className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]">
+              <div className="mt-auto grid gap-2.5 xl:grid-cols-[200px_minmax(0,1fr)]">
+                <div className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[14px] font-black text-white">{'\u6570\u91cf'}</span>
-                    <div className="flex items-center overflow-hidden rounded-xl border border-[#8b4a15] bg-[#2d190c]">
+                    <span className="text-[13px] font-black text-white">{'\u6570\u91cf'}</span>
+                    <div className="flex items-center overflow-hidden rounded-xl border border-[#db5ca8] bg-[#341625]">
                       <button
-                        className="flex h-9 w-9 items-center justify-center text-[#f3c58f] transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-9 w-9 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
                         type="button"
                         disabled={batchCount <= 1}
                         onClick={() => setBatchCount((current) => Math.max(1, current - 1))}
                       >
                         <Minus size={15} />
                       </button>
-                      <span className="flex h-9 w-10 items-center justify-center border-x border-[#8b4a15] text-[15px] font-black text-white">{batchCount}</span>
+                      <span className="flex h-9 w-10 items-center justify-center border-x border-[#db5ca8] text-[14px] font-black text-white">{batchCount}</span>
                       <button
-                        className="flex h-9 w-9 items-center justify-center text-[#f3c58f] transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-9 w-9 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
                         type="button"
                         disabled={batchCount >= 9}
                         onClick={() => setBatchCount((current) => Math.min(9, current + 1))}
@@ -2631,31 +2587,10 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-
-                  <div className="mt-3.5 flex items-center justify-between">
-                    <span className="text-[14px] font-black text-white">{'\u81ea\u52a8\u4e0a\u684c'}</span>
-                    <button
-                      className={
-                        autoPlace
-                          ? 'relative h-8 w-14 rounded-full border border-white/12 bg-white/10 transition'
-                          : 'relative h-8 w-14 rounded-full border border-white/12 bg-white/5 transition'
-                      }
-                      type="button"
-                      onClick={() => setAutoPlace((current) => !current)}
-                    >
-                      <span
-                        className={
-                          autoPlace
-                            ? 'absolute left-[27px] top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-white shadow-[0_4px_10px_rgba(255,255,255,0.24)] transition'
-                            : 'absolute left-[3px] top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-white shadow-[0_4px_10px_rgba(255,255,255,0.14)] transition'
-                        }
-                      />
-                    </button>
-                  </div>
                 </div>
 
                 <button
-                  className="flex min-h-[92px] items-center justify-center gap-2.5 rounded-2xl bg-[linear-gradient(90deg,#8f4100_0%,#aa5200_100%)] px-5 py-4 text-[18px] font-black text-white shadow-[0_16px_30px_rgba(148,71,0,0.28)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex min-h-[76px] items-center justify-center gap-2.5 rounded-2xl bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-5 py-3.5 text-[16px] font-black text-white shadow-[0_16px_30px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={loading || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
@@ -2667,8 +2602,8 @@ export default function App() {
           </aside>
 
           {activeTab === 'create' ? (
-            <section className="min-h-0 border-r border-white/8 px-5 py-4">
-              <div className="custom-scrollbar grid h-full auto-rows-[140px] gap-3 overflow-auto pr-1">
+            <section className="min-h-0 border-r border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-5 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-4">
+              <div className="grid h-full auto-rows-[118px] gap-3 overflow-hidden pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
@@ -2704,7 +2639,7 @@ export default function App() {
             />
           )}
 
-          <aside className={activeTab === 'create' ? 'h-full overflow-hidden p-4' : 'hidden'}>
+          <aside className={activeTab === 'create' ? 'h-full overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-4' : 'hidden'}>
             <div className="grid h-full content-start gap-5">
             <SidePanel
               title="收藏区"
@@ -2801,83 +2736,6 @@ export default function App() {
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-4">
               <img alt={previewImage.prompt} className="max-h-[78vh] max-w-full object-contain" src={previewImage.imageUrl} />
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {creditsPurchaseOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/78 px-4 backdrop-blur-sm">
-          <button className="absolute inset-0" type="button" onClick={() => setCreditsPurchaseOpen(false)} />
-          <div className="relative z-10 w-full max-w-[640px] rounded-[38px] border border-white/10 bg-[#09090b] px-6 py-7 shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:px-8 sm:py-8">
-            {copyToastVisible ? (
-              <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
-                <div className="flex items-center gap-3 rounded-[22px] border border-emerald-400/20 bg-[#07372d] px-6 py-3 text-[15px] font-black text-emerald-100 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-                  <Copy size={22} className="text-[#67f0c8]" />
-                  <span>已复制微信号</span>
-                </div>
-              </div>
-            ) : null}
-            <div className="flex items-start justify-between gap-4">
-              <h2 className="max-w-[420px] text-[28px] font-black tracking-tight text-white sm:text-[34px] sm:leading-[1.08]">
-                在线购买积分(25%优惠)
-              </h2>
-              <button
-                className="rounded-2xl p-2 text-zinc-500 transition hover:text-white"
-                type="button"
-                onClick={() => setCreditsPurchaseOpen(false)}
-              >
-                <X size={24} />
-              </button>
-            </div>
-
-            <div className="mt-7 rounded-[26px] border border-cyan-500/35 bg-[#0a2028] px-6 py-6 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.08)]">
-              <div className="flex flex-wrap items-center gap-3 text-[17px] font-black text-white">
-                <span>中国区客服微信：</span>
-                <span className="text-[18px] text-sky-300">lzp983813676</span>
-                <button
-                  className="rounded-full border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-sm font-bold text-sky-100 transition hover:bg-sky-500/20"
-                  type="button"
-                  onClick={() => void handleCopyWechat()}
-                >
-                  复制
-                </button>
-              </div>
-
-              <p className="mt-6 text-[18px] font-black text-white">现可自助购买积分！</p>
-              <p className="mt-4 max-w-[430px] text-[17px] font-bold leading-8 text-zinc-100">
-                降价公告：加量不加价！相同价格比原来多增加25%的积分！
-              </p>
-
-              <div className="mt-6">
-                <button
-                  className="inline-flex items-center rounded-full border border-amber-500/45 bg-[#4a2d14] px-6 py-3 text-[16px] font-black text-amber-50 transition hover:bg-[#5a3517]"
-                  type="button"
-                  onClick={() => window.open('https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer')}
-                >
-                  去购买
-                </button>
-              </div>
-            </div>
-
-            {/* <div className="mt-7 rounded-[26px] border border-amber-500/25 bg-[#341a0b] px-6 py-5 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.06)]">
-              <p className="text-[18px] font-black text-amber-50">积分兑换</p>
-              <div className="mt-5 flex items-center gap-4">
-                <input
-                  className="h-14 flex-1 rounded-[18px] border border-white/10 bg-[#201108] px-5 text-[16px] font-semibold text-white outline-none transition placeholder:text-zinc-500 focus:border-amber-500/30"
-                  placeholder="请输入积分兑换码"
-                  value={purchaseRedeemCode}
-                  onChange={(event) => setPurchaseRedeemCode(event.target.value.toUpperCase())}
-                />
-                <button
-                  className="h-14 min-w-[96px] rounded-full bg-white px-6 text-[16px] font-black text-[#2d190c] transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  type="button"
-                  disabled={purchaseRedeemLoading}
-                  onClick={() => void handlePurchaseRedeem()}
-                >
-                  {purchaseRedeemLoading ? '兑换中' : '兑换'}
-                </button>
-              </div>
-            </div> */}
           </div>
         </div>
       ) : null}
