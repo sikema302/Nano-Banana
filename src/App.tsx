@@ -245,9 +245,9 @@ function StageCard({
   onPreview?: (item: DisplayImage) => void;
 }) {
   return (
-    <article className="stage-card relative flex h-[118px] overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+    <article className="stage-card relative flex min-h-[118px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[118px] sm:flex-row sm:p-3">
       <div
-        className={`relative h-full w-[112px] shrink-0 overflow-hidden rounded-[18px] border ${
+        className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[112px] ${
           loading ? 'border-pink-300/25 bg-pink-300/10' : 'border-white/8 bg-black/45'
         }`}
       >
@@ -267,7 +267,7 @@ function StageCard({
       </div>
 
       {loading ? (
-        <div className="ml-3 flex min-w-0 flex-1 flex-col justify-center rounded-[18px] border border-white/6 bg-black/35 px-4">
+        <div className="flex min-w-0 flex-1 flex-col justify-center rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3 sm:py-0">
           <div className="flex items-center gap-3 text-sm font-semibold text-white">
             <LoaderCircle className="animate-spin text-pink-200" size={16} />
             Preparing your canvas...
@@ -277,7 +277,7 @@ function StageCard({
           </div>
         </div>
       ) : item ? (
-        <div className="ml-3 flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3">
+        <div className="flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3">
           <div className="min-w-0">
             <button
               className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-pink-200"
@@ -329,7 +329,7 @@ function StageCard({
           ) : null}
         </div>
       ) : (
-        <div className="ml-3 flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 text-sm font-semibold text-pink-100">
+        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 py-3 text-sm font-semibold text-pink-100 sm:ml-3 sm:py-0">
           Ready for your next prompt
         </div>
       )}
@@ -446,8 +446,8 @@ function HistoryView({
   const pageRecords = sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <section className="h-full overflow-hidden px-5 py-4">
-      <div className="flex h-full min-h-0 flex-col rounded-[20px] border border-white/8 bg-black/35">
+    <section className="min-h-0 overflow-auto px-3 py-3 sm:px-5 sm:py-4 lg:h-full lg:overflow-hidden">
+      <div className="flex min-h-[420px] flex-col rounded-[20px] border border-white/8 bg-black/35 lg:h-full lg:min-h-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
           <h2 className="text-sm font-semibold text-white">历史记录</h2>
           <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -468,7 +468,7 @@ function HistoryView({
         </div>
         <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
         {records.length > 0 ? (
-          <table className="min-w-full text-left text-xs">
+          <table className="min-w-[640px] text-left text-xs sm:min-w-full">
             <thead className="sticky top-0 bg-[#090909] text-zinc-500">
               <tr className="border-b border-white/8">
                 <th className="px-4 py-2 font-medium">图片</th>
@@ -503,7 +503,7 @@ function HistoryView({
           <div className="flex h-full items-center justify-center text-sm text-zinc-500">暂无生图记录</div>
         )}
         </div>
-        <div className="flex items-center justify-between border-t border-white/8 px-4 py-3 text-xs text-zinc-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 px-4 py-3 text-xs text-zinc-400">
           <span>共 {records.length} 条</span>
           <div className="flex items-center gap-2">
             <button className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={currentPage <= 1} type="button" onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
@@ -826,15 +826,15 @@ function AdminView({
   ];
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden px-4 py-4 lg:px-5">
-      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+    <section className="flex min-h-0 flex-col overflow-auto px-3 py-3 sm:px-4 sm:py-4 lg:h-full lg:overflow-hidden lg:px-5">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
         <aside className="flex flex-col rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04)_0%,rgba(255,255,255,0.02)_100%)] p-3">
           <div className="mb-4 rounded-[18px] border border-white/8 bg-black/20 p-4">
             <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
             <p className="mt-2 text-lg font-black text-white">后台管理</p>
             <p className="mt-1 text-xs leading-5 text-zinc-500">邀请码、用户、记录和运行状态集中处理。</p>
           </div>
-          <div className="grid gap-2">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
             {menuItems.map((item) => {
               const active = section === item.id;
               return (
@@ -856,8 +856,8 @@ function AdminView({
           </div>
         </aside>
 
-        <div className="flex min-h-0 flex-col overflow-hidden pr-1">
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+        <div className="flex min-h-0 flex-col overflow-visible pr-0 lg:overflow-hidden lg:pr-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible lg:overflow-hidden">
             {section === 'dashboard' ? (
             <>
             <div className="grid gap-3 xl:grid-cols-4">
@@ -991,8 +991,8 @@ function AdminView({
                 <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {filteredInviteCodes.length > 0 ? (
                     <>
-                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
-                    <table className="w-full table-fixed text-left text-xs">
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+                    <table className="min-w-[980px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-10 px-3 py-2 font-medium">
@@ -1051,7 +1051,7 @@ function AdminView({
                       </tbody>
                     </table>
                     </div>
-                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                    <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
                       <span>共 {inviteCodesPage.total} 条邀请码</span>
                       <div className="flex items-center gap-2">
                         <button
@@ -1102,8 +1102,8 @@ function AdminView({
                 <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {searchableUsers.length > 0 ? (
                     <>
-                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
-                    <table className="w-full table-fixed text-left text-xs">
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+                    <table className="min-w-[900px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -1164,7 +1164,7 @@ function AdminView({
                       </tbody>
                     </table>
                     </div>
-                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                    <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
                       <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
@@ -1259,8 +1259,8 @@ function AdminView({
                 <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {filteredRecords.length > 0 ? (
                     <>
-                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
-                    <table className="w-full table-fixed text-left text-xs">
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+                    <table className="min-w-[1100px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-24 px-3 py-2 font-medium">图片</th>
@@ -1296,7 +1296,7 @@ function AdminView({
                       </tbody>
                     </table>
                     </div>
-                    <div className="mt-2 shrink-0 flex items-center justify-between border-t border-white/8 pt-3 text-xs text-zinc-400">
+                    <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
                       <span>第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条</span>
                       <div className="flex items-center gap-2">
                         <button
@@ -1985,7 +1985,7 @@ export default function App() {
             <select
               className="w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-zinc-200 outline-none transition focus:border-violet-500/40"
               value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
+              onChange={(event) => handleModelSelect(event.target.value)}
             >
               {models.map((item) => (
                 <option key={item.id} value={item.id} className="bg-[#111111]">
@@ -2237,8 +2237,8 @@ export default function App() {
   );
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#060606] text-white">
-      <div className="flex h-[100dvh] flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)]">
+    <main className="min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-[#060606] text-white lg:h-[100dvh] lg:overflow-hidden">
+      <div className="flex min-h-[100dvh] flex-col bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)] lg:h-[100dvh] lg:overflow-hidden">
         <header className="shrink-0 flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-xl border border-pink-300/25 bg-[linear-gradient(135deg,#ffb3da_0%,#ff8fcd_45%,#db5ca8_100%)] shadow-[0_0_24px_rgba(255,143,205,0.32)]" />
@@ -2248,7 +2248,7 @@ export default function App() {
             </div>
           </div>
 
-          <nav className="flex rounded-xl border border-white/10 bg-white/[0.04] p-1">
+          <nav className="order-3 flex w-full overflow-x-auto rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:order-none sm:w-auto">
             {tabs
               .filter((item) => !item.hidden)
               .map((item) => {
@@ -2270,7 +2270,7 @@ export default function App() {
               })}
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
             <div className="hidden items-center overflow-hidden rounded-2xl border border-pink-300/20 bg-[linear-gradient(135deg,rgba(255,143,205,0.14)_0%,rgba(219,92,168,0.08)_100%)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:inline-flex">
               <div className="flex items-center gap-2 border-r border-pink-300/12 px-3 py-2.5">
                 <div className="h-2 w-2 rounded-full bg-pink-300 shadow-[0_0_12px_rgba(255,143,205,0.7)]" />
@@ -2335,12 +2335,12 @@ export default function App() {
         <div
           className={
             activeTab === 'create'
-              ? 'grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[2fr_3fr_2fr]'
-              : 'min-h-0 flex-1 overflow-hidden'
+              ? 'min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 lg:grid lg:grid-cols-[2fr_3fr_2fr] lg:space-y-0 lg:overflow-hidden lg:px-0 lg:py-0'
+              : 'min-h-0 flex-1 overflow-auto lg:overflow-hidden'
           }
         >
-          <aside className={activeTab === 'create' ? 'h-full overflow-hidden border-r border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.015)_0%,rgba(255,255,255,0)_100%)] px-3 pb-[calc(env(safe-area-inset-bottom)+8px)] pt-2' : 'hidden'}>
-            <form className="flex h-full min-h-0 flex-col gap-2.5 overflow-hidden pr-1" onSubmit={handleGenerate}>
+          <aside className={activeTab === 'create' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.015)_0%,rgba(255,255,255,0)_100%)] px-3 pb-4 pt-3 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+8px)] lg:pt-2' : 'hidden'}>
+            <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:h-full lg:overflow-hidden lg:pr-1" onSubmit={handleGenerate}>
               <section className="space-y-2">
                 <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
                 <select
@@ -2563,7 +2563,7 @@ export default function App() {
                 <div className="rounded-[20px] border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-[12px] text-rose-100">{healthError}</div>
               ) : null}
 
-              <div className="mt-auto grid gap-2.5 xl:grid-cols-[200px_minmax(0,1fr)]">
+              <div className="grid gap-2.5 pt-1 xl:mt-auto xl:grid-cols-[200px_minmax(0,1fr)]">
                 <div className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]">
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] font-black text-white">{'\u6570\u91cf'}</span>
@@ -2602,8 +2602,8 @@ export default function App() {
           </aside>
 
           {activeTab === 'create' ? (
-            <section className="min-h-0 border-r border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-5 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-4">
-              <div className="grid h-full auto-rows-[118px] gap-3 overflow-hidden pr-1">
+            <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
+              <div className="grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-hidden lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
@@ -2639,8 +2639,8 @@ export default function App() {
             />
           )}
 
-          <aside className={activeTab === 'create' ? 'h-full overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-4' : 'hidden'}>
-            <div className="grid h-full content-start gap-5">
+          <aside className={activeTab === 'create' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
+            <div className="grid content-start gap-5 lg:h-full">
             <SidePanel
               title="收藏区"
               count={sideFavoriteItems.length}
@@ -2704,10 +2704,10 @@ export default function App() {
       </div>
 
       {previewImage ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-4 py-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-3 py-3 sm:px-4 sm:py-6">
           <button className="absolute inset-0 cursor-zoom-out" type="button" onClick={() => setPreviewImage(null)} />
-          <div className="relative z-10 flex max-h-full w-full max-w-6xl flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#090909] shadow-2xl">
-            <div className="flex items-center justify-between gap-4 border-b border-white/8 px-4 py-3">
+          <div className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#090909] shadow-2xl sm:max-h-[calc(100dvh-3rem)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-white">{previewImage.prompt}</p>
                 <p className="mt-1 text-xs text-zinc-500">
@@ -2715,7 +2715,7 @@ export default function App() {
                   {previewImage.imageSize ? ` / ${previewImage.imageSize}` : ''}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <button
                   className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition hover:text-white"
                   type="button"
@@ -2733,16 +2733,16 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-4">
-              <img alt={previewImage.prompt} className="max-h-[78vh] max-w-full object-contain" src={previewImage.imageUrl} />
+            <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3 sm:p-4">
+              <img alt={previewImage.prompt} className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]" src={previewImage.imageUrl} />
             </div>
           </div>
         </div>
       ) : null}
 
       {authOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0b0b0c] p-6 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-4">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[28px] border border-white/10 bg-[#0b0b0c] p-5 shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">

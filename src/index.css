@@ -16,12 +16,11 @@
     @apply bg-[#050505] text-[#f0f0f0] antialiased;
     font-family: var(--font-sans);
     min-height: 100vh;
-    overflow: hidden;
+    overflow-x: hidden;
   }
 
   #root {
-    height: 100vh;
-    overflow: hidden;
+    min-height: 100vh;
   }
 
   button,

@@ -171,6 +171,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 'pixory.top';
 const CANONICAL_WEB_ORIGIN =
   normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN) || `https://${CANONICAL_WEB_HOST}`;
+const APP_URL = normalizeEnvValue(process.env.APP_URL);
 
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -410,6 +411,48 @@ function splitCsv(value: string) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function stripTrailingSlash(value: string) {
+  return value.replace(/\/+$/, '');
+}
+
+function firstHeaderValue(value: string | string[] | undefined) {
+  const normalized = Array.isArray(value) ? normalizeString(value[0]) : normalizeString(value);
+  return normalized.split(',')[0]?.trim() || '';
+}
+
+function isLocalHostname(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === DEFAULT_HOST || hostname === '';
+}
+
+function getConfiguredPublicOrigin() {
+  if (APP_URL) return stripTrailingSlash(APP_URL);
+  if (normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN)) return stripTrailingSlash(CANONICAL_WEB_ORIGIN);
+  if (normalizeEnvValue(process.env.CANONICAL_WEB_HOST)) return `https://${normalizeEnvValue(process.env.CANONICAL_WEB_HOST)}`;
+  return '';
+}
+
+function getRequestPublicOrigin(req: Request) {
+  const forwardedHost = firstHeaderValue(req.headers['x-forwarded-host']);
+  const host = forwardedHost || normalizeString(req.headers.host);
+  const hostname = host.replace(/:\d+$/, '');
+  if (!host || isLocalHostname(hostname)) return '';
+
+  const forwardedProto = firstHeaderValue(req.headers['x-forwarded-proto']);
+  const protocol = forwardedProto || normalizeString(req.protocol) || 'https';
+  return `${protocol}://${host}`;
+}
+
+function toPublicAssetUrl(req: Request, assetPath: string) {
+  const normalizedPath = normalizeString(assetPath);
+  if (!normalizedPath) return '';
+  if (/^https?:\/\//i.test(normalizedPath)) return normalizedPath;
+
+  const publicOrigin = getRequestPublicOrigin(req) || getConfiguredPublicOrigin();
+  if (!publicOrigin) return '';
+
+  return `${stripTrailingSlash(publicOrigin)}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
 }
 
 function isAllowedOrigin(origin: string) {
@@ -2297,6 +2340,20 @@ async function start() {
       }
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
+      const modelReferenceImages = [
+        ...referenceImagesInput
+          .map((item) => normalizeString(item.data))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...referenceImages
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+      ];
+      const uniqueModelReferenceImages = Array.from(new Set(modelReferenceImages));
+
+      if (referenceImagesInput.length > 0 && uniqueModelReferenceImages.length === 0) {
+        throw new Error('当前部署未提供可公网访问的参考图链接，请配置 APP_URL / CANONICAL_WEB_ORIGIN，或改用已公开的图片链接后再试。');
+      }
+
       const createdAt = nowIso();
       const imagePath = await callVisionaryGeneration({
         prompt,
@@ -2305,9 +2362,7 @@ async function start() {
         imageSize,
         quality: modelId === 'gpt-image-2' ? requestedQuality : '',
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
-        images: referenceImagesInput
-          .map((item) => normalizeString(item.data))
-          .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
+        images: uniqueModelReferenceImages,
       });
 
       const payload: GeneratedImagePayload = {
