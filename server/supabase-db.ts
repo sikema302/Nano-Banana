@@ -76,7 +76,7 @@ const ADMIN_INITIAL_CREDITS = 3859;
 const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
 const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhrKpGbUUiHCaQrYCq';
-const IMAGE_RETENTION_DAYS = 10;
+const IMAGE_RETENTION_DAYS = 7;
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 

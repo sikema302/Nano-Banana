@@ -55,7 +55,7 @@ VISIONARY_GPT_IMAGE_2_API_KEY=your_gpt_image_2_standard_key
 VISIONARY_GPT_IMAGE_2_HD_API_KEY=your_gpt_image_2_2k_4k_key
 JWT_SECRET=your_random_secret
 ADMIN_USERNAMES=admin
-IMAGE_RETENTION_DAYS=10
+IMAGE_RETENTION_DAYS=7
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ```
 
@@ -64,7 +64,7 @@ Notes:
 - `SUPABASE_SERVICE_ROLE_KEY` is server-only.
 - `VITE_*` variables are safe for the frontend build.
 - Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT Image 2 standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT Image 2 2K/4K. `VISIONARY_API_KEY` remains a fallback.
-- Image retention defaults to 10 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
+- Image retention defaults to 7 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
 - Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
 
 ## Build and checks

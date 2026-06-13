@@ -162,7 +162,7 @@ const EXAMPLES_DIR = path.join(UPLOADS_DIR, 'examples');
 const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
-const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 10));
+const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 7));
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
@@ -1627,6 +1627,29 @@ async function purgeExpiredReferenceFiles(retentionDays = IMAGE_RETENTION_DAYS) 
   return deletedFiles;
 }
 
+async function purgeExpiredGeneratedFiles(retentionDays = IMAGE_RETENTION_DAYS) {
+  if (IS_VERCEL) {
+    return 0;
+  }
+
+  const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const entries = await fs.readdir(GENERATED_DIR, { withFileTypes: true }).catch(() => []);
+  let deletedFiles = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+
+    const filePath = path.join(GENERATED_DIR, entry.name);
+    const stats = await fs.stat(filePath).catch(() => null);
+    if (!stats || stats.mtimeMs >= cutoffTime) continue;
+
+    await fs.unlink(filePath).catch(() => undefined);
+    deletedFiles += 1;
+  }
+
+  return deletedFiles;
+}
+
 async function runImageRetentionCleanup(reason: string) {
   if (imageCleanupPromise) {
     return imageCleanupPromise;
@@ -1638,9 +1661,10 @@ async function runImageRetentionCleanup(reason: string) {
         const db = await getSupabaseDb();
         const result = await db.purgeExpiredImageData(IMAGE_RETENTION_DAYS);
         const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
-        if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0) {
+        const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(IMAGE_RETENTION_DAYS);
+        if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
           console.log(
-            `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles}`,
+            `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
           );
         }
         return;
@@ -1648,9 +1672,10 @@ async function runImageRetentionCleanup(reason: string) {
 
       const result = await withWriteDb((db) => purgeExpiredImageDataSqlite(db, IMAGE_RETENTION_DAYS));
       const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
-      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0) {
+      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(IMAGE_RETENTION_DAYS);
+      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
         console.log(
-          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles}`,
+          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
         );
       }
     } catch (error) {
@@ -1907,6 +1932,64 @@ function fileExtensionFromMimeType(mimeType: string) {
   if (mimeType === 'image/gif') return 'gif';
   if (mimeType === 'image/svg+xml') return 'svg';
   return 'png';
+}
+
+function fileExtensionFromUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    const extension = path.extname(parsed.pathname || '').replace('.', '').toLowerCase();
+    if (extension === 'jpeg') return 'jpg';
+    if (['jpg', 'png', 'webp', 'gif', 'svg'].includes(extension)) return extension;
+  } catch {
+    // Ignore invalid URLs and fall back to png.
+  }
+
+  return 'png';
+}
+
+async function persistGeneratedImage(source: string) {
+  const normalizedSource = normalizeString(source);
+  if (!normalizedSource) {
+    throw new Error('Generated image URL is empty');
+  }
+
+  if (IS_VERCEL) {
+    return normalizedSource;
+  }
+
+  if (normalizedSource.startsWith('data:image/')) {
+    const mimeMatch = normalizedSource.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+    const mimeType = mimeMatch?.[1] || 'image/png';
+    const extension = fileExtensionFromMimeType(mimeType);
+    const base64 = normalizedSource.split(',').pop() || '';
+    if (!base64) {
+      throw new Error('Generated image data is invalid');
+    }
+
+    const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
+    const target = path.join(GENERATED_DIR, fileName);
+    await fs.writeFile(target, Buffer.from(base64, 'base64'));
+    return `/uploads/generated/${fileName}`;
+  }
+
+  if (!/^https?:\/\//i.test(normalizedSource)) {
+    return normalizedSource;
+  }
+
+  const response = await fetch(normalizedSource);
+  if (!response.ok) {
+    throw new Error(`Download generated image failed (${response.status})`);
+  }
+
+  const contentType = normalizeString(response.headers.get('content-type') || '').toLowerCase();
+  const extension = contentType.startsWith('image/')
+    ? fileExtensionFromMimeType(contentType.split(';')[0])
+    : fileExtensionFromUrl(normalizedSource);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
+  const target = path.join(GENERATED_DIR, fileName);
+  await fs.writeFile(target, buffer);
+  return `/uploads/generated/${fileName}`;
 }
 
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
@@ -2355,7 +2438,7 @@ async function start() {
       }
 
       const createdAt = nowIso();
-      const imagePath = await callVisionaryGeneration({
+      const generatedImageSource = await callVisionaryGeneration({
         prompt,
         modelId,
         ratio,
@@ -2364,6 +2447,7 @@ async function start() {
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: uniqueModelReferenceImages,
       });
+      const imagePath = await persistGeneratedImage(generatedImageSource);
 
       const payload: GeneratedImagePayload = {
         prompt,
