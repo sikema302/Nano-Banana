@@ -92,6 +92,7 @@ const emptyPage: PaginationInfo = {
 
 const MAX_REFERENCES = 9;
 const MAX_PROMPT_LENGTH = 8000;
+const MAX_BATCH_COUNT = 5;
 
 const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
   { value: '1:1', label: '1:1' },
@@ -190,6 +191,11 @@ function getModelSortOrder(modelId: string) {
   if (modelId === 'gpt-image-2') return 0;
   if (modelId === 'Nano_Banana_Pro') return 1;
   return 99;
+}
+
+function getModelSuccessRate(modelId: string) {
+  if (modelId === 'gpt-image-2') return '成功率 99%';
+  return '';
 }
 
 function CreditsSummary({
@@ -1463,6 +1469,7 @@ export default function App() {
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
   const selectedModelCredits = getModelCredits(selectedModelInfo, { imageSize, optimizeChineseText });
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
+  const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
 
@@ -1510,6 +1517,12 @@ export default function App() {
       setActiveTab('create');
     }
   }, [activeTab, user]);
+
+  useEffect(() => {
+    if (batchCount > MAX_BATCH_COUNT) {
+      setBatchCount(MAX_BATCH_COUNT);
+    }
+  }, [batchCount]);
 
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
@@ -2075,7 +2088,7 @@ export default function App() {
     setNotice('已退出登录');
   }
 
-  const stageCards = Array.from({ length: 4 }, (_, index) =>
+  const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) =>
     index === 0 ? currentImage : historyQueue[index - 1] || null,
   );
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
@@ -2095,17 +2108,24 @@ export default function App() {
                 v2.4
               </span>
             </div>
-            <select
-              className="w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-zinc-200 outline-none transition focus:border-violet-500/40"
-              value={selectedModel}
-              onChange={(event) => handleModelSelect(event.target.value)}
-            >
-              {models.map((item) => (
-                <option key={item.id} value={item.id} className="bg-[#111111]">
-                  {item.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                className="w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3 pr-28 text-sm text-zinc-200 outline-none transition focus:border-violet-500/40"
+                value={selectedModel}
+                onChange={(event) => handleModelSelect(event.target.value)}
+              >
+                {models.map((item) => (
+                  <option key={item.id} value={item.id} className="bg-[#111111]">
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              {selectedModelSuccessRate ? (
+                <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                  {selectedModelSuccessRate}
+                </span>
+              ) : null}
+            </div>
           </section>
 
           <section className="space-y-3">
@@ -2456,17 +2476,24 @@ export default function App() {
             <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:h-full lg:overflow-hidden lg:pr-1" onSubmit={handleGenerate}>
               <section className="space-y-2">
                 <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
-                <select
-                  className="w-full rounded-2xl border border-white/12 bg-[#080808] px-4 py-2.5 text-[13px] font-semibold text-white outline-none transition focus:border-[#ff8fcd]/45"
-                  value={selectedModel}
-                  onChange={(event) => handleModelSelect(event.target.value)}
-                >
-                  {models.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <select
+                    className="w-full rounded-2xl border border-white/12 bg-[#080808] px-4 py-2.5 pr-28 text-[13px] font-semibold text-white outline-none transition focus:border-[#ff8fcd]/45"
+                    value={selectedModel}
+                    onChange={(event) => handleModelSelect(event.target.value)}
+                  >
+                    {models.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedModelSuccessRate ? (
+                    <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                      {selectedModelSuccessRate}
+                    </span>
+                  ) : null}
+                </div>
               </section>
 
               <section className="space-y-2">
@@ -2693,8 +2720,8 @@ export default function App() {
                       <button
                         className="flex h-9 w-9 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
                         type="button"
-                        disabled={batchCount >= 9}
-                        onClick={() => setBatchCount((current) => Math.min(9, current + 1))}
+                        disabled={batchCount >= MAX_BATCH_COUNT}
+                        onClick={() => setBatchCount((current) => Math.min(MAX_BATCH_COUNT, current + 1))}
                       >
                         <Plus size={15} />
                       </button>
