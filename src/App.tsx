@@ -2558,7 +2558,7 @@ export default function App() {
                 <div>
                   <textarea
                     className="h-[96px] w-full resize-none rounded-2xl border border-white/10 bg-[#050505] px-4 py-3 text-[13px] leading-5 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8fcd]/45"
-                    placeholder="\u8bf7\u8be6\u7ec6\u63cf\u8ff0\u60a8\u60f3\u751f\u6210\u7684\u753b\u9762..."
+                    placeholder="请详细描述您想生成的画面..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
                   />
