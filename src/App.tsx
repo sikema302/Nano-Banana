@@ -11,6 +11,7 @@ import {
   LogOut,
   Minus,
   Plus,
+  RotateCw,
   ShieldCheck,
   Sparkles,
   Star,
@@ -519,33 +520,27 @@ function HistoryView({
 function AdminView({
   users,
   records,
-  recordsPage,
   inviteCodes,
-  inviteCodesPage,
   adminCredits,
   loading,
   onCreateInviteCode,
   onDeleteInviteCode,
   onReclaimInviteCode,
-  onRecordsPageChange,
-  onInviteCodesPageChange,
+  onRefresh,
   onPreview,
 }: {
   users: AdminUserSummary[];
   records: GenerationRecord[];
-  recordsPage: PaginationInfo;
   inviteCodes: InviteCodeInfo[];
-  inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   loading: boolean;
   onCreateInviteCode: (credits: number) => Promise<void>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
-  onRecordsPageChange: (page: number) => void;
-  onInviteCodesPageChange: (page: number) => void;
+  onRefresh: () => Promise<void>;
   onPreview: (item: GenerationRecord) => void;
 }) {
-  type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'settings';
+  type AdminSection = 'dashboard' | 'invites' | 'users' | 'records';
   type InviteStatusFilter = 'all' | 'unused' | 'used';
   type InviteSortMode = 'created-desc' | 'created-asc' | 'credits-desc' | 'credits-asc';
   type UserSortMode = 'recent-desc' | 'recent-asc';
@@ -560,6 +555,8 @@ function AdminView({
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
+  const [inviteSearch, setInviteSearch] = useState('');
+  const [invitePage, setInvitePage] = useState(1);
   const [userSearch, setUserSearch] = useState('');
   const [userSortMode, setUserSortMode] = useState<UserSortMode>('recent-desc');
   const [userPage, setUserPage] = useState(1);
@@ -567,6 +564,7 @@ function AdminView({
   const [recordModelFilter, setRecordModelFilter] = useState('all');
   const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
   const [recordRange, setRecordRange] = useState<RecordRange>('all');
+  const [recordPage, setRecordPage] = useState(1);
   const normalizedCredits = Math.max(0, Number(credits) || 0);
   const isInvalidCredits = normalizedCredits <= 0 || normalizedCredits > adminCredits.remainingCredits;
   const inviteCreditsTotal = normalizedCredits;
@@ -612,6 +610,16 @@ function AdminView({
       if (inviteStatusFilter === 'used') return Boolean(item.redeemedBy);
       if (inviteStatusFilter === 'unused') return !item.redeemedBy;
       return true;
+    })
+    .filter((item) => {
+      const keyword = inviteSearch.trim().toLowerCase();
+      if (!keyword) return true;
+
+      return (
+        item.code.toLowerCase().includes(keyword) ||
+        (item.redeemedBy || '').toLowerCase().includes(keyword) ||
+        (item.redeemedBy ? usersById[item.redeemedBy]?.username || '' : '').toLowerCase().includes(keyword)
+      );
     })
     .sort((left, right) => {
       if (inviteSortMode === 'credits-desc') return right.credits - left.credits;
@@ -670,6 +678,14 @@ function AdminView({
   });
 
   const filteredRecordCredits = filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const invitePageSize = 10;
+  const inviteTotalPages = Math.max(1, Math.ceil(filteredInviteCodes.length / invitePageSize));
+  const currentInvitePage = Math.min(invitePage, inviteTotalPages);
+  const pagedInviteCodes = filteredInviteCodes.slice((currentInvitePage - 1) * invitePageSize, currentInvitePage * invitePageSize);
+  const recordPageSize = 10;
+  const recordTotalPages = Math.max(1, Math.ceil(filteredRecords.length / recordPageSize));
+  const currentRecordPage = Math.min(recordPage, recordTotalPages);
+  const pagedRecords = filteredRecords.slice((currentRecordPage - 1) * recordPageSize, currentRecordPage * recordPageSize);
   const userPageSize = 10;
   const userTotalPages = Math.max(1, Math.ceil(searchableUsers.length / userPageSize));
   const currentUserPage = Math.min(userPage, userTotalPages);
@@ -686,9 +702,18 @@ function AdminView({
   }, {});
   const mostActiveHour = Object.entries(hourUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0];
 
-  const canSelectInviteCodes = filteredInviteCodes.map((item) => item.code);
+  const canSelectInviteCodes = pagedInviteCodes.map((item) => item.code);
   const allSelectableChecked =
     canSelectInviteCodes.length > 0 && canSelectInviteCodes.every((code) => selectedInviteCodes.includes(code));
+  const hasAdminData = users.length > 0 || records.length > 0 || inviteCodes.length > 0;
+
+  useEffect(() => {
+    setInvitePage(1);
+  }, [inviteStatusFilter, inviteSortMode, inviteSearch]);
+
+  useEffect(() => {
+    setRecordPage(1);
+  }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
 
   function formatPercent(value: number) {
     return `${Math.max(0, Math.min(100, Math.round(value)))}%`;
@@ -822,7 +847,6 @@ function AdminView({
     { id: 'invites', label: '邀请码', hint: '发码与回收' },
     { id: 'users', label: '用户', hint: '余额与活跃' },
     { id: 'records', label: '生图记录', hint: '模型与消耗' },
-    { id: 'settings', label: '设置', hint: '运行状态' },
   ];
 
   return (
@@ -862,9 +886,9 @@ function AdminView({
             <>
             <div className="grid gap-3 xl:grid-cols-4">
               {[
-                { label: '今日生成次数', value: String(todayRecords.length), hint: '按当前记录页统计' },
+                { label: '今日生成次数', value: String(todayRecords.length), hint: '按全部记录统计' },
                 { label: '今日消耗积分', value: String(todayCreditsUsed), hint: '统一积分池计费' },
-                { label: '本页邀请码使用率', value: formatPercent(currentInviteUsageRate), hint: `${usedInviteCodes}/${Math.max(totalInviteCodes, 1)}` },
+                { label: '邀请码使用率', value: formatPercent(currentInviteUsageRate), hint: `${usedInviteCodes}/${Math.max(totalInviteCodes, 1)}` },
                 { label: '低积分用户提醒', value: String(lowCreditUsers.length), hint: '剩余 <= 50 积分' },
               ].map((card) => (
                 <div key={card.label} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
@@ -882,11 +906,11 @@ function AdminView({
                   <p className="mt-2 text-2xl font-black text-white">{users.length}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">当前页邀请码</p>
+                  <p className="text-xs text-zinc-500">邀请码总数</p>
                   <p className="mt-2 text-2xl font-black text-white">{inviteCodes.length}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">当前页记录</p>
+                  <p className="text-xs text-zinc-500">生图记录总数</p>
                   <p className="mt-2 text-2xl font-black text-white">{records.length}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
@@ -898,7 +922,7 @@ function AdminView({
             </>
             ) : null}
 
-            {loading ? (
+            {loading && !hasAdminData ? (
               <div className="grid gap-4">
                 {[0, 1, 2].map((item) => (
                   <div key={item} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
@@ -913,14 +937,30 @@ function AdminView({
               </div>
             ) : null}
 
-            {!loading && section === 'invites' ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {section === 'invites' ? (
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+                {loading && hasAdminData ? (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                      刷新中...
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">邀请码管理</h2>
                     <p className="mt-1 text-xs text-zinc-500">总池 / 已分配 / 剩余 一眼看清，支持筛选、排序和批量删除。</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={loading}
+                      type="button"
+                      onClick={() => void onRefresh()}
+                    >
+                      <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
                     <span className={isInvalidCredits ? 'text-xs font-semibold text-rose-300' : 'text-xs font-semibold text-zinc-400'}>
                       本次发放 {inviteCreditsTotal} 积分
                     </span>
@@ -977,6 +1017,12 @@ function AdminView({
                       <option value="credits-desc">积分：高到低</option>
                       <option value="credits-asc">积分：低到高</option>
                     </select>
+                    <input
+                      className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none placeholder:text-zinc-500 md:w-56"
+                      placeholder="搜索邀请码 / 使用者"
+                      value={inviteSearch}
+                      onChange={(event) => setInviteSearch(event.target.value)}
+                    />
                   </div>
                   <button
                     className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1008,7 +1054,7 @@ function AdminView({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
-                        {filteredInviteCodes.map((item) => {
+                        {pagedInviteCodes.map((item) => {
                           const consumedAfterRedeem = item.redeemedBy ? usersById[item.redeemedBy]?.creditsUsed || 0 : 0;
                           return (
                             <tr key={item.code} className="text-zinc-300">
@@ -1052,22 +1098,22 @@ function AdminView({
                     </table>
                     </div>
                     <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
-                      <span>共 {inviteCodesPage.total} 条邀请码</span>
+                      <span>共 {filteredInviteCodes.length} 条邀请码，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                          disabled={inviteCodesPage.page <= 1}
+                          disabled={currentInvitePage <= 1}
                           type="button"
-                          onClick={() => onInviteCodesPageChange(inviteCodesPage.page - 1)}
+                          onClick={() => setInvitePage((current) => Math.max(1, current - 1))}
                         >
                           上一页
                         </button>
-                        <span>{inviteCodesPage.page} / {inviteCodesPage.totalPages}</span>
+                        <span>{currentInvitePage} / {inviteTotalPages}</span>
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                          disabled={inviteCodesPage.page >= inviteCodesPage.totalPages}
+                          disabled={currentInvitePage >= inviteTotalPages}
                           type="button"
-                          onClick={() => onInviteCodesPageChange(inviteCodesPage.page + 1)}
+                          onClick={() => setInvitePage((current) => Math.min(inviteTotalPages, current + 1))}
                         >
                           下一页
                         </button>
@@ -1081,22 +1127,40 @@ function AdminView({
               </div>
             ) : null}
 
-            {!loading && section === 'users' ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {section === 'users' ? (
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+                {loading && hasAdminData ? (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                      刷新中...
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">用户信息与 Key 使用页</h2>
                     <p className="mt-1 text-xs text-zinc-500">支持按用户 ID / 邀请码前缀搜索，点击最近生成可切换活跃排序。</p>
                   </div>
-                  <input
-                    className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none md:w-72"
-                    placeholder="搜索用户 ID、用户名、invite-/admin/credit-"
-                    value={userSearch}
-                    onChange={(event) => {
-                      setUserSearch(event.target.value);
-                      setUserPage(1);
-                    }}
-                  />
+                  <div className="flex w-full items-center gap-2 md:w-auto">
+                    <input
+                      className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none md:w-72"
+                      placeholder="搜索用户 ID、用户名、invite-/admin/credit-"
+                      value={userSearch}
+                      onChange={(event) => {
+                        setUserSearch(event.target.value);
+                        setUserPage(1);
+                      }}
+                    />
+                    <button
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={loading}
+                      type="button"
+                      onClick={() => void onRefresh()}
+                    >
+                      <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1194,14 +1258,22 @@ function AdminView({
               </div>
             ) : null}
 
-            {!loading && section === 'records' ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+            {section === 'records' ? (
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
+                {loading && hasAdminData ? (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                      刷新中...
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">生图记录页</h2>
                     <p className="mt-1 text-xs text-zinc-500">按模型、时间、用户和分辨率筛选，快速找出高消耗和高活跃记录。</p>
                   </div>
-                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-4">
+                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-5">
                     <input
                       className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
                       placeholder="搜索用户 / 邀请码 / 提示词"
@@ -1238,6 +1310,14 @@ function AdminView({
                       <option value="7d">近 7 天</option>
                       <option value="30d">近 30 天</option>
                     </select>
+                    <button
+                      className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={loading}
+                      type="button"
+                      onClick={() => void onRefresh()}
+                    >
+                      <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
                   </div>
                 </div>
 
@@ -1274,7 +1354,7 @@ function AdminView({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
-                        {filteredRecords.map((item) => (
+                        {pagedRecords.map((item) => (
                           <tr key={item.id} className="align-top text-zinc-300">
                             <td className="px-3 py-3">
                               <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
@@ -1297,22 +1377,22 @@ function AdminView({
                     </table>
                     </div>
                     <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
-                      <span>第 {recordsPage.page} 页，每页 {recordsPage.pageSize} 条</span>
+                      <span>共 {filteredRecords.length} 条记录，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                          disabled={recordsPage.page <= 1}
+                          disabled={currentRecordPage <= 1}
                           type="button"
-                          onClick={() => onRecordsPageChange(recordsPage.page - 1)}
+                          onClick={() => setRecordPage((current) => Math.max(1, current - 1))}
                         >
                           上一页
                         </button>
-                        <span>{recordsPage.page} / {recordsPage.totalPages}</span>
+                        <span>{currentRecordPage} / {recordTotalPages}</span>
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
-                          disabled={recordsPage.page >= recordsPage.totalPages}
+                          disabled={currentRecordPage >= recordTotalPages}
                           type="button"
-                          onClick={() => onRecordsPageChange(recordsPage.page + 1)}
+                          onClick={() => setRecordPage((current) => Math.min(recordTotalPages, current + 1))}
                         >
                           下一页
                         </button>
@@ -1326,12 +1406,6 @@ function AdminView({
               </div>
             ) : null}
 
-            {!loading && section === 'settings' ? (
-              <div className="flex flex-col rounded-[22px] border border-white/8 bg-black/35 p-4">
-                <h2 className="text-base font-black text-white">设置</h2>
-                <p className="mt-2 text-sm text-zinc-500">设置内容已合并到看板页面</p>
-              </div>
-            ) : null}
           </div>
         </div>
       </div>
@@ -1366,8 +1440,6 @@ export default function App() {
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
   });
-  const [adminRecordsPage, setAdminRecordsPage] = useState(1);
-  const [adminInviteCodesPage, setAdminInviteCodesPage] = useState(1);
   const [activeTab, setActiveTab] = useState<AppTab>('create');
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1431,7 +1503,7 @@ export default function App() {
     if (activeTab === 'admin') {
       void loadAdminOverview();
     }
-  }, [activeTab, user, adminRecordsPage, adminInviteCodesPage]);
+  }, [activeTab, user]);
 
   useEffect(() => {
     if (activeTab === 'admin' && !user?.isAdmin) {
@@ -1533,13 +1605,56 @@ export default function App() {
 
     setAdminLoading(true);
     try {
-      const payload = await fetchAdminOverview({
-        recordsPage: adminRecordsPage,
-        recordsPageSize: adminOverview.recordsPage.pageSize,
-        inviteCodesPage: adminInviteCodesPage,
-        inviteCodesPageSize: adminOverview.inviteCodesPage.pageSize,
+      const pageSize = 100;
+      const firstPage = await fetchAdminOverview({
+        recordsPage: 1,
+        recordsPageSize: pageSize,
+        inviteCodesPage: 1,
+        inviteCodesPageSize: pageSize,
       });
-      setAdminOverview(payload);
+
+      const extraRecordRequests = Array.from({ length: Math.max(0, firstPage.recordsPage.totalPages - 1) }, (_, index) =>
+        fetchAdminOverview({
+          recordsPage: index + 2,
+          recordsPageSize: pageSize,
+          inviteCodesPage: 1,
+          inviteCodesPageSize: 1,
+        }),
+      );
+      const extraInviteRequests = Array.from({ length: Math.max(0, firstPage.inviteCodesPage.totalPages - 1) }, (_, index) =>
+        fetchAdminOverview({
+          recordsPage: 1,
+          recordsPageSize: 1,
+          inviteCodesPage: index + 2,
+          inviteCodesPageSize: pageSize,
+        }),
+      );
+
+      const [recordPages, invitePages] = await Promise.all([
+        Promise.all(extraRecordRequests),
+        Promise.all(extraInviteRequests),
+      ]);
+
+      const mergedRecords = [firstPage.records, ...recordPages.map((item) => item.records)].flat();
+      const mergedInviteCodes = [firstPage.inviteCodes, ...invitePages.map((item) => item.inviteCodes)].flat();
+
+      setAdminOverview({
+        ...firstPage,
+        records: mergedRecords,
+        recordsPage: {
+          page: 1,
+          pageSize,
+          total: mergedRecords.length,
+          totalPages: Math.max(1, Math.ceil(mergedRecords.length / pageSize)),
+        },
+        inviteCodes: mergedInviteCodes,
+        inviteCodesPage: {
+          page: 1,
+          pageSize,
+          total: mergedInviteCodes.length,
+          totalPages: Math.max(1, Math.ceil(mergedInviteCodes.length / pageSize)),
+        },
+      });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '后台数据加载失败');
     } finally {
@@ -1954,8 +2069,6 @@ export default function App() {
       inviteCodesPage: emptyPage,
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
     });
-    setAdminRecordsPage(1);
-    setAdminInviteCodesPage(1);
     setActiveTab('create');
     setCurrentImage(null);
     setHistoryQueue([]);
@@ -2625,16 +2738,13 @@ export default function App() {
             <AdminView
               users={adminOverview.users}
               records={adminOverview.records}
-              recordsPage={adminOverview.recordsPage}
               inviteCodes={adminOverview.inviteCodes}
-              inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
               loading={adminLoading}
               onCreateInviteCode={handleCreateInviteCode}
               onDeleteInviteCode={handleDeleteInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
-              onRecordsPageChange={setAdminRecordsPage}
-              onInviteCodesPageChange={setAdminInviteCodesPage}
+              onRefresh={loadAdminOverview}
               onPreview={setPreviewImage}
             />
           )}
