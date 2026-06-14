@@ -23,7 +23,11 @@ import {
   clearSession,
   createInviteCode,
   deleteInviteCode as deleteInviteCodeRequest,
+  fetchAdminDashboard,
+  fetchAdminInviteCodes,
   fetchAdminOverview,
+  fetchAdminRecords,
+  fetchAdminUsers,
   deleteImage,
   fetchHealth,
   fetchMe,
@@ -37,6 +41,8 @@ import {
   moveImage,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
+  type AdminDashboardStats,
+  type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
   type GeneratedImagePayload,
@@ -73,14 +79,20 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'admin';
+type AdminSection = 'dashboard' | 'invites' | 'users' | 'records';
 
 interface AdminOverviewState {
   users: AdminUserSummary[];
+  usersPage: PaginationInfo;
   records: GenerationRecord[];
   recordsPage: PaginationInfo;
   inviteCodes: InviteCodeInfo[];
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
+  dashboardStats: AdminDashboardStats;
+  recordsStats: AdminRecordsStats;
+  recordModelOptions: string[];
+  recordResolutionOptions: string[];
 }
 
 const emptyPage: PaginationInfo = {
@@ -88,6 +100,25 @@ const emptyPage: PaginationInfo = {
   pageSize: 10,
   total: 0,
   totalPages: 1,
+};
+
+const emptyDashboardStats: AdminDashboardStats = {
+  todayRecordCount: 0,
+  todayCreditsUsed: 0,
+  inviteUsageRate: 0,
+  lowCreditUserCount: 0,
+  userCount: 0,
+  inviteCodeCount: 0,
+  recordCount: 0,
+  usedInviteCodeCount: 0,
+};
+
+const emptyRecordsStats: AdminRecordsStats = {
+  todayCreditsUsed: 0,
+  todayRecordCount: 0,
+  totalCreditsUsed: 0,
+  mostUsedModel: '',
+  mostActiveHour: '',
 };
 
 const MAX_REFERENCES = 9;
@@ -525,28 +556,53 @@ function HistoryView({
 
 function AdminView({
   users,
+  usersPage,
   records,
+  recordsPage,
   inviteCodes,
+  inviteCodesPage,
   adminCredits,
+  dashboardStats,
+  recordsStats,
+  recordModelOptions,
+  recordResolutionOptions,
   loading,
   onCreateInviteCode,
   onDeleteInviteCode,
   onReclaimInviteCode,
-  onRefresh,
+  onLoadSection,
   onPreview,
 }: {
   users: AdminUserSummary[];
+  usersPage: PaginationInfo;
   records: GenerationRecord[];
+  recordsPage: PaginationInfo;
   inviteCodes: InviteCodeInfo[];
+  inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
+  dashboardStats: AdminDashboardStats;
+  recordsStats: AdminRecordsStats;
+  recordModelOptions: string[];
+  recordResolutionOptions: string[];
   loading: boolean;
   onCreateInviteCode: (credits: number) => Promise<void>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onLoadSection: (
+    section: AdminSection,
+    params?: {
+      page?: number;
+      pageSize?: number;
+      status?: string;
+      sort?: string;
+      search?: string;
+      model?: string;
+      resolution?: string;
+      range?: string;
+    },
+  ) => Promise<void>;
   onPreview: (item: GenerationRecord) => void;
 }) {
-  type AdminSection = 'dashboard' | 'invites' | 'users' | 'records';
   type InviteStatusFilter = 'all' | 'unused' | 'used';
   type InviteSortMode = 'created-desc' | 'created-asc' | 'credits-desc' | 'credits-asc';
   type UserSortMode = 'recent-desc' | 'recent-asc';
@@ -577,12 +633,19 @@ function AdminView({
   const inviteCreditsTotal = normalizedCredits;
   const today = new Date();
   const todayKey = today.toISOString().slice(0, 10);
-  const todayRecords = records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
-  const todayCreditsUsed = todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const todayRecords = dashboardStats.todayRecordCount > 0
+    ? Array.from({ length: dashboardStats.todayRecordCount }, () => ({ createdAt: todayKey, creditsUsed: 0 } as GenerationRecord))
+    : records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
   const lowCreditUsers = users.filter((item) => item.remainingCredits <= 50);
-  const totalInviteCodes = inviteCodes.length;
-  const usedInviteCodes = inviteCodes.filter((item) => Boolean(item.redeemedBy)).length;
-  const currentInviteUsageRate = totalInviteCodes > 0 ? Math.round((usedInviteCodes / totalInviteCodes) * 100) : 0;
+  const dashboardTodayRecordCount = dashboardStats.todayRecordCount || todayRecords.length;
+  const dashboardLowCreditUserCount = dashboardStats.lowCreditUserCount || lowCreditUsers.length;
+  const dashboardUserCount = dashboardStats.userCount || usersPage.total || users.length;
+  const dashboardInviteCodeCount = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
+  const dashboardRecordCount = dashboardStats.recordCount || recordsPage.total || records.length;
+  const todayCreditsUsed = dashboardStats.todayCreditsUsed || todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const totalInviteCodes = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
+  const usedInviteCodes = dashboardStats.usedInviteCodeCount || inviteCodes.filter((item) => Boolean(item.redeemedBy)).length;
+  const currentInviteUsageRate = dashboardStats.inviteUsageRate || (totalInviteCodes > 0 ? Math.round((usedInviteCodes / totalInviteCodes) * 100) : 0);
 
   const usersById = users.reduce<Record<string, AdminUserSummary>>((accumulator, item) => {
     accumulator[item.userId] = item;
@@ -612,94 +675,33 @@ function AdminView({
     return accumulator;
   }, {});
 
-  const filteredInviteCodes = [...inviteCodes]
-    .filter((item) => {
-      if (inviteStatusFilter === 'used') return Boolean(item.redeemedBy);
-      if (inviteStatusFilter === 'unused') return !item.redeemedBy;
-      return true;
-    })
-    .filter((item) => {
-      const keyword = inviteSearch.trim().toLowerCase();
-      if (!keyword) return true;
+  const filteredInviteCodes = inviteCodes;
 
-      return (
-        item.code.toLowerCase().includes(keyword) ||
-        (item.redeemedBy || '').toLowerCase().includes(keyword) ||
-        (item.redeemedBy ? usersById[item.redeemedBy]?.username || '' : '').toLowerCase().includes(keyword)
-      );
-    })
-    .sort((left, right) => {
-      if (inviteSortMode === 'credits-desc') return right.credits - left.credits;
-      if (inviteSortMode === 'credits-asc') return left.credits - right.credits;
-      if (inviteSortMode === 'created-asc') return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
-    });
+  const searchableUsers = users;
 
-  const searchableUsers = [...users]
-    .filter((item) => {
-      const keyword = userSearch.trim().toLowerCase();
-      if (!keyword) return true;
-      const inviteText = (invitePrefixesByUserId[item.userId] || []).join(' ').toLowerCase();
-      return (
-        item.username.toLowerCase().includes(keyword) ||
-        item.userId.toLowerCase().includes(keyword) ||
-        inviteText.includes(keyword)
-      );
-    })
-    .sort((left, right) => {
-      const leftTime = left.lastGeneratedAt ? new Date(left.lastGeneratedAt).getTime() : 0;
-      const rightTime = right.lastGeneratedAt ? new Date(right.lastGeneratedAt).getTime() : 0;
-      return userSortMode === 'recent-asc' ? leftTime - rightTime : rightTime - leftTime;
-    });
+  const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : Array.from(new Set(records.map((item) => item.modelName))).sort();
+  const resolutionOptions = recordResolutionOptions.length > 0
+    ? recordResolutionOptions
+    : Array.from(new Set(records.map((item) => (item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions)))).sort();
 
-  const modelOptions = Array.from(new Set(records.map((item) => item.modelName))).sort();
-  const resolutionOptions = Array.from(
-    new Set(records.map((item) => (item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions))),
-  ).sort();
+  const filteredRecords = records;
 
-  const filteredRecords = [...records].filter((item) => {
-    if (recordModelFilter !== 'all' && item.modelName !== recordModelFilter) return false;
-
-    const resolutionLabel = item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions;
-    if (recordResolutionFilter !== 'all' && resolutionLabel !== recordResolutionFilter) return false;
-
-    const keyword = recordUserFilter.trim().toLowerCase();
-    if (
-      keyword &&
-      !item.username.toLowerCase().includes(keyword) &&
-      !item.userId.toLowerCase().includes(keyword) &&
-      !item.prompt.toLowerCase().includes(keyword) &&
-      !(item.inviteCode || '').toLowerCase().includes(keyword)
-    ) {
-      return false;
-    }
-
-    if (recordRange !== 'all') {
-      const diffHours = (today.getTime() - new Date(item.createdAt).getTime()) / (60 * 60 * 1000);
-      if (recordRange === '24h' && diffHours > 24) return false;
-      if (recordRange === '7d' && diffHours > 24 * 7) return false;
-      if (recordRange === '30d' && diffHours > 24 * 30) return false;
-    }
-
-    return true;
-  });
-
-  const filteredRecordCredits = filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const filteredRecordCredits = recordsStats.totalCreditsUsed || filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
   const filteredTodayRecords = filteredRecords.filter((item) => item.createdAt.slice(0, 10) === todayKey);
-  const filteredTodayRecordCredits = filteredTodayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
-  const filteredTodayRecordCount = filteredTodayRecords.length;
+  const filteredTodayRecordCredits = recordsStats.todayCreditsUsed || filteredTodayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const filteredTodayRecordCount = recordsStats.todayRecordCount || filteredTodayRecords.length;
   const invitePageSize = 10;
-  const inviteTotalPages = Math.max(1, Math.ceil(filteredInviteCodes.length / invitePageSize));
-  const currentInvitePage = Math.min(invitePage, inviteTotalPages);
-  const pagedInviteCodes = filteredInviteCodes.slice((currentInvitePage - 1) * invitePageSize, currentInvitePage * invitePageSize);
+  const inviteTotalPages = inviteCodesPage.totalPages || Math.max(1, Math.ceil(filteredInviteCodes.length / invitePageSize));
+  const currentInvitePage = inviteCodesPage.page || Math.min(invitePage, inviteTotalPages);
+  const pagedInviteCodes = filteredInviteCodes;
   const recordPageSize = 10;
-  const recordTotalPages = Math.max(1, Math.ceil(filteredRecords.length / recordPageSize));
-  const currentRecordPage = Math.min(recordPage, recordTotalPages);
-  const pagedRecords = filteredRecords.slice((currentRecordPage - 1) * recordPageSize, currentRecordPage * recordPageSize);
+  const recordTotalPages = recordsPage.totalPages || Math.max(1, Math.ceil(filteredRecords.length / recordPageSize));
+  const currentRecordPage = recordsPage.page || Math.min(recordPage, recordTotalPages);
+  const pagedRecords = filteredRecords;
   const userPageSize = 10;
-  const userTotalPages = Math.max(1, Math.ceil(searchableUsers.length / userPageSize));
-  const currentUserPage = Math.min(userPage, userTotalPages);
-  const pagedUsers = searchableUsers.slice((currentUserPage - 1) * userPageSize, currentUserPage * userPageSize);
+  const userTotalPages = usersPage.totalPages || Math.max(1, Math.ceil(searchableUsers.length / userPageSize));
+  const currentUserPage = usersPage.page || Math.min(userPage, userTotalPages);
+  const pagedUsers = searchableUsers;
   const modelUsageCounter = filteredRecords.reduce<Record<string, number>>((accumulator, item) => {
     accumulator[item.modelName] = (accumulator[item.modelName] || 0) + 1;
     return accumulator;
@@ -711,11 +713,51 @@ function AdminView({
     return accumulator;
   }, {});
   const mostActiveHour = Object.entries(hourUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0];
+  const displayMostUsedModel = recordsStats.mostUsedModel || mostUsedModel;
+  const displayMostActiveHour = recordsStats.mostActiveHour || mostActiveHour;
 
   const canSelectInviteCodes = pagedInviteCodes.map((item) => item.code);
   const allSelectableChecked =
     canSelectInviteCodes.length > 0 && canSelectInviteCodes.every((code) => selectedInviteCodes.includes(code));
   const hasAdminData = users.length > 0 || records.length > 0 || inviteCodes.length > 0;
+
+  function getSectionParams(targetSection: AdminSection) {
+    if (targetSection === 'invites') {
+      return {
+        page: invitePage,
+        pageSize: invitePageSize,
+        status: inviteStatusFilter,
+        sort: inviteSortMode,
+        search: inviteSearch.trim(),
+      };
+    }
+
+    if (targetSection === 'users') {
+      return {
+        page: userPage,
+        pageSize: userPageSize,
+        search: userSearch.trim(),
+        sort: userSortMode,
+      };
+    }
+
+    if (targetSection === 'records') {
+      return {
+        page: recordPage,
+        pageSize: recordPageSize,
+        search: recordUserFilter.trim(),
+        model: recordModelFilter,
+        resolution: recordResolutionFilter,
+        range: recordRange,
+      };
+    }
+
+    return { page: 1, pageSize: 10 };
+  }
+
+  function refreshCurrentSection() {
+    return onLoadSection(section, getSectionParams(section));
+  }
 
   useEffect(() => {
     setInvitePage(1);
@@ -724,6 +766,28 @@ function AdminView({
   useEffect(() => {
     setRecordPage(1);
   }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void onLoadSection(section, getSectionParams(section));
+    }, section === 'dashboard' ? 0 : 220);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    section,
+    invitePage,
+    inviteStatusFilter,
+    inviteSortMode,
+    inviteSearch,
+    userPage,
+    userSearch,
+    userSortMode,
+    recordPage,
+    recordUserFilter,
+    recordModelFilter,
+    recordResolutionFilter,
+    recordRange,
+  ]);
 
   function formatPercent(value: number) {
     return `${Math.max(0, Math.min(100, Math.round(value)))}%`;
@@ -910,7 +974,13 @@ function AdminView({
                       : 'rounded-[18px] border border-white/8 bg-white/[0.03] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.05]'
                   }
                   type="button"
-                  onClick={() => setSection(item.id)}
+                  onClick={() => {
+                    setInvitePage(1);
+                    setUserPage(1);
+                    setRecordPage(1);
+                    setSelectedInviteCodes([]);
+                    setSection(item.id);
+                  }}
                 >
                   <span className={active ? 'block text-sm font-black text-white' : 'block text-sm font-black text-zinc-200'}>{item.label}</span>
                   <span className={active ? 'mt-1 block text-[11px] text-sky-100/80' : 'mt-1 block text-[11px] text-zinc-500'}>{item.hint}</span>
@@ -943,19 +1013,19 @@ function AdminView({
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">用户总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{users.length}</p>
+                  <p className="mt-2 text-2xl font-black text-white">{dashboardUserCount}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">邀请码总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{inviteCodes.length}</p>
+                  <p className="mt-2 text-2xl font-black text-white">{dashboardInviteCodeCount}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">生图记录总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{records.length}</p>
+                  <p className="mt-2 text-2xl font-black text-white">{dashboardRecordCount}</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">低积分提醒</p>
-                  <p className="mt-2 text-2xl font-black text-amber-200">{lowCreditUsers.length}</p>
+                  <p className="mt-2 text-2xl font-black text-amber-200">{dashboardLowCreditUserCount}</p>
                 </div>
               </div>
             </div>
@@ -997,7 +1067,7 @@ function AdminView({
                       className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={loading}
                       type="button"
-                      onClick={() => void onRefresh()}
+                      onClick={() => void refreshCurrentSection()}
                     >
                       <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                     </button>
@@ -1095,7 +1165,7 @@ function AdminView({
                       </thead>
                       <tbody className="divide-y divide-white/6">
                         {pagedInviteCodes.map((item) => {
-                          const consumedAfterRedeem = item.redeemedBy ? usersById[item.redeemedBy]?.creditsUsed || 0 : 0;
+                          const consumedAfterRedeem = item.redeemedBy ? item.consumedAfterRedeem ?? usersById[item.redeemedBy]?.creditsUsed ?? 0 : 0;
                           return (
                             <tr key={item.code} className="text-zinc-300">
                               <td className="px-3 py-3 align-top">
@@ -1153,7 +1223,7 @@ function AdminView({
                     </table>
                     </div>
                     <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
-                      <span>共 {filteredInviteCodes.length} 条邀请码，每页 10 条</span>
+                      <span>共 {inviteCodesPage.total || filteredInviteCodes.length} 条邀请码，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
@@ -1211,7 +1281,7 @@ function AdminView({
                       className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={loading}
                       type="button"
-                      onClick={() => void onRefresh()}
+                      onClick={() => void refreshCurrentSection()}
                     >
                       <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                     </button>
@@ -1247,7 +1317,7 @@ function AdminView({
                       <tbody className="divide-y divide-white/6">
                         {pagedUsers.map((item) => {
                           const usageRate = item.totalCredits > 0 ? (item.usedCredits / item.totalCredits) * 100 : 0;
-                          const trend = usageTrendByUserId[item.userId] || Array.from({ length: 7 }, () => 0);
+                          const trend = item.usageTrend || usageTrendByUserId[item.userId] || Array.from({ length: 7 }, () => 0);
                           return (
                             <tr key={item.userId} className="text-zinc-300">
                               <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
@@ -1284,7 +1354,7 @@ function AdminView({
                     </table>
                     </div>
                     <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
-                      <span>共 {searchableUsers.length} 个用户，每页 10 条</span>
+                      <span>共 {usersPage.total || searchableUsers.length} 个用户，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
@@ -1369,7 +1439,7 @@ function AdminView({
                       className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={loading}
                       type="button"
-                      onClick={() => void onRefresh()}
+                      onClick={() => void refreshCurrentSection()}
                     >
                       <RotateCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                     </button>
@@ -1391,11 +1461,11 @@ function AdminView({
                   </div>
                   <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                     <p className="text-xs text-zinc-500">最常用模型</p>
-                    <p className="mt-2 text-2xl font-black text-amber-200">{mostUsedModel}</p>
+                    <p className="mt-2 text-2xl font-black text-amber-200">{displayMostUsedModel}</p>
                   </div>
                   <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                     <p className="text-xs text-zinc-500">最活跃时段</p>
-                    <p className="mt-2 text-2xl font-black text-emerald-200">{mostActiveHour ? `${mostActiveHour}:00` : '暂无'}</p>
+                    <p className="mt-2 text-2xl font-black text-emerald-200">{displayMostActiveHour ? `${displayMostActiveHour}:00` : '暂无'}</p>
                   </div>
                 </div>
 
@@ -1440,7 +1510,7 @@ function AdminView({
                     </table>
                     </div>
                     <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3 text-xs text-zinc-400">
-                      <span>共 {filteredRecords.length} 条记录，每页 10 条</span>
+                      <span>共 {recordsPage.total || filteredRecords.length} 条记录，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
@@ -1497,11 +1567,16 @@ export default function App() {
   const [historyRecords, setHistoryRecords] = useState<GenerationRecord[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverviewState>({
     users: [],
+    usersPage: emptyPage,
     records: [],
     recordsPage: emptyPage,
     inviteCodes: [],
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
+    dashboardStats: emptyDashboardStats,
+    recordsStats: emptyRecordsStats,
+    recordModelOptions: [],
+    recordResolutionOptions: [],
   });
   const [activeTab, setActiveTab] = useState<AppTab>('create');
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
@@ -1565,7 +1640,7 @@ export default function App() {
       void loadHistory();
     }
     if (activeTab === 'admin') {
-      void loadAdminOverview();
+      void loadAdminSection('dashboard');
     }
   }, [activeTab, user]);
 
@@ -1732,6 +1807,88 @@ export default function App() {
     }
   }
 
+  async function loadAdminSection(
+    section: AdminSection,
+    params: {
+      page?: number;
+      pageSize?: number;
+      status?: string;
+      sort?: string;
+      search?: string;
+      model?: string;
+      resolution?: string;
+      range?: string;
+    } = {},
+  ) {
+    if (!user?.isAdmin) return;
+
+    setAdminLoading(true);
+    try {
+      if (section === 'dashboard') {
+        const payload = await fetchAdminDashboard();
+        setAdminOverview((current) => ({
+          ...current,
+          dashboardStats: payload.stats,
+          adminCredits: payload.adminCredits,
+        }));
+        return;
+      }
+
+      if (section === 'invites') {
+        const payload = await fetchAdminInviteCodes({
+          page: params.page || 1,
+          pageSize: params.pageSize || 10,
+          status: params.status,
+          sort: params.sort,
+          search: params.search,
+        });
+        setAdminOverview((current) => ({
+          ...current,
+          inviteCodes: payload.inviteCodes,
+          inviteCodesPage: payload.inviteCodesPage,
+          adminCredits: payload.adminCredits,
+        }));
+        return;
+      }
+
+      if (section === 'users') {
+        const payload = await fetchAdminUsers({
+          page: params.page || 1,
+          pageSize: params.pageSize || 10,
+          search: params.search,
+          sort: params.sort,
+        });
+        setAdminOverview((current) => ({
+          ...current,
+          users: payload.users,
+          usersPage: payload.usersPage,
+        }));
+        return;
+      }
+
+      const payload = await fetchAdminRecords({
+        page: params.page || 1,
+        pageSize: params.pageSize || 10,
+        search: params.search,
+        model: params.model,
+        resolution: params.resolution,
+        range: params.range,
+      });
+      setAdminOverview((current) => ({
+        ...current,
+        records: payload.records,
+        recordsPage: payload.recordsPage,
+        recordsStats: payload.stats,
+        recordModelOptions: payload.modelOptions,
+        recordResolutionOptions: payload.resolutionOptions,
+      }));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '后台数据加载失败');
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
   async function handleCreateInviteCode(credits: number) {
     try {
       const payload = await createInviteCode({ credits });
@@ -1742,7 +1899,7 @@ export default function App() {
       }));
       setNotice(`已生成邀请码：${payload.inviteCode?.code || ''}`);
       void fetchMe().then(setUser).catch(() => undefined);
-      void loadAdminOverview();
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码生成失败');
     }
@@ -1762,7 +1919,7 @@ export default function App() {
       }));
       setNotice(`已删除邀请码 ${code}，并将积分退回给 admin。`);
       void fetchMe().then(setUser).catch(() => undefined);
-      void loadAdminOverview();
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除邀请码失败');
     }
@@ -1777,7 +1934,7 @@ export default function App() {
       }));
       setNotice(`已从邀请码 ${code} 回收 ${credits} 积分到 admin 总池`);
       void fetchMe().then(setUser).catch(() => undefined);
-      void loadAdminOverview();
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码积分回收失败');
     }
@@ -1894,7 +2051,7 @@ export default function App() {
       void fetchMe().then(setUser).catch(() => undefined);
       void loadHistory();
       if (user?.isAdmin) {
-        void loadAdminOverview();
+        void loadAdminSection('dashboard');
       }
     } catch (error) {
       if (generatedImages.length > 0) {
@@ -2821,14 +2978,21 @@ export default function App() {
           ) : (
             <AdminView
               users={adminOverview.users}
+              usersPage={adminOverview.usersPage}
               records={adminOverview.records}
+              recordsPage={adminOverview.recordsPage}
               inviteCodes={adminOverview.inviteCodes}
+              inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
+              dashboardStats={adminOverview.dashboardStats}
+              recordsStats={adminOverview.recordsStats}
+              recordModelOptions={adminOverview.recordModelOptions}
+              recordResolutionOptions={adminOverview.recordResolutionOptions}
               loading={adminLoading}
               onCreateInviteCode={handleCreateInviteCode}
               onDeleteInviteCode={handleDeleteInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
-              onRefresh={loadAdminOverview}
+              onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
             />
           )}

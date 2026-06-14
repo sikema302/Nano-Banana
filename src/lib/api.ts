@@ -61,6 +61,7 @@ export interface AdminUserSummary {
   usedCredits: number;
   remainingCredits: number;
   lastGeneratedAt: string;
+  usageTrend?: number[];
 }
 
 export interface CreditSummary {
@@ -82,6 +83,8 @@ export interface InviteCodeInfo {
   createdAt: string;
   redeemedBy: string;
   redeemedAt: string;
+  redeemedUsername?: string;
+  consumedAfterRedeem?: number;
 }
 
 export interface PaginationInfo {
@@ -89,6 +92,25 @@ export interface PaginationInfo {
   pageSize: number;
   total: number;
   totalPages: number;
+}
+
+export interface AdminDashboardStats {
+  todayRecordCount: number;
+  todayCreditsUsed: number;
+  inviteUsageRate: number;
+  lowCreditUserCount: number;
+  userCount: number;
+  inviteCodeCount: number;
+  recordCount: number;
+  usedInviteCodeCount: number;
+}
+
+export interface AdminRecordsStats {
+  todayCreditsUsed: number;
+  todayRecordCount: number;
+  totalCreditsUsed: number;
+  mostUsedModel: string;
+  mostActiveHour: string;
 }
 
 export interface ReferenceUploadInput {
@@ -306,6 +328,90 @@ export async function fetchAdminOverview(params: {
     inviteCodesPage: PaginationInfo;
     adminCredits: CreditSummary;
   }>(`/api/admin/overview${suffix}`, {}, true);
+  return {
+    ...result,
+    records: result.records.map(normalizeGenerationRecord),
+  };
+}
+
+function appendOptionalParam(query: URLSearchParams, key: string, value: unknown) {
+  if (value === undefined || value === null || value === '') return;
+  query.set(key, String(value));
+}
+
+export async function fetchAdminDashboard() {
+  return request<{
+    stats: AdminDashboardStats;
+    adminCredits: CreditSummary;
+  }>('/api/admin/dashboard', {}, true);
+}
+
+export async function fetchAdminInviteCodes(params: {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  sort?: string;
+  search?: string;
+} = {}) {
+  const query = new URLSearchParams();
+  appendOptionalParam(query, 'page', params.page);
+  appendOptionalParam(query, 'pageSize', params.pageSize);
+  appendOptionalParam(query, 'status', params.status);
+  appendOptionalParam(query, 'sort', params.sort);
+  appendOptionalParam(query, 'search', params.search);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  return request<{
+    inviteCodes: InviteCodeInfo[];
+    inviteCodesPage: PaginationInfo;
+    adminCredits: CreditSummary;
+  }>(`/api/admin/invite-codes${suffix}`, {}, true);
+}
+
+export async function fetchAdminUsers(params: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  sort?: string;
+} = {}) {
+  const query = new URLSearchParams();
+  appendOptionalParam(query, 'page', params.page);
+  appendOptionalParam(query, 'pageSize', params.pageSize);
+  appendOptionalParam(query, 'search', params.search);
+  appendOptionalParam(query, 'sort', params.sort);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  return request<{
+    users: AdminUserSummary[];
+    usersPage: PaginationInfo;
+  }>(`/api/admin/users${suffix}`, {}, true);
+}
+
+export async function fetchAdminRecords(params: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  model?: string;
+  resolution?: string;
+  range?: string;
+} = {}) {
+  const query = new URLSearchParams();
+  appendOptionalParam(query, 'page', params.page);
+  appendOptionalParam(query, 'pageSize', params.pageSize);
+  appendOptionalParam(query, 'search', params.search);
+  appendOptionalParam(query, 'model', params.model);
+  appendOptionalParam(query, 'resolution', params.resolution);
+  appendOptionalParam(query, 'range', params.range);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  const result = await request<{
+    records: GenerationRecord[];
+    recordsPage: PaginationInfo;
+    stats: AdminRecordsStats;
+    modelOptions: string[];
+    resolutionOptions: string[];
+  }>(`/api/admin/records${suffix}`, {}, true);
+
   return {
     ...result,
     records: result.records.map(normalizeGenerationRecord),

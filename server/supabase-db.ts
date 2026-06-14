@@ -550,20 +550,71 @@ export async function deleteInviteCode(code: string): Promise<void> {
 export async function listInviteCodes(
   page: number,
   pageSize: number,
+  options: {
+    status?: string;
+    sort?: string;
+    search?: string;
+  } = {},
 ): Promise<{ codes: InviteCodeRow[]; total: number }> {
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+  const keyword = String(options.search || '').trim();
+  const userIdsForKeyword = new Set<string>();
 
-  const { count, error: countError } = await getSupabase()
+  if (keyword) {
+    const safeKeyword = keyword.replace(/[%_,]/g, ' ');
+    const { data: matchedUsers } = await getSupabase()
+      .from('users')
+      .select('id')
+      .ilike('username', `%${safeKeyword}%`)
+      .limit(200);
+
+    for (const row of matchedUsers || []) {
+      const userId = normalizeSupabaseId((row as { id: string | number }).id);
+      if (userId) userIdsForKeyword.add(userId);
+    }
+  }
+
+  const applyFilters = (query: any) => {
+    let next = query;
+    if (options.status === 'used') {
+      next = next.not('redeemed_by', 'is', null).neq('redeemed_by', '');
+    } else if (options.status === 'unused') {
+      next = next.is('redeemed_by', null);
+    }
+
+    if (keyword) {
+      const safeKeyword = keyword.replace(/[(),]/g, ' ');
+      const orParts = [`code.ilike.%${safeKeyword}%`, `redeemed_by.ilike.%${safeKeyword}%`];
+      if (userIdsForKeyword.size > 0) {
+        orParts.push(`redeemed_by.in.(${[...userIdsForKeyword].join(',')})`);
+      }
+      next = next.or(orParts.join(','));
+    }
+
+    return next;
+  };
+
+  const { count, error: countError } = await applyFilters(getSupabase()
     .from('invite_codes')
-    .select('*', { count: 'exact', head: true });
+    .select('*', { count: 'exact', head: true }));
   const total = countError ? 0 : count || 0;
 
-  const { data, error } = await getSupabase()
+  let dataQuery = applyFilters(getSupabase()
     .from('invite_codes')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .range(from, to);
+    .select('*'));
+
+  if (options.sort === 'created-asc') {
+    dataQuery = dataQuery.order('created_at', { ascending: true });
+  } else if (options.sort === 'credits-desc') {
+    dataQuery = dataQuery.order('credits', { ascending: false }).order('created_at', { ascending: false });
+  } else if (options.sort === 'credits-asc') {
+    dataQuery = dataQuery.order('credits', { ascending: true }).order('created_at', { ascending: false });
+  } else {
+    dataQuery = dataQuery.order('created_at', { ascending: false });
+  }
+
+  const { data, error } = await dataQuery.range(from, to);
   if (error) throw new Error(`List invite codes failed: ${error.message}`);
 
   return {
@@ -728,41 +779,100 @@ export async function getGenerationSummaries(): Promise<
 export async function getGenerationsWithInviteCode(
   page: number,
   pageSize: number,
+  options: {
+    search?: string;
+    model?: string;
+    resolution?: string;
+    range?: string;
+  } = {},
 ): Promise<{ records: GenerationRow[]; total: number }> {
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+  const keyword = String(options.search || '').trim();
+  const userIdsForInviteKeyword = new Set<string>();
 
-  const { count, error: countError } = await getSupabase()
+  if (keyword) {
+    const safeKeyword = keyword.replace(/[%_,]/g, ' ');
+    const { data: inviteMatches } = await getSupabase()
+      .from('invite_codes')
+      .select('redeemed_by')
+      .ilike('code', `%${safeKeyword}%`)
+      .not('redeemed_by', 'is', null)
+      .limit(200);
+
+    for (const row of inviteMatches || []) {
+      const userId = normalizeSupabaseId((row as { redeemed_by: string | number | null }).redeemed_by);
+      if (userId) userIdsForInviteKeyword.add(userId);
+    }
+  }
+
+  const applyFilters = (query: any) => {
+    let next = query.neq('username', 'demo');
+
+    if (options.model && options.model !== 'all') {
+      next = next.eq('model_name', options.model);
+    }
+
+    if (options.resolution && options.resolution !== 'all') {
+      const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
+      if (dimensions) next = next.eq('dimensions', dimensions);
+      if (imageSize) next = next.eq('image_size', imageSize);
+    }
+
+    if (options.range && options.range !== 'all') {
+      const hours = options.range === '24h' ? 24 : options.range === '7d' ? 24 * 7 : options.range === '30d' ? 24 * 30 : 0;
+      if (hours > 0) {
+        next = next.gte('created_at', new Date(Date.now() - hours * 60 * 60 * 1000).toISOString());
+      }
+    }
+
+    if (keyword) {
+      const safeKeyword = keyword.replace(/[(),]/g, ' ');
+      const orParts = [
+        `username.ilike.%${safeKeyword}%`,
+        `user_id.ilike.%${safeKeyword}%`,
+        `prompt.ilike.%${safeKeyword}%`,
+      ];
+      if (userIdsForInviteKeyword.size > 0) {
+        orParts.push(`user_id.in.(${[...userIdsForInviteKeyword].join(',')})`);
+      }
+      next = next.or(orParts.join(','));
+    }
+
+    return next;
+  };
+
+  const { count, error: countError } = await applyFilters(getSupabase()
     .from('generations')
-    .select('*', { count: 'exact', head: true })
-    .neq('username', 'demo');
+    .select('*', { count: 'exact', head: true }));
   const total = countError ? 0 : count || 0;
 
-  const { data, error } = await getSupabase()
+  const { data, error } = await applyFilters(getSupabase()
     .from('generations')
-    .select('*')
-    .neq('username', 'demo')
+    .select('*'))
     .order('created_at', { ascending: false })
     .range(from, to);
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
 
-  const records = (data || []) as unknown as GenerationRow[];
+  const records = (data || []).map((row) => toGenerationRow(row as Record<string, unknown>));
 
   // 为每条记录附加 invite_code
   const userIds = [...new Set(records.map((r) => r.user_id))];
   const inviteCodeMap = new Map<string, string>();
 
-  for (const userId of userIds) {
-    const { data: inviteData } = await getSupabase()
+  if (userIds.length > 0) {
+    const { data: inviteRows } = await getSupabase()
       .from('invite_codes')
-      .select('code')
-      .eq('redeemed_by', userId)
+      .select('redeemed_by, code')
+      .in('redeemed_by', userIds)
       .order('redeemed_at', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-    if (inviteData) {
-      inviteCodeMap.set(userId, (inviteData as { code: string }).code);
+      .order('created_at', { ascending: false });
+
+    for (const row of inviteRows || []) {
+      const userId = normalizeSupabaseId((row as { redeemed_by: string | number }).redeemed_by);
+      if (userId && !inviteCodeMap.has(userId)) {
+        inviteCodeMap.set(userId, String((row as { code: string }).code || ''));
+      }
     }
   }
 
@@ -924,24 +1034,34 @@ export async function getRegisteredUsers(): Promise<
     .order('created_at', { ascending: false });
   if (error) return [];
 
-  const users: Array<{
-    user_id: string;
-    username: string;
-    total_credits: number;
-    used_credits: number;
-  }> = [];
+  const userIds = (data || []).map((user: { id: string | number }) => normalizeSupabaseId(user.id)).filter(Boolean);
+  const creditMap = new Map<string, { total_credits: number; used_credits: number }>();
 
-  for (const user of data as Array<{ id: string; username: string }>) {
-    const credits = await getUserCredits(user.id);
-    users.push({
-      user_id: user.id,
-      username: user.username,
-      total_credits: credits.totalCredits,
-      used_credits: credits.usedCredits,
-    });
+  if (userIds.length > 0) {
+    const { data: creditRows } = await getSupabase()
+      .from('user_credits')
+      .select('user_id, total_credits, used_credits')
+      .in('user_id', userIds);
+
+    for (const row of creditRows || []) {
+      const userId = normalizeSupabaseId((row as UserCreditsRow).user_id);
+      creditMap.set(userId, {
+        total_credits: Number((row as UserCreditsRow).total_credits || 0),
+        used_credits: Number((row as UserCreditsRow).used_credits || 0),
+      });
+    }
   }
 
-  return users;
+  return (data as Array<{ id: string; username: string }>).map((user) => {
+    const userId = normalizeSupabaseId(user.id);
+    const credits = creditMap.get(userId);
+    return {
+      user_id: userId,
+      username: user.username,
+      total_credits: Number(credits?.total_credits || 0),
+      used_credits: Number(credits?.used_credits || 0),
+    };
+  });
 }
 
 export async function getAllCreditRows(): Promise<

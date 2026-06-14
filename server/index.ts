@@ -724,6 +724,111 @@ function toPagination(page: number, pageSize: number, total: number): Pagination
   };
 }
 
+type AdminUserSummaryRow = {
+  userId: string;
+  username: string;
+  generations: number;
+  creditsUsed: number;
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+  lastGeneratedAt: string;
+  usageTrend?: number[];
+};
+
+function paginateArray<T>(items: T[], page: number, pageSize: number) {
+  const offset = (page - 1) * pageSize;
+  return items.slice(offset, offset + pageSize);
+}
+
+function summarizeRecordStats(records: ReturnType<typeof toGeneration>[]) {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayRecords = records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+  const modelUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
+    accumulator[item.modelName] = (accumulator[item.modelName] || 0) + 1;
+    return accumulator;
+  }, {});
+  const hourUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
+    const hour = String(new Date(item.createdAt).getHours()).padStart(2, '0');
+    accumulator[hour] = (accumulator[hour] || 0) + 1;
+    return accumulator;
+  }, {});
+
+  return {
+    todayCreditsUsed: todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0),
+    todayRecordCount: todayRecords.length,
+    totalCreditsUsed: records.reduce((sum, item) => sum + item.creditsUsed, 0),
+    mostUsedModel: Object.entries(modelUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '',
+    mostActiveHour: Object.entries(hourUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '',
+  };
+}
+
+async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
+  const db = await getSupabaseDb();
+  const generationSummaries = await db.getGenerationSummaries();
+  const registeredUsers = await db.getRegisteredUsers();
+  const creditRows = await db.getAllCreditRows();
+  const summaryByUserId = new Map(
+    generationSummaries.map((row) => [
+      row.user_id,
+      {
+        userId: row.user_id,
+        username: row.username,
+        generations: row.generations,
+        creditsUsed: row.credits_used,
+        lastGeneratedAt: row.last_generated_at,
+      },
+    ]),
+  );
+  const userMap = new Map<string, AdminUserSummaryRow>();
+
+  for (const row of registeredUsers) {
+    userMap.set(row.user_id, {
+      userId: row.user_id,
+      username: row.username,
+      generations: 0,
+      creditsUsed: 0,
+      totalCredits: row.total_credits,
+      usedCredits: row.used_credits,
+      remainingCredits: Math.max(0, row.total_credits - row.used_credits),
+      lastGeneratedAt: '',
+    });
+  }
+
+  for (const row of creditRows) {
+    if (!userMap.has(row.user_id)) {
+      userMap.set(row.user_id, {
+        userId: row.user_id,
+        username: row.username,
+        generations: 0,
+        creditsUsed: 0,
+        totalCredits: row.total_credits,
+        usedCredits: row.used_credits,
+        remainingCredits: Math.max(0, row.total_credits - row.used_credits),
+        lastGeneratedAt: '',
+      });
+    }
+  }
+
+  for (const summary of summaryByUserId.values()) {
+    const current = userMap.get(summary.userId);
+    userMap.set(summary.userId, {
+      userId: summary.userId,
+      username: current?.username || summary.username,
+      generations: summary.generations,
+      creditsUsed: summary.creditsUsed,
+      totalCredits: current?.totalCredits || 0,
+      usedCredits: current?.usedCredits || 0,
+      remainingCredits: current?.remainingCredits || 0,
+      lastGeneratedAt: summary.lastGeneratedAt,
+    });
+  }
+
+  return [...userMap.values()].sort(
+    (left, right) => right.creditsUsed - left.creditsUsed || right.generations - left.generations,
+  );
+}
+
 function issueToken(user: AuthUser) {
   return jwt.sign(user, tokenSecret, { expiresIn: '30d' });
 }
@@ -2942,6 +3047,266 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [users, adminCredits, recordPage, invitePage, usedInvitePage] = await Promise.all([
+          getSupabaseAdminUsers(),
+          db.getAdminCreditSummary(),
+          db.getGenerationsWithInviteCode(1, 100000),
+          db.listInviteCodes(1, 1),
+          db.listInviteCodes(1, 1, { status: 'used' }),
+        ]);
+        const records = recordPage.records.map((row) => toGeneration({
+          id: row.id,
+          user_id: row.user_id,
+          username: row.username,
+          prompt: row.prompt,
+          model_id: row.model_id,
+          model_name: row.model_name,
+          dimensions: row.dimensions,
+          image_size: row.image_size,
+          image_path: row.image_path,
+          credits_used: row.credits_used,
+          reference_images: row.reference_images,
+          created_at: row.created_at,
+          invite_code: row.invite_code,
+        }));
+        const recordStats = summarizeRecordStats(records);
+
+        res.json({
+          stats: {
+            todayRecordCount: recordStats.todayRecordCount,
+            todayCreditsUsed: recordStats.todayCreditsUsed,
+            inviteUsageRate: invitePage.total > 0 ? Math.round((usedInvitePage.total / invitePage.total) * 100) : 0,
+            lowCreditUserCount: users.filter((item) => item.remainingCredits <= 50).length,
+            userCount: users.length,
+            inviteCodeCount: invitePage.total,
+            recordCount: recordPage.total,
+            usedInviteCodeCount: usedInvitePage.total,
+          },
+          adminCredits,
+        });
+        return;
+      }
+
+      const payload = await withReadDb((db) => {
+        ensureSchema(db);
+        const todayKey = new Date().toISOString().slice(0, 10);
+        const today = getOne<{ count: number; credits: number }>(
+          db,
+          "SELECT COUNT(*) AS count, COALESCE(SUM(credits_used), 0) AS credits FROM generations WHERE username != 'demo' AND substr(created_at, 1, 10) = ?",
+          [todayKey],
+        );
+        const inviteCount = Number(getOne<{ total: number }>(db, 'SELECT COUNT(*) AS total FROM invite_codes')?.total || 0);
+        const usedInviteCount = Number(
+          getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM invite_codes WHERE redeemed_by IS NOT NULL AND redeemed_by != ''")?.total || 0,
+        );
+        const userCount = Number(getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM users WHERE username != 'demo'")?.total || 0);
+        const recordCount = Number(getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM generations WHERE username != 'demo'")?.total || 0);
+        return {
+          stats: {
+            todayRecordCount: Number(today?.count || 0),
+            todayCreditsUsed: Number(today?.credits || 0),
+            inviteUsageRate: inviteCount > 0 ? Math.round((usedInviteCount / inviteCount) * 100) : 0,
+            lowCreditUserCount: 0,
+            userCount,
+            inviteCodeCount: inviteCount,
+            recordCount,
+            usedInviteCodeCount: usedInviteCount,
+          },
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.json(payload);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch admin dashboard failed' });
+    }
+  });
+
+  app.get('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
+    const page = parsePaginationValue(req.query.page, 1, 1, 100000);
+    const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);
+    const status = normalizeString(req.query.status) || 'all';
+    const sort = normalizeString(req.query.sort) || 'created-desc';
+    const search = normalizeString(req.query.search);
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [{ codes, total }, adminCredits, users] = await Promise.all([
+          db.listInviteCodes(page, pageSize, { status, sort, search }),
+          db.getAdminCreditSummary(),
+          getSupabaseAdminUsers(),
+        ]);
+        const usersById = new Map(users.map((item) => [item.userId, item]));
+        const inviteCodes = codes.map((row) => {
+          const redeemedBy = normalizeString(row.redeemed_by);
+          const redeemedUser = redeemedBy ? usersById.get(redeemedBy) : null;
+          return {
+            ...toInviteCode({
+              code: row.code,
+              credits: row.credits,
+              issued_credits: row.issued_credits,
+              created_by: row.created_by,
+              created_at: row.created_at,
+              redeemed_by: row.redeemed_by,
+              redeemed_at: row.redeemed_at,
+              low_balance_since: row.low_balance_since,
+            }),
+            redeemedUsername: redeemedUser?.username || '',
+            consumedAfterRedeem: redeemedUser?.creditsUsed || 0,
+          };
+        });
+
+        res.json({
+          inviteCodes,
+          inviteCodesPage: toPagination(page, pageSize, total),
+          adminCredits,
+        });
+        return;
+      }
+
+      const payload = await withReadDb((db) => {
+        ensureSchema(db);
+        const total = Number(getOne<{ total: number }>(db, 'SELECT COUNT(*) AS total FROM invite_codes')?.total || 0);
+        const inviteCodes = runQuery<Record<string, unknown>>(
+          db,
+          'SELECT code, credits, issued_credits, created_by, created_at, redeemed_by, redeemed_at, low_balance_since FROM invite_codes ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?',
+          [pageSize, (page - 1) * pageSize],
+        ).map(toInviteCode);
+        return {
+          inviteCodes,
+          inviteCodesPage: toPagination(page, pageSize, total),
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+      res.json(payload);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch invite codes failed' });
+    }
+  });
+
+  app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+    const page = parsePaginationValue(req.query.page, 1, 1, 100000);
+    const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);
+    const search = normalizeString(req.query.search).toLowerCase();
+    const sort = normalizeString(req.query.sort) || 'recent-desc';
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [users, matchedInvites, trendRecords] = await Promise.all([
+          getSupabaseAdminUsers(),
+          search ? db.listInviteCodes(1, 200, { search }) : Promise.resolve({ codes: [], total: 0 }),
+          db.getGenerationsWithInviteCode(1, 100000, { range: '7d' }),
+        ]);
+        const matchedInviteUserIds = new Set(matchedInvites.codes.map((item) => normalizeString(item.redeemed_by)).filter(Boolean));
+        const trendByUserId = new Map<string, number[]>();
+        for (const record of trendRecords.records) {
+          const buckets = trendByUserId.get(record.user_id) || Array.from({ length: 7 }, () => 0);
+          const diff = Math.floor((Date.now() - new Date(record.created_at).getTime()) / (24 * 60 * 60 * 1000));
+          if (diff >= 0 && diff < 7) {
+            buckets[6 - diff] += Number(record.credits_used || 0);
+          }
+          trendByUserId.set(record.user_id, buckets);
+        }
+
+        const filteredUsers = users
+          .filter((item) => {
+            if (!search) return true;
+            return (
+              item.username.toLowerCase().includes(search) ||
+              item.userId.toLowerCase().includes(search) ||
+              matchedInviteUserIds.has(item.userId)
+            );
+          })
+          .sort((left, right) => {
+            const leftTime = left.lastGeneratedAt ? new Date(left.lastGeneratedAt).getTime() : 0;
+            const rightTime = right.lastGeneratedAt ? new Date(right.lastGeneratedAt).getTime() : 0;
+            return sort === 'recent-asc' ? leftTime - rightTime : rightTime - leftTime;
+          });
+        const pagedUsers = paginateArray(filteredUsers, page, pageSize).map((item) => ({
+          ...item,
+          usageTrend: trendByUserId.get(item.userId) || Array.from({ length: 7 }, () => 0),
+        }));
+
+        res.json({
+          users: pagedUsers,
+          usersPage: toPagination(page, pageSize, filteredUsers.length),
+        });
+        return;
+      }
+
+      res.json({ users: [], usersPage: toPagination(page, pageSize, 0) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch users failed' });
+    }
+  });
+
+  app.get('/api/admin/records', requireAuth, requireAdmin, async (req, res) => {
+    const page = parsePaginationValue(req.query.page, 1, 1, 100000);
+    const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);
+    const options = {
+      search: normalizeString(req.query.search),
+      model: normalizeString(req.query.model),
+      resolution: normalizeString(req.query.resolution),
+      range: normalizeString(req.query.range),
+    };
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [pagePayload, statsPayload, allPayload] = await Promise.all([
+          db.getGenerationsWithInviteCode(page, pageSize, options),
+          db.getGenerationsWithInviteCode(1, 100000, options),
+          db.getGenerationsWithInviteCode(1, 100000),
+        ]);
+        const toRecord = (row: (typeof pagePayload.records)[number]) => toGeneration({
+          id: row.id,
+          user_id: row.user_id,
+          username: row.username,
+          prompt: row.prompt,
+          model_id: row.model_id,
+          model_name: row.model_name,
+          dimensions: row.dimensions,
+          image_size: row.image_size,
+          image_path: row.image_path,
+          credits_used: row.credits_used,
+          reference_images: row.reference_images,
+          created_at: row.created_at,
+          invite_code: row.invite_code,
+        });
+        const records = pagePayload.records.map(toRecord);
+        const statRecords = statsPayload.records.map(toRecord);
+        const allRecords = allPayload.records.map(toRecord);
+
+        res.json({
+          records: records.map((item) => toPublicGeneration(req, item)),
+          recordsPage: toPagination(page, pageSize, pagePayload.total),
+          stats: summarizeRecordStats(statRecords),
+          modelOptions: Array.from(new Set(allRecords.map((item) => item.modelName))).sort(),
+          resolutionOptions: Array.from(
+            new Set(allRecords.map((item) => (item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions))),
+          ).sort(),
+        });
+        return;
+      }
+
+      res.json({
+        records: [],
+        recordsPage: toPagination(page, pageSize, 0),
+        stats: summarizeRecordStats([]),
+        modelOptions: [],
+        resolutionOptions: [],
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch records failed' });
+    }
+  });
 
   app.post('/api/admin/invite-codes', requireAuth, requireAdmin, async (req, res) => {
     const requestedCredits = Number(req.body?.credits);
