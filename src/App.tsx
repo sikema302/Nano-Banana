@@ -557,6 +557,7 @@ function AdminView({
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
+  const [copiedCode, setCopiedCode] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
@@ -851,6 +852,36 @@ function AdminView({
     }
   }
 
+  async function handleCopyInviteCode(code: string) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(code);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = code;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error('复制失败');
+        }
+      }
+
+      setCopiedCode(code);
+      window.setTimeout(() => {
+        setCopiedCode((current) => (current === code ? '' : current));
+      }, 1800);
+    } catch {
+      window.alert('复制失败，请重试');
+    }
+  }
+
   const menuItems: Array<{ id: AdminSection; label: string; hint: string }> = [
     { id: 'dashboard', label: '看板', hint: '今日概览' },
     { id: 'invites', label: '邀请码', hint: '发码与回收' },
@@ -1083,6 +1114,13 @@ function AdminView({
                               </td>
                               <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
                               <td className="px-3 py-3 text-right">
+                                <button
+                                  className="mr-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/20"
+                                  type="button"
+                                  onClick={() => void handleCopyInviteCode(item.code)}
+                                >
+                                  {copiedCode === item.code ? '已复制' : '复制'}
+                                </button>
                                 <button
                                   className="mr-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                                   disabled={reclaimingCode === item.code}
