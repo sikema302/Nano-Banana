@@ -507,6 +507,34 @@ function toGeneration(row: Record<string, unknown>) {
   };
 }
 
+function toPublicReferenceImages(req: Request, referenceImages: string[]) {
+  return referenceImages.map((item) => toPublicAssetUrl(req, item) || item);
+}
+
+function toPublicGeneratedImagePayload(req: Request, payload: GeneratedImagePayload): GeneratedImagePayload {
+  return {
+    ...payload,
+    imagePath: toPublicAssetUrl(req, payload.imagePath) || payload.imagePath,
+    referenceImages: toPublicReferenceImages(req, payload.referenceImages),
+  };
+}
+
+function toPublicSavedImage(req: Request, image: ReturnType<typeof toSavedImage>) {
+  return {
+    ...image,
+    imageUrl: toPublicAssetUrl(req, image.imageUrl) || image.imageUrl,
+    referenceImages: toPublicReferenceImages(req, image.referenceImages),
+  };
+}
+
+function toPublicGeneration(req: Request, record: ReturnType<typeof toGeneration>) {
+  return {
+    ...record,
+    imageUrl: toPublicAssetUrl(req, record.imageUrl) || record.imageUrl,
+    referenceImages: toPublicReferenceImages(req, record.referenceImages),
+  };
+}
+
 function toInviteCode(row: Record<string, unknown>) {
   return {
     code: String(row.code || ''),
@@ -2534,7 +2562,7 @@ async function start() {
         });
       }
 
-      res.json({ image: payload });
+      res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Generate failed' });
     }
@@ -2563,7 +2591,7 @@ async function start() {
           reference_images: row.reference_images,
           created_at: row.created_at,
         }));
-        res.json({ history });
+        res.json({ history: history.map((item) => toPublicGeneration(req, item)) });
         return;
       }
 
@@ -2581,7 +2609,7 @@ async function start() {
         ).map(toGeneration);
       });
 
-      res.json({ history });
+      res.json({ history: history.map((item) => toPublicGeneration(req, item)) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch history failed' });
     }
@@ -2710,7 +2738,7 @@ async function start() {
 
         res.json({
           users,
-          records,
+          records: records.map((item) => toPublicGeneration(req, item)),
           recordsPage: toPagination(recordsPage, recordsPageSize, recordsTotal),
           inviteCodes,
           inviteCodesPage: toPagination(inviteCodesPage, inviteCodesPageSize, inviteCodesTotal),
@@ -3246,16 +3274,21 @@ async function start() {
         const db = await getSupabaseDb();
         const images = await db.getUserImages(userId, category || undefined);
         res.json({
-          images: images.map((row) => toSavedImage({
-            id: row.id,
-            prompt: row.prompt,
-            model_name: row.model_name,
-            dimensions: row.dimensions,
-            image_path: row.image_path,
-            category: row.category,
-            reference_images: row.reference_images,
-            created_at: row.created_at,
-          })),
+          images: images.map((row) =>
+            toPublicSavedImage(
+              req,
+              toSavedImage({
+                id: row.id,
+                prompt: row.prompt,
+                model_name: row.model_name,
+                dimensions: row.dimensions,
+                image_path: row.image_path,
+                category: row.category,
+                reference_images: row.reference_images,
+                created_at: row.created_at,
+              }),
+            ),
+          ),
         });
         return;
       }
@@ -3287,7 +3320,7 @@ async function start() {
         return rows.map(toSavedImage);
       });
 
-      res.json({ images });
+      res.json({ images: images.map((item) => toPublicSavedImage(req, item)) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch images failed' });
     }
@@ -3321,16 +3354,19 @@ async function start() {
 
           await db.updateImageCategory(String(imageId), userId, category);
           res.json({
-            image: toSavedImage({
-              id: existing.id,
-              prompt: existing.prompt,
-              model_name: existing.model_name,
-              dimensions: existing.dimensions,
-              image_path: existing.image_path,
-              category,
-              reference_images: existing.reference_images,
-              created_at: existing.created_at,
-            }),
+            image: toPublicSavedImage(
+              req,
+              toSavedImage({
+                id: existing.id,
+                prompt: existing.prompt,
+                model_name: existing.model_name,
+                dimensions: existing.dimensions,
+                image_path: existing.image_path,
+                category,
+                reference_images: existing.reference_images,
+                created_at: existing.created_at,
+              }),
+            ),
           });
           return;
         }
@@ -3360,16 +3396,19 @@ async function start() {
         });
 
         res.json({
-          image: toSavedImage({
-            id: savedImage.id,
-            prompt: savedImage.prompt,
-            model_name: savedImage.model_name,
-            dimensions: savedImage.dimensions,
-            image_path: savedImage.image_path,
-            category: savedImage.category,
-            reference_images: savedImage.reference_images,
-            created_at: savedImage.created_at,
-          }),
+          image: toPublicSavedImage(
+            req,
+            toSavedImage({
+              id: savedImage.id,
+              prompt: savedImage.prompt,
+              model_name: savedImage.model_name,
+              dimensions: savedImage.dimensions,
+              image_path: savedImage.image_path,
+              category: savedImage.category,
+              reference_images: savedImage.reference_images,
+              created_at: savedImage.created_at,
+            }),
+          ),
         });
         return;
       }
@@ -3440,7 +3479,7 @@ async function start() {
         );
       });
 
-      res.json({ image: savedImage ? toSavedImage(savedImage) : null });
+      res.json({ image: savedImage ? toPublicSavedImage(req, toSavedImage(savedImage)) : null });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Save image failed' });
     }
