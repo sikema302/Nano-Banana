@@ -684,6 +684,9 @@ function AdminView({
   });
 
   const filteredRecordCredits = filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const filteredTodayRecords = filteredRecords.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+  const filteredTodayRecordCredits = filteredTodayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
+  const filteredTodayRecordCount = filteredTodayRecords.length;
   const invitePageSize = 10;
   const inviteTotalPages = Math.max(1, Math.ceil(filteredInviteCodes.length / invitePageSize));
   const currentInvitePage = Math.min(invitePage, inviteTotalPages);
@@ -1327,7 +1330,15 @@ function AdminView({
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">当日消耗积分</p>
+                    <p className="mt-2 text-2xl font-black text-sky-200">{filteredTodayRecordCredits}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="text-xs text-zinc-500">当日生成图片数量</p>
+                    <p className="mt-2 text-2xl font-black text-violet-200">{filteredTodayRecordCount}</p>
+                  </div>
                   <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                     <p className="text-xs text-zinc-500">总消耗积分</p>
                     <p className="mt-2 text-2xl font-black text-white">{filteredRecordCredits}</p>
