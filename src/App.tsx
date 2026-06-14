@@ -1113,12 +1113,20 @@ function AdminView({
                                 {consumedAfterRedeem}
                               </td>
                               <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
-                              <td className="px-3 py-3 text-right">
+                              <td className="whitespace-nowrap px-3 py-3 text-right">
                                 <button
-                                  className="mr-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/20"
+                                  className="hidden"
                                   type="button"
                                   onClick={() => void handleCopyInviteCode(item.code)}
                                 >
+                                  {copiedCode === item.code ? '已复制' : '复制'}
+                                </button>
+                                <button
+                                  className="mr-2 inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg border border-sky-400/35 bg-sky-500/15 px-3 py-1.5 text-[11px] font-semibold text-sky-100 transition hover:bg-sky-500/25"
+                                  type="button"
+                                  onClick={() => void handleCopyInviteCode(item.code)}
+                                >
+                                  <Copy size={12} />
                                   {copiedCode === item.code ? '已复制' : '复制'}
                                 </button>
                                 <button
