@@ -172,6 +172,7 @@ const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 
 const CANONICAL_WEB_ORIGIN =
   normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN) || `https://${CANONICAL_WEB_HOST}`;
 const APP_URL = normalizeEnvValue(process.env.APP_URL);
+const ADMIN_STATS_TIME_ZONE = normalizeEnvValue(process.env.ADMIN_STATS_TIME_ZONE) || 'Asia/Shanghai';
 
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -359,6 +360,34 @@ function normalizeEnvValue(value: string | undefined) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function formatDateKeyInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((item) => item.type === 'year')?.value || '0000';
+  const month = parts.find((item) => item.type === 'month')?.value || '00';
+  const day = parts.find((item) => item.type === 'day')?.value || '00';
+  return `${year}-${month}-${day}`;
+}
+
+function formatHourKeyInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    hour12: false,
+  }).format(date);
 }
 
 /** Vercel 鍏煎鐨勯殢鏈哄瓧鑺傜敓鎴?*/
@@ -742,14 +771,15 @@ function paginateArray<T>(items: T[], page: number, pageSize: number) {
 }
 
 function summarizeRecordStats(records: ReturnType<typeof toGeneration>[]) {
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const todayRecords = records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+  const todayKey = formatDateKeyInTimeZone(new Date());
+  const todayRecords = records.filter((item) => formatDateKeyInTimeZone(item.createdAt) === todayKey);
   const modelUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
     accumulator[item.modelName] = (accumulator[item.modelName] || 0) + 1;
     return accumulator;
   }, {});
   const hourUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
-    const hour = String(new Date(item.createdAt).getHours()).padStart(2, '0');
+    const hour = formatHourKeyInTimeZone(item.createdAt);
+    if (!hour) return accumulator;
     accumulator[hour] = (accumulator[hour] || 0) + 1;
     return accumulator;
   }, {});
@@ -3094,12 +3124,11 @@ async function start() {
 
       const payload = await withReadDb((db) => {
         ensureSchema(db);
-        const todayKey = new Date().toISOString().slice(0, 10);
-        const today = getOne<{ count: number; credits: number }>(
+        const todayKey = formatDateKeyInTimeZone(new Date());
+        const todayRows = runQuery<Record<string, unknown>>(
           db,
-          "SELECT COUNT(*) AS count, COALESCE(SUM(credits_used), 0) AS credits FROM generations WHERE username != 'demo' AND substr(created_at, 1, 10) = ?",
-          [todayKey],
-        );
+          "SELECT created_at, credits_used FROM generations WHERE username != 'demo'",
+        ).filter((row) => formatDateKeyInTimeZone(String(row.created_at || '')) === todayKey);
         const inviteCount = Number(getOne<{ total: number }>(db, 'SELECT COUNT(*) AS total FROM invite_codes')?.total || 0);
         const usedInviteCount = Number(
           getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM invite_codes WHERE redeemed_by IS NOT NULL AND redeemed_by != ''")?.total || 0,
@@ -3108,8 +3137,8 @@ async function start() {
         const recordCount = Number(getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM generations WHERE username != 'demo'")?.total || 0);
         return {
           stats: {
-            todayRecordCount: Number(today?.count || 0),
-            todayCreditsUsed: Number(today?.credits || 0),
+            todayRecordCount: todayRows.length,
+            todayCreditsUsed: todayRows.reduce((sum, row) => sum + Number(row.credits_used || 0), 0),
             inviteUsageRate: inviteCount > 0 ? Math.round((usedInviteCount / inviteCount) * 100) : 0,
             lowCreditUserCount: 0,
             userCount,

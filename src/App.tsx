@@ -124,6 +124,7 @@ const emptyRecordsStats: AdminRecordsStats = {
 const MAX_REFERENCES = 9;
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 5;
+const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
 
 const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
   { value: '1:1', label: '1:1' },
@@ -195,6 +196,35 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+function formatDateKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ADMIN_STATS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((item) => item.type === 'year')?.value || '0000';
+  const month = parts.find((item) => item.type === 'month')?.value || '00';
+  const day = parts.find((item) => item.type === 'day')?.value || '00';
+  return `${year}-${month}-${day}`;
+}
+
+function formatHourKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: ADMIN_STATS_TIME_ZONE,
+    hour: '2-digit',
+    hour12: false,
+  });
+  return formatter.format(date);
 }
 
 function getModelCredits(
@@ -632,10 +662,10 @@ function AdminView({
   const isInvalidCredits = normalizedCredits <= 0 || normalizedCredits > adminCredits.remainingCredits;
   const inviteCreditsTotal = normalizedCredits;
   const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
+  const todayKey = formatDateKey(today);
   const todayRecords = dashboardStats.todayRecordCount > 0
     ? Array.from({ length: dashboardStats.todayRecordCount }, () => ({ createdAt: todayKey, creditsUsed: 0 } as GenerationRecord))
-    : records.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+    : records.filter((item) => formatDateKey(item.createdAt) === todayKey);
   const lowCreditUsers = users.filter((item) => item.remainingCredits <= 50);
   const dashboardTodayRecordCount = dashboardStats.todayRecordCount || todayRecords.length;
   const dashboardLowCreditUserCount = dashboardStats.lowCreditUserCount || lowCreditUsers.length;
@@ -687,7 +717,7 @@ function AdminView({
   const filteredRecords = records;
 
   const filteredRecordCredits = recordsStats.totalCreditsUsed || filteredRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
-  const filteredTodayRecords = filteredRecords.filter((item) => item.createdAt.slice(0, 10) === todayKey);
+  const filteredTodayRecords = filteredRecords.filter((item) => formatDateKey(item.createdAt) === todayKey);
   const filteredTodayRecordCredits = recordsStats.todayCreditsUsed || filteredTodayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
   const filteredTodayRecordCount = recordsStats.todayRecordCount || filteredTodayRecords.length;
   const invitePageSize = 10;
@@ -708,7 +738,8 @@ function AdminView({
   }, {});
   const mostUsedModel = Object.entries(modelUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '暂无';
   const hourUsageCounter = filteredRecords.reduce<Record<string, number>>((accumulator, item) => {
-    const hour = String(new Date(item.createdAt).getHours()).padStart(2, '0');
+    const hour = formatHourKey(item.createdAt);
+    if (!hour) return accumulator;
     accumulator[hour] = (accumulator[hour] || 0) + 1;
     return accumulator;
   }, {});
