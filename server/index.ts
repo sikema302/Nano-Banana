@@ -128,6 +128,18 @@ type ApiCreditAllocation = {
 
 type ApiCreditAllocationMap = Record<ApiCreditPoolId, ApiCreditAllocation>;
 
+type PublicApiKeyRecord = {
+  id: string;
+  name: string;
+  keyHash: string;
+  keyPreview: string;
+  totalCredits: number;
+  usedCredits: number;
+  createdAt: string;
+  createdBy: string;
+  revokedAt?: string;
+};
+
 type SqlDatabase = {
   run: (sql: string, params?: unknown[]) => void;
   exec: (sql: string) => Array<{ columns: string[]; values: unknown[][] }>;
@@ -185,6 +197,7 @@ const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
+const PUBLIC_API_KEYS_SETTING_KEY = 'public_api_keys_v1';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
 const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
@@ -1291,6 +1304,158 @@ function setSetting(db: SqlDatabase, key: string, value: string) {
   );
 }
 
+function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKeyRecord | null {
+  const id = normalizeString(value.id);
+  const keyHash = normalizeString(value.keyHash);
+  if (!id || !keyHash) return null;
+
+  const totalCredits = Math.max(0, Math.floor(Number(value.totalCredits || 0)));
+  const usedCredits = Math.max(0, Math.floor(Number(value.usedCredits || 0)));
+  return {
+    id,
+    name: normalizeString(value.name) || 'API Key',
+    keyHash,
+    keyPreview: normalizeString(value.keyPreview) || 'px_...',
+    totalCredits,
+    usedCredits: Math.min(usedCredits, totalCredits),
+    createdAt: normalizeString(value.createdAt) || nowIso(),
+    createdBy: normalizeString(value.createdBy) || 'admin',
+    revokedAt: normalizeString(value.revokedAt) || undefined,
+  };
+}
+
+function normalizeApiKeyRecords(value: unknown): PublicApiKeyRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => normalizeApiKeyRecord(item as Partial<PublicApiKeyRecord>))
+    .filter((item): item is PublicApiKeyRecord => Boolean(item));
+}
+
+function serializeApiKeyRecords(records: PublicApiKeyRecord[]) {
+  return JSON.stringify(records.map((item) => normalizeApiKeyRecord(item)).filter(Boolean));
+}
+
+function publicApiKeyRecord(record: PublicApiKeyRecord) {
+  return {
+    id: record.id,
+    name: record.name,
+    keyPreview: record.keyPreview,
+    totalCredits: record.totalCredits,
+    usedCredits: record.usedCredits,
+    remainingCredits: Math.max(0, record.totalCredits - record.usedCredits),
+    createdAt: record.createdAt,
+    createdBy: record.createdBy,
+    revokedAt: record.revokedAt || '',
+  };
+}
+
+function generatePublicApiKey() {
+  return `px_${randomHex(24)}`;
+}
+
+function hashPublicApiKey(key: string) {
+  return crypto.createHash('sha256').update(key).digest('hex');
+}
+
+function previewPublicApiKey(key: string) {
+  return `${key.slice(0, 8)}...${key.slice(-6)}`;
+}
+
+async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    const raw = await db.getSetting(PUBLIC_API_KEYS_SETTING_KEY, '[]');
+    return normalizeApiKeyRecords(parseJsonSetting(raw, []));
+  }
+
+  return withReadDb((db) => {
+    ensureSchema(db);
+    const raw = getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]');
+    return normalizeApiKeyRecords(parseJsonSetting(raw, []));
+  });
+}
+
+async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
+  const serialized = serializeApiKeyRecords(records);
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.setSetting(PUBLIC_API_KEYS_SETTING_KEY, serialized);
+    return;
+  }
+
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    setSetting(db, PUBLIC_API_KEYS_SETTING_KEY, serialized);
+  });
+}
+
+async function createPublicApiKey(name: string, totalCredits: number, createdBy: string) {
+  const plainKey = generatePublicApiKey();
+  const record: PublicApiKeyRecord = {
+    id: randomHex(8),
+    name: normalizeString(name) || 'API Key',
+    keyHash: hashPublicApiKey(plainKey),
+    keyPreview: previewPublicApiKey(plainKey),
+    totalCredits: Math.max(1, Math.floor(totalCredits)),
+    usedCredits: 0,
+    createdAt: nowIso(),
+    createdBy,
+  };
+  const records = await readPublicApiKeyRecords();
+  await writePublicApiKeyRecords([record, ...records]);
+  return { plainKey, record };
+}
+
+async function revokePublicApiKey(id: string) {
+  const records = await readPublicApiKeyRecords();
+  let found = false;
+  const nextRecords = records.map((record) => {
+    if (record.id !== id) return record;
+    found = true;
+    return { ...record, revokedAt: record.revokedAt || nowIso() };
+  });
+
+  if (!found) return null;
+  await writePublicApiKeyRecords(nextRecords);
+  return nextRecords.find((record) => record.id === id) || null;
+}
+
+async function reservePublicApiKeyCredits(plainKey: string, credits: number) {
+  const keyHash = hashPublicApiKey(plainKey);
+  const records = await readPublicApiKeyRecords();
+  const index = records.findIndex((record) => record.keyHash === keyHash);
+  if (index < 0) {
+    throw new Error('API Key 无效');
+  }
+
+  const record = records[index];
+  if (record.revokedAt) {
+    throw new Error('API Key 已停用');
+  }
+
+  const remainingCredits = Math.max(0, record.totalCredits - record.usedCredits);
+  if (remainingCredits < credits) {
+    throw new Error(`API Key 额度不足，需要 ${credits}，剩余 ${remainingCredits}`);
+  }
+
+  const nextRecord = {
+    ...record,
+    usedCredits: record.usedCredits + credits,
+  };
+  records[index] = nextRecord;
+  await writePublicApiKeyRecords(records);
+  return nextRecord;
+}
+
+async function refundPublicApiKeyCredits(keyId: string, credits: number) {
+  const records = await readPublicApiKeyRecords();
+  await writePublicApiKeyRecords(
+    records.map((record) =>
+      record.id === keyId ? { ...record, usedCredits: Math.max(0, record.usedCredits - credits) } : record,
+    ),
+  );
+}
+
 function getAdminApiCreditMapSqlite(db: SqlDatabase) {
   const fallback = defaultAdminApiCreditPools();
   const raw = getSetting(db, API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(fallback));
@@ -2226,7 +2391,7 @@ async function start() {
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Vary', 'Origin');
     }
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-API-Key, Idempotency-Key');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.status(204).end();
@@ -2538,6 +2703,130 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鍥剧墖鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  app.post('/api/v1/generate', async (req, res) => {
+    const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+    const prompt = normalizeString(req.body?.prompt);
+    const model = normalizeString(req.body?.model);
+    const dimensions = normalizeString(req.body?.dimensions) || '1:1';
+    const requestedImageSize = normalizeString(req.body?.imageSize);
+    const requestedQuality = normalizeString(req.body?.quality).toLowerCase();
+    const optimizeChineseText = Boolean(req.body?.optimizeChineseText);
+    const rawReferenceImages = Array.isArray(req.body?.reference_images) ? req.body.reference_images : [];
+    const referenceImages = rawReferenceImages
+      .map((item: unknown) => (typeof item === 'string' ? item : normalizeString((item as { data?: string })?.data)))
+      .filter((item: string) => /^https?:\/\//i.test(item));
+
+    if (!apiKey) {
+      res.status(401).json({ error: 'X-API-Key is required' });
+      return;
+    }
+
+    if (!prompt) {
+      res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+
+    let reservedKey: PublicApiKeyRecord | null = null;
+    let creditsUsed = 0;
+
+    try {
+      const modelId = normalizeModelId(model);
+      const ratio = normalizeRatio(dimensions, modelId);
+      const modelName = modelNameFromId(modelId);
+      const imageSize = normalizeImageSize(requestedImageSize, modelId);
+      creditsUsed = getModelCredits(modelId, imageSize) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
+
+      const createdAt = nowIso();
+      const generatedImageSource = await callVisionaryGeneration({
+        prompt,
+        modelId,
+        ratio,
+        imageSize,
+        quality: modelId === 'gpt-image-2' ? requestedQuality : '',
+        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+        images: Array.from(new Set(referenceImages)),
+      });
+      const imagePath = await persistGeneratedImage(generatedImageSource);
+      const username = `api-${reservedKey.name}`.slice(0, 80);
+
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.insertGeneration({
+          userId: `api-key:${reservedKey.id}`,
+          username,
+          prompt,
+          modelId,
+          modelName,
+          dimensions: ratio,
+          imageSize,
+          imagePath,
+          creditsUsed,
+          referenceImages,
+          createdAt,
+        });
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          db.run(
+            `
+              INSERT INTO generations (
+                user_id,
+                username,
+                prompt,
+                model_id,
+                model_name,
+                dimensions,
+                image_size,
+                image_path,
+                credits_used,
+                reference_images,
+                created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+              `api-key:${reservedKey!.id}`,
+              username,
+              prompt,
+              modelId,
+              modelName,
+              ratio,
+              imageSize,
+              imagePath,
+              creditsUsed,
+              serializeReferenceImages(referenceImages),
+              createdAt,
+            ],
+          );
+        });
+      }
+
+      res.json({
+        image: toPublicGeneratedImagePayload(req, {
+          prompt,
+          modelName,
+          dimensions: ratio,
+          imageSize,
+          imagePath,
+          referenceImages,
+          createdAt,
+        }),
+        usage: {
+          creditsUsed,
+          remainingCredits: Math.max(0, reservedKey.totalCredits - reservedKey.usedCredits),
+        },
+      });
+    } catch (error) {
+      if (reservedKey && creditsUsed > 0) {
+        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
+      }
+
+      const message = error instanceof Error ? error.message : 'Generate failed';
+      const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
+      res.status(status).json({ error: message });
+    }
+  });
 
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
@@ -3077,6 +3366,49 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  app.get('/api/admin/api-keys', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const keys = await readPublicApiKeyRecords();
+      res.json({ keys: keys.map(publicApiKeyRecord) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch API keys failed' });
+    }
+  });
+
+  app.post('/api/admin/api-keys', requireAuth, requireAdmin, async (req, res) => {
+    const name = normalizeString(req.body?.name) || 'API Key';
+    const credits = Math.floor(Number(req.body?.credits));
+
+    if (!Number.isFinite(credits) || credits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    try {
+      const payload = await createPublicApiKey(name, credits, req.authUser!.username);
+      res.status(201).json({
+        apiKey: payload.plainKey,
+        key: publicApiKeyRecord(payload.record),
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Create API key failed' });
+    }
+  });
+
+  app.post('/api/admin/api-keys/:id/revoke', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const key = await revokePublicApiKey(normalizeString(req.params.id));
+      if (!key) {
+        res.status(404).json({ error: 'API key not found' });
+        return;
+      }
+
+      res.json({ key: publicApiKeyRecord(key) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Revoke API key failed' });
+    }
+  });
 
   app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
     try {

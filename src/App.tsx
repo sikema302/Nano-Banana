@@ -1,11 +1,13 @@
 import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import {
+  BookOpen,
   Bookmark,
   Clock3,
   Copy,
   Download,
   ImagePlus,
   Info,
+  KeyRound,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -21,6 +23,7 @@ import {
 } from 'lucide-react';
 import {
   clearSession,
+  createPublicApiKey,
   createInviteCode,
   deleteInviteCode as deleteInviteCodeRequest,
   fetchAdminDashboard,
@@ -28,6 +31,7 @@ import {
   fetchAdminOverview,
   fetchAdminRecords,
   fetchAdminUsers,
+  fetchPublicApiKeys,
   deleteImage,
   fetchHealth,
   fetchMe,
@@ -41,6 +45,7 @@ import {
   moveImage,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
+  revokePublicApiKey,
   type AdminDashboardStats,
   type AdminRecordsStats,
   type AdminUserSummary,
@@ -51,6 +56,7 @@ import {
   type InviteCodeInfo,
   type ModelInfo,
   type PaginationInfo,
+  type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
   type UserInfo,
@@ -78,7 +84,7 @@ const defaultModels: ModelInfo[] = [
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
-type AppTab = 'create' | 'history' | 'admin';
+type AppTab = 'create' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records';
 
 interface AdminOverviewState {
@@ -577,6 +583,324 @@ function HistoryView({
             <button className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={currentPage <= 1} type="button" onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
             <span>{currentPage} / {totalPages}</span>
             <button className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={currentPage >= totalPages} type="button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>下一页</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ApiDocsView({
+  user,
+  onNotice,
+}: {
+  user: UserInfo | null;
+  onNotice: (message: string) => void;
+}) {
+  const [apiKeys, setApiKeys] = useState<PublicApiKeyInfo[]>([]);
+  const [keyName, setKeyName] = useState('');
+  const [keyCredits, setKeyCredits] = useState(100);
+  const [generatedKey, setGeneratedKey] = useState('');
+  const [loadingKeys, setLoadingKeys] = useState(false);
+  const [submittingKey, setSubmittingKey] = useState(false);
+  const [copiedText, setCopiedText] = useState('');
+  const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
+  const endpoint = `${baseUrl}/api/v1/generate`;
+  const requestExample = JSON.stringify(
+    {
+      prompt: 'A cinematic product photo of a pink crystal perfume bottle on black silk',
+      model: 'Nano_Banana_Pro',
+      dimensions: '1:1',
+      imageSize: '2K',
+      reference_images: [],
+    },
+    null,
+    2,
+  );
+  const curlExample = `curl -X POST ${endpoint} \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: px_your_api_key" \\
+  -d '${requestExample}'`;
+  const jsExample = `const response = await fetch('${endpoint}', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'px_your_api_key',
+  },
+  body: JSON.stringify(${requestExample}),
+});
+
+const result = await response.json();
+console.log(result.image.imagePath, result.usage.remainingCredits);`;
+
+  useEffect(() => {
+    if (!user?.isAdmin) return;
+
+    setLoadingKeys(true);
+    fetchPublicApiKeys()
+      .then((payload) => setApiKeys(payload.keys))
+      .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
+      .finally(() => setLoadingKeys(false));
+  }, [user?.isAdmin]);
+
+  async function copyText(value: string, label: string) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error('copy_failed');
+      }
+
+      setCopiedText(label);
+      window.setTimeout(() => setCopiedText((current) => (current === label ? '' : current)), 1600);
+    } catch {
+      onNotice('复制失败，请手动复制');
+    }
+  }
+
+  async function handleCreateApiKey() {
+    setSubmittingKey(true);
+    try {
+      const payload = await createPublicApiKey({
+        name: keyName.trim() || 'API Key',
+        credits: keyCredits,
+      });
+      setGeneratedKey(payload.apiKey);
+      setApiKeys((current) => [payload.key, ...current]);
+      setKeyName('');
+      onNotice('API Key 已生成，请及时复制完整 Key');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 生成失败');
+    } finally {
+      setSubmittingKey(false);
+    }
+  }
+
+  async function handleRevokeApiKey(id: string) {
+    if (!window.confirm('确认停用这个 API Key 吗？停用后无法继续调用接口。')) return;
+
+    try {
+      const payload = await revokePublicApiKey(id);
+      setApiKeys((current) => current.map((item) => (item.id === id ? payload.key : item)));
+      onNotice('API Key 已停用');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 停用失败');
+    }
+  }
+
+  return (
+    <section className="custom-scrollbar h-full overflow-auto px-3 py-3 sm:px-5 sm:py-5">
+      <div className="mx-auto grid max-w-6xl gap-4">
+        <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">PIXORY API</p>
+              <h1 className="mt-2 text-2xl font-black text-white">API 文档</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                使用管理员发放的 API Key 调用生图接口，额度按模型消耗自动扣减。
+              </p>
+            </div>
+            <button
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white"
+              type="button"
+              onClick={() => void copyText(endpoint, 'endpoint')}
+            >
+              <Copy size={14} />
+              {copiedText === 'endpoint' ? '已复制' : '复制地址'}
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {[
+              { label: 'Endpoint', value: '/api/v1/generate' },
+              { label: 'Method', value: 'POST' },
+              { label: 'Auth', value: 'X-API-Key' },
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-xs font-semibold text-zinc-500">{item.label}</p>
+                <p className="mt-2 break-all font-mono text-sm font-semibold text-white">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {user?.isAdmin ? (
+          <div className="rounded-[22px] border border-sky-400/15 bg-sky-400/[0.04] p-5">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-white">发放 API Key</h2>
+                <p className="mt-1 text-xs text-zinc-500">完整 Key 只在生成后显示一次，请复制后发给用户。</p>
+              </div>
+              <button
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white disabled:opacity-50"
+                disabled={loadingKeys}
+                type="button"
+                onClick={() => {
+                  setLoadingKeys(true);
+                  fetchPublicApiKeys()
+                    .then((payload) => setApiKeys(payload.keys))
+                    .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
+                    .finally(() => setLoadingKeys(false));
+                }}
+              >
+                <RotateCw className={loadingKeys ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                刷新
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_160px_auto]">
+              <input
+                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
+                placeholder="Key 名称，例如客户A / 渠道B"
+                value={keyName}
+                onChange={(event) => setKeyName(event.target.value)}
+              />
+              <input
+                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
+                min={1}
+                type="number"
+                value={keyCredits}
+                onChange={(event) => setKeyCredits(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+              />
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-black text-black transition hover:bg-zinc-200 disabled:opacity-50"
+                disabled={submittingKey}
+                type="button"
+                onClick={() => void handleCreateApiKey()}
+              >
+                <KeyRound size={15} />
+                {submittingKey ? '生成中...' : '生成 Key'}
+              </button>
+            </div>
+
+            {generatedKey ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 p-3">
+                <code className="min-w-0 flex-1 break-all font-mono text-xs text-emerald-100">{generatedKey}</code>
+                <button
+                  className="rounded-xl border border-emerald-300/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/10"
+                  type="button"
+                  onClick={() => void copyText(generatedKey, 'generated-key')}
+                >
+                  {copiedText === 'generated-key' ? '已复制' : '复制完整 Key'}
+                </button>
+              </div>
+            ) : null}
+
+            <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
+              <table className="min-w-[760px] w-full text-left text-xs">
+                <thead className="bg-white/[0.04] text-zinc-500">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">名称</th>
+                    <th className="px-3 py-2 font-medium">Key</th>
+                    <th className="px-3 py-2 font-medium">额度</th>
+                    <th className="px-3 py-2 font-medium">状态</th>
+                    <th className="px-3 py-2 text-right font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/6">
+                  {apiKeys.length > 0 ? apiKeys.map((item) => (
+                    <tr key={item.id} className="text-zinc-300">
+                      <td className="px-3 py-3 font-semibold text-white">{item.name}</td>
+                      <td className="px-3 py-3 font-mono text-zinc-500">{item.keyPreview}</td>
+                      <td className="px-3 py-3">
+                        <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
+                        <span className="text-zinc-500"> / {item.totalCredits}</span>
+                      </td>
+                      <td className="px-3 py-3">{item.revokedAt ? '已停用' : '可用'}</td>
+                      <td className="px-3 py-3 text-right">
+                        <button
+                          className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
+                          disabled={Boolean(item.revokedAt)}
+                          type="button"
+                          onClick={() => void handleRevokeApiKey(item.id)}
+                        >
+                          停用
+                        </button>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td className="px-3 py-8 text-center text-zinc-500" colSpan={5}>暂无 API Key</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+            <h2 className="text-base font-black text-white">请求参数</h2>
+            <div className="mt-4 grid gap-2 text-sm">
+              {[
+                ['prompt', 'string', '必填，图像提示词'],
+                ['model', 'string', 'gpt-image-2 或 Nano_Banana_Pro'],
+                ['dimensions', 'string', '1:1、16:9、9:16 等比例'],
+                ['imageSize', 'string', 'STANDARD、2K、4K'],
+                ['quality', 'string', 'GPT Image 2 可传 low、medium、high'],
+                ['optimizeChineseText', 'boolean', 'Nano Banana Pro 可开启中文优化'],
+                ['reference_images', 'string[]', '可选，公网可访问图片 URL'],
+              ].map(([name, type, desc]) => (
+                <div key={name} className="grid gap-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 sm:grid-cols-[150px_120px_1fr]">
+                  <code className="font-mono text-sky-200">{name}</code>
+                  <span className="text-zinc-400">{type}</span>
+                  <span className="text-zinc-500">{desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+            <h2 className="text-base font-black text-white">响应格式</h2>
+            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{`{
+  "image": {
+    "prompt": "...",
+    "modelName": "Nano Banana Pro",
+    "dimensions": "1:1",
+    "imageSize": "2K",
+    "imagePath": "https://pixory.top/uploads/generated/xxx.png",
+    "referenceImages": [],
+    "createdAt": "2026-06-15T00:00:00.000Z"
+  },
+  "usage": {
+    "creditsUsed": 24,
+    "remainingCredits": 76
+  }
+}`}</pre>
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-black text-white">curl 示例</h2>
+              <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(curlExample, 'curl')}>
+                {copiedText === 'curl' ? '已复制' : '复制'}
+              </button>
+            </div>
+            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{curlExample}</pre>
+          </div>
+
+          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-black text-white">JavaScript 示例</h2>
+              <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(jsExample, 'js')}>
+                {copiedText === 'js' ? '已复制' : '复制'}
+              </button>
+            </div>
+            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{jsExample}</pre>
           </div>
         </div>
       </div>
@@ -2339,6 +2663,7 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
+    { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
     { id: 'admin', label: '后台管理', icon: <ShieldCheck size={15} />, hidden: !user?.isAdmin },
   ];
 
@@ -3006,6 +3331,8 @@ export default function App() {
             </section>
           ) : activeTab === 'history' ? (
             <HistoryView records={historyRecords} onPreview={setPreviewImage} />
+          ) : activeTab === 'apiDocs' ? (
+            <ApiDocsView user={user} onNotice={setNotice} />
           ) : (
             <AdminView
               users={adminOverview.users}

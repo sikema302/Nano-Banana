@@ -113,6 +113,18 @@ export interface AdminRecordsStats {
   mostActiveHour: string;
 }
 
+export interface PublicApiKeyInfo {
+  id: string;
+  name: string;
+  keyPreview: string;
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+  createdAt: string;
+  createdBy: string;
+  revokedAt: string;
+}
+
 export interface ReferenceUploadInput {
   name: string;
   mimeType: string;
@@ -416,6 +428,31 @@ export async function fetchAdminRecords(params: {
     ...result,
     records: result.records.map(normalizeGenerationRecord),
   };
+}
+
+export async function fetchPublicApiKeys() {
+  return request<{ keys: PublicApiKeyInfo[] }>('/api/admin/api-keys', {}, true);
+}
+
+export async function createPublicApiKey(payload: { name: string; credits: number }) {
+  return request<{ apiKey: string; key: PublicApiKeyInfo }>(
+    '/api/admin/api-keys',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    true,
+  );
+}
+
+export async function revokePublicApiKey(id: string) {
+  return request<{ key: PublicApiKeyInfo }>(
+    `/api/admin/api-keys/${encodeURIComponent(id)}/revoke`,
+    {
+      method: 'POST',
+    },
+    true,
+  );
 }
 
 export async function createInviteCode(payload: { credits: number }) {
