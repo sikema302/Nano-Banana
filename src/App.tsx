@@ -89,6 +89,24 @@ type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
+const APP_TAB_PATHS: Record<AppTab, string> = {
+  create: '/',
+  history: '/history',
+  apiDocs: '/apidoc',
+  admin: '/manage',
+};
+
+function getTabPath(tab: AppTab) {
+  return APP_TAB_PATHS[tab] || '/';
+}
+
+function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
+  if (pathname === '/history') return 'history';
+  if (pathname === '/apidoc') return 'apiDocs';
+  if (pathname === '/manage') return canAccessAdmin ? 'admin' : 'create';
+  return 'create';
+}
+
 interface AdminOverviewState {
   users: AdminUserSummary[];
   usersPage: PaginationInfo;
@@ -2243,7 +2261,10 @@ export default function App() {
     recordModelOptions: [],
     recordResolutionOptions: [],
   });
-  const [activeTab, setActiveTab] = useState<AppTab>('create');
+  const [activeTab, setActiveTab] = useState<AppTab>(() => {
+    if (typeof window === 'undefined') return 'create';
+    return getTabFromPath(window.location.pathname, Boolean(getStoredUser()?.isAdmin));
+  });
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingUserData, setLoadingUserData] = useState(false);
@@ -2310,10 +2331,30 @@ export default function App() {
   }, [activeTab, user]);
 
   useEffect(() => {
-    if (activeTab === 'admin' && !user?.isAdmin) {
+    if (activeTab === 'admin' && user && !user.isAdmin) {
       setActiveTab('create');
     }
   }, [activeTab, user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handlePopState = () => {
+      const canAccessAdmin = Boolean(user?.isAdmin || getStoredUser()?.isAdmin);
+      setActiveTab(getTabFromPath(window.location.pathname, canAccessAdmin));
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const targetPath = getTabPath(activeTab);
+    if (window.location.pathname === targetPath) return;
+    window.history.replaceState({}, '', targetPath);
+  }, [activeTab]);
 
   useEffect(() => {
     if (batchCount > MAX_BATCH_COUNT) {
@@ -2974,6 +3015,18 @@ export default function App() {
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) =>
     index === 0 ? currentImage : historyQueue[index - 1] || null,
   );
+
+  function handleTabChange(nextTab: AppTab) {
+    if (typeof window !== 'undefined') {
+      const nextPath = getTabPath(nextTab);
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, '', nextPath);
+      }
+    }
+
+    setActiveTab(nextTab);
+  }
+
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
@@ -3278,7 +3331,7 @@ export default function App() {
                       active ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
                     }`}
                     type="button"
-                    onClick={() => setActiveTab(item.id)}
+                    onClick={() => handleTabChange(item.id)}
                   >
                     {item.icon}
                     {item.label}
