@@ -86,7 +86,7 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
 type AppTab = 'create' | 'history' | 'apiDocs' | 'admin';
-type AdminSection = 'dashboard' | 'invites' | 'users' | 'records';
+type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 interface AdminOverviewState {
   users: AdminUserSummary[];
@@ -591,19 +591,7 @@ function HistoryView({
   );
 }
 
-function ApiDocsView({
-  user,
-  onNotice,
-}: {
-  user: UserInfo | null;
-  onNotice: (message: string) => void;
-}) {
-  const [apiKeys, setApiKeys] = useState<PublicApiKeyInfo[]>([]);
-  const [keyName, setKeyName] = useState('');
-  const [keyCredits, setKeyCredits] = useState(100);
-  const [generatedKey, setGeneratedKey] = useState('');
-  const [loadingKeys, setLoadingKeys] = useState(false);
-  const [submittingKey, setSubmittingKey] = useState(false);
+function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
   const [copiedText, setCopiedText] = useState('');
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
   const apiKeyPlaceholder = 'px_your_api_key';
@@ -698,16 +686,6 @@ function ApiDocsView({
     },
   ];
 
-  useEffect(() => {
-    if (!user?.isAdmin) return;
-
-    setLoadingKeys(true);
-    fetchPublicApiKeys()
-      .then((payload) => setApiKeys(payload.keys))
-      .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
-      .finally(() => setLoadingKeys(false));
-  }, [user?.isAdmin]);
-
   async function copyText(value: string, label: string) {
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -731,36 +709,6 @@ function ApiDocsView({
       window.setTimeout(() => setCopiedText((current) => (current === label ? '' : current)), 1600);
     } catch {
       onNotice('复制失败，请手动复制');
-    }
-  }
-
-  async function handleCreateApiKey() {
-    setSubmittingKey(true);
-    try {
-      const payload = await createPublicApiKey({
-        name: keyName.trim() || 'API Key',
-        credits: keyCredits,
-      });
-      setGeneratedKey(payload.apiKey);
-      setApiKeys((current) => [payload.key, ...current]);
-      setKeyName('');
-      onNotice('API Key 已生成，请及时复制完整 Key');
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : 'API Key 生成失败');
-    } finally {
-      setSubmittingKey(false);
-    }
-  }
-
-  async function handleRevokeApiKey(id: string) {
-    if (!window.confirm('确认停用这个 API Key 吗？停用后无法继续调用接口。')) return;
-
-    try {
-      const payload = await revokePublicApiKey(id);
-      setApiKeys((current) => current.map((item) => (item.id === id ? payload.key : item)));
-      onNotice('API Key 已停用');
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : 'API Key 停用失败');
     }
   }
 
@@ -1033,113 +981,194 @@ Content-Type: application/json`}</pre>
           </div>
         </div>
 
-        {user?.isAdmin ? (
-          <div className="rounded-[24px] border border-white/10 bg-[#10131b] p-5">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API KEY</p>
-                <h2 className="mt-2 text-xl font-black text-white">发放 API Key</h2>
-                <p className="mt-1 text-sm text-zinc-500">给用户生成带额度的 Key，完整 Key 只在生成后显示一次。</p>
-              </div>
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white disabled:opacity-50"
-                disabled={loadingKeys}
-                type="button"
-                onClick={() => {
-                  setLoadingKeys(true);
-                  fetchPublicApiKeys()
-                    .then((payload) => setApiKeys(payload.keys))
-                    .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
-                    .finally(() => setLoadingKeys(false));
-                }}
-              >
-                <RotateCw className={loadingKeys ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                刷新
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_160px_auto]">
-              <input
-                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
-                placeholder="Key 名称，例如客户A / 渠道B"
-                value={keyName}
-                onChange={(event) => setKeyName(event.target.value)}
-              />
-              <input
-                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
-                min={1}
-                type="number"
-                value={keyCredits}
-                onChange={(event) => setKeyCredits(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
-              />
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-black text-black transition hover:bg-zinc-200 disabled:opacity-50"
-                disabled={submittingKey}
-                type="button"
-                onClick={() => void handleCreateApiKey()}
-              >
-                <KeyRound size={15} />
-                {submittingKey ? '生成中...' : '生成 Key'}
-              </button>
-            </div>
-
-            {generatedKey ? (
-              <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 p-3">
-                <code className="min-w-0 flex-1 break-all font-mono text-xs text-emerald-100">{generatedKey}</code>
-                <button
-                  className="rounded-xl border border-emerald-300/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/10"
-                  type="button"
-                  onClick={() => void copyText(generatedKey, 'generated-key')}
-                >
-                  {copiedText === 'generated-key' ? '已复制' : '复制完整 Key'}
-                </button>
-              </div>
-            ) : null}
-
-            <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
-              <table className="min-w-[760px] w-full text-left text-xs">
-                <thead className="bg-white/[0.04] text-zinc-500">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">名称</th>
-                    <th className="px-3 py-2 font-medium">Key</th>
-                    <th className="px-3 py-2 font-medium">额度</th>
-                    <th className="px-3 py-2 font-medium">状态</th>
-                    <th className="px-3 py-2 text-right font-medium">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/6">
-                  {apiKeys.length > 0 ? apiKeys.map((item) => (
-                    <tr key={item.id} className="text-zinc-300">
-                      <td className="px-3 py-3 font-semibold text-white">{item.name}</td>
-                      <td className="px-3 py-3 font-mono text-zinc-500">{item.keyPreview}</td>
-                      <td className="px-3 py-3">
-                        <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
-                        <span className="text-zinc-500"> / {item.totalCredits}</span>
-                      </td>
-                      <td className="px-3 py-3">{item.revokedAt ? '已停用' : '可用'}</td>
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
-                          disabled={Boolean(item.revokedAt)}
-                          type="button"
-                          onClick={() => void handleRevokeApiKey(item.id)}
-                        >
-                          停用
-                        </button>
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr>
-                      <td className="px-3 py-8 text-center text-zinc-500" colSpan={5}>暂无 API Key</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
       </div>
     </section>
+  );
+}
+
+function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }) {
+  const [apiKeys, setApiKeys] = useState<PublicApiKeyInfo[]>([]);
+  const [keyName, setKeyName] = useState('');
+  const [keyCredits, setKeyCredits] = useState(100);
+  const [generatedKey, setGeneratedKey] = useState('');
+  const [loadingKeys, setLoadingKeys] = useState(false);
+  const [submittingKey, setSubmittingKey] = useState(false);
+  const [copiedText, setCopiedText] = useState('');
+
+  useEffect(() => {
+    setLoadingKeys(true);
+    fetchPublicApiKeys()
+      .then((payload) => setApiKeys(payload.keys))
+      .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
+      .finally(() => setLoadingKeys(false));
+  }, [onNotice]);
+
+  async function copyText(value: string, label: string) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error('copy_failed');
+      }
+
+      setCopiedText(label);
+      window.setTimeout(() => setCopiedText((current) => (current === label ? '' : current)), 1600);
+    } catch {
+      onNotice('复制失败，请手动复制');
+    }
+  }
+
+  async function refreshKeys() {
+    setLoadingKeys(true);
+    try {
+      const payload = await fetchPublicApiKeys();
+      setApiKeys(payload.keys);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 加载失败');
+    } finally {
+      setLoadingKeys(false);
+    }
+  }
+
+  async function handleCreateApiKey() {
+    setSubmittingKey(true);
+    try {
+      const payload = await createPublicApiKey({
+        name: keyName.trim() || 'API Key',
+        credits: keyCredits,
+      });
+      setGeneratedKey(payload.apiKey);
+      setApiKeys((current) => [payload.key, ...current]);
+      setKeyName('');
+      onNotice('API Key 已生成，请及时复制完整 Key');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 生成失败');
+    } finally {
+      setSubmittingKey(false);
+    }
+  }
+
+  async function handleRevokeApiKey(id: string) {
+    if (!window.confirm('确认停用这个 API Key 吗？停用后无法继续调用接口。')) return;
+
+    try {
+      const payload = await revokePublicApiKey(id);
+      setApiKeys((current) => current.map((item) => (item.id === id ? payload.key : item)));
+      onNotice('API Key 已停用');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 停用失败');
+    }
+  }
+
+  return (
+    <div className="rounded-[24px] border border-white/10 bg-[#10131b] p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API KEY</p>
+          <h2 className="mt-2 text-xl font-black text-white">发放 API Key</h2>
+          <p className="mt-1 text-sm text-zinc-500">给用户生成带额度的 Key，完整 Key 只在生成后显示一次。</p>
+        </div>
+        <button
+          className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white disabled:opacity-50"
+          disabled={loadingKeys}
+          type="button"
+          onClick={() => void refreshKeys()}
+        >
+          <RotateCw className={loadingKeys ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+          刷新
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_160px_auto]">
+        <input
+          className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
+          placeholder="Key 名称，例如客户A / 渠道B"
+          value={keyName}
+          onChange={(event) => setKeyName(event.target.value)}
+        />
+        <input
+          className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
+          min={1}
+          type="number"
+          value={keyCredits}
+          onChange={(event) => setKeyCredits(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+        />
+        <button
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-black text-black transition hover:bg-zinc-200 disabled:opacity-50"
+          disabled={submittingKey}
+          type="button"
+          onClick={() => void handleCreateApiKey()}
+        >
+          <KeyRound size={15} />
+          {submittingKey ? '生成中...' : '生成 Key'}
+        </button>
+      </div>
+
+      {generatedKey ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 p-3">
+          <code className="min-w-0 flex-1 break-all font-mono text-xs text-emerald-100">{generatedKey}</code>
+          <button
+            className="rounded-xl border border-emerald-300/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/10"
+            type="button"
+            onClick={() => void copyText(generatedKey, 'generated-key')}
+          >
+            {copiedText === 'generated-key' ? '已复制' : '复制完整 Key'}
+          </button>
+        </div>
+      ) : null}
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
+        <table className="min-w-[760px] w-full text-left text-xs">
+          <thead className="bg-white/[0.04] text-zinc-500">
+            <tr>
+              <th className="px-3 py-2 font-medium">名称</th>
+              <th className="px-3 py-2 font-medium">Key</th>
+              <th className="px-3 py-2 font-medium">额度</th>
+              <th className="px-3 py-2 font-medium">状态</th>
+              <th className="px-3 py-2 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/6">
+            {apiKeys.length > 0 ? apiKeys.map((item) => (
+              <tr key={item.id} className="text-zinc-300">
+                <td className="px-3 py-3 font-semibold text-white">{item.name}</td>
+                <td className="px-3 py-3 font-mono text-zinc-500">{item.keyPreview}</td>
+                <td className="px-3 py-3">
+                  <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
+                  <span className="text-zinc-500"> / {item.totalCredits}</span>
+                </td>
+                <td className="px-3 py-3">{item.revokedAt ? '已停用' : '可用'}</td>
+                <td className="px-3 py-3 text-right">
+                  <button
+                    className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
+                    disabled={Boolean(item.revokedAt)}
+                    type="button"
+                    onClick={() => void handleRevokeApiKey(item.id)}
+                  >
+                    停用
+                  </button>
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td className="px-3 py-8 text-center text-zinc-500" colSpan={5}>暂无 API Key</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -1161,6 +1190,7 @@ function AdminView({
   onReclaimInviteCode,
   onLoadSection,
   onPreview,
+  onNotice,
 }: {
   users: AdminUserSummary[];
   usersPage: PaginationInfo;
@@ -1191,6 +1221,7 @@ function AdminView({
     },
   ) => Promise<void>;
   onPreview: (item: GenerationRecord) => void;
+  onNotice: (message: string) => void;
 }) {
   type InviteStatusFilter = 'all' | 'unused' | 'used';
   type InviteSortMode = 'created-desc' | 'created-asc' | 'credits-desc' | 'credits-asc';
@@ -1342,6 +1373,10 @@ function AdminView({
       };
     }
 
+    if (targetSection === 'apiKeys') {
+      return { page: 1, pageSize: 10 };
+    }
+
     return { page: 1, pageSize: 10 };
   }
 
@@ -1358,6 +1393,8 @@ function AdminView({
   }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
 
   useEffect(() => {
+    if (section === 'apiKeys') return;
+
     const timer = window.setTimeout(() => {
       void onLoadSection(section, getSectionParams(section));
     }, section === 'dashboard' ? 0 : 220);
@@ -1539,6 +1576,7 @@ function AdminView({
   const menuItems: Array<{ id: AdminSection; label: string; hint: string }> = [
     { id: 'dashboard', label: '看板', hint: '今日概览' },
     { id: 'invites', label: '邀请码', hint: '发码与回收' },
+    { id: 'apiKeys', label: 'API Key', hint: '发放与停用' },
     { id: 'users', label: '用户', hint: '余额与活跃' },
     { id: 'records', label: '生图记录', hint: '模型与消耗' },
   ];
@@ -1840,6 +1878,10 @@ function AdminView({
                   )}
                 </div>
               </div>
+            ) : null}
+
+            {section === 'apiKeys' ? (
+              <AdminApiKeysPanel onNotice={onNotice} />
             ) : null}
 
             {section === 'users' ? (
@@ -2414,6 +2456,10 @@ export default function App() {
 
     setAdminLoading(true);
     try {
+      if (section === 'apiKeys') {
+        return;
+      }
+
       if (section === 'dashboard') {
         const payload = await fetchAdminDashboard();
         setAdminOverview((current) => ({
@@ -3567,7 +3613,7 @@ export default function App() {
           ) : activeTab === 'history' ? (
             <HistoryView records={historyRecords} onPreview={setPreviewImage} />
           ) : activeTab === 'apiDocs' ? (
-            <ApiDocsView user={user} onNotice={setNotice} />
+            <ApiDocsView onNotice={setNotice} />
           ) : (
             <AdminView
               users={adminOverview.users}
@@ -3587,6 +3633,7 @@ export default function App() {
               onReclaimInviteCode={handleReclaimInviteCode}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
+              onNotice={setNotice}
             />
           )}
 
