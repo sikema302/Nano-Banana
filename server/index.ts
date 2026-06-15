@@ -978,17 +978,79 @@ function modelNameFromId(modelId: string) {
 }
 
 function normalizeModelId(modelId: string) {
+  if (modelId === 'nano-banana-pro' || modelId === 'nano_banana_pro') return 'Nano_Banana_Pro';
   if (modelId === 'nano-banana2' || modelId === 'Nano_Banana_2') return 'Nano_Banana_Pro';
   if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_Pro';
   return models.some((item) => item.id === modelId) ? modelId : 'gpt-image-2';
 }
 
 function normalizeRatio(value: string, modelId: string) {
+  const pixelRatioAliases: Record<string, string> = {
+    '1024x1024': '1:1',
+    '2048x2048': '1:1',
+    '2880x2880': '1:1',
+    '1280x720': '16:9',
+    '2048x1152': '16:9',
+    '3840x2160': '16:9',
+    '720x1280': '9:16',
+    '1152x2048': '9:16',
+    '2160x3840': '9:16',
+    '1152x864': '4:3',
+    '2048x1536': '4:3',
+    '3264x2448': '4:3',
+    '864x1152': '3:4',
+    '1536x2048': '3:4',
+    '2448x3264': '3:4',
+    '1536x1024': '3:2',
+    '2016x1344': '3:2',
+    '3504x2336': '3:2',
+    '1024x1536': '2:3',
+    '1344x2016': '2:3',
+    '2336x3504': '2:3',
+    '1456x624': '21:9',
+    '3024x1296': '21:9',
+    '3696x1584': '21:9',
+  };
+  const normalizedValue = value.toLowerCase();
+  if (pixelRatioAliases[normalizedValue]) return pixelRatioAliases[normalizedValue];
   const supported = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'];
   if (value === 'auto') {
     return modelId === 'gpt-image-2' ? 'auto' : '1:1';
   }
   return supported.includes(value) ? value : '1:1';
+}
+
+function inferImageSizeFromAspectRatio(value: string) {
+  const normalizedValue = value.toLowerCase();
+  if (
+    [
+      '2048x2048',
+      '2048x1152',
+      '1152x2048',
+      '2048x1536',
+      '1536x2048',
+      '2016x1344',
+      '1344x2016',
+      '3024x1296',
+    ].includes(normalizedValue)
+  ) {
+    return '2K';
+  }
+  if (
+    [
+      '2880x2880',
+      '3840x2160',
+      '2160x3840',
+      '3264x2448',
+      '2448x3264',
+      '3504x2336',
+      '2336x3504',
+      '3696x1584',
+    ].includes(normalizedValue)
+  ) {
+    return '4K';
+  }
+  return '';
 }
 
 function generateInviteCode() {
@@ -2704,15 +2766,19 @@ async function start() {
 
   // 鈹€鈹€鈹€ 鍥剧墖鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-  app.post('/api/v1/generate', async (req, res) => {
+  const publicGenerateHandler = async (req: Request, res: Response) => {
     const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
     const prompt = normalizeString(req.body?.prompt);
     const model = normalizeString(req.body?.model);
-    const dimensions = normalizeString(req.body?.dimensions) || '1:1';
-    const requestedImageSize = normalizeString(req.body?.imageSize);
+    const dimensions = normalizeString(req.body?.dimensions || req.body?.aspectRatio) || '1:1';
+    const requestedImageSize = normalizeString(req.body?.imageSize) || inferImageSizeFromAspectRatio(dimensions);
     const requestedQuality = normalizeString(req.body?.quality).toLowerCase();
     const optimizeChineseText = Boolean(req.body?.optimizeChineseText);
-    const rawReferenceImages = Array.isArray(req.body?.reference_images) ? req.body.reference_images : [];
+    const rawReferenceImages = Array.isArray(req.body?.reference_images)
+      ? req.body.reference_images
+      : Array.isArray(req.body?.images)
+        ? req.body.images
+        : [];
     const referenceImages = rawReferenceImages
       .map((item: unknown) => (typeof item === 'string' ? item : normalizeString((item as { data?: string })?.data)))
       .filter((item: string) => /^https?:\/\//i.test(item));
@@ -2826,7 +2892,16 @@ async function start() {
       const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
       res.status(status).json({ error: message });
     }
-  });
+  };
+
+  [
+    '/api/v1/generate',
+    '/v1/api/generate',
+    '/v1/images/generations',
+    '/openapi/v1/images/generations',
+    '/v1/chat/completions',
+    '/v1/api/nano-banana',
+  ].forEach((path) => app.post(path, publicGenerateHandler));
 
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);

@@ -3,6 +3,7 @@ import {
   BookOpen,
   Bookmark,
   Clock3,
+  Code2 as CodeIcon,
   Copy,
   Download,
   ImagePlus,
@@ -605,33 +606,97 @@ function ApiDocsView({
   const [submittingKey, setSubmittingKey] = useState(false);
   const [copiedText, setCopiedText] = useState('');
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
-  const endpoint = `${baseUrl}/api/v1/generate`;
+  const apiKeyPlaceholder = 'px_your_api_key';
   const requestExample = JSON.stringify(
     {
-      prompt: 'A cinematic product photo of a pink crystal perfume bottle on black silk',
-      model: 'Nano_Banana_Pro',
-      dimensions: '1:1',
+      model: 'nano-banana-pro',
+      prompt: '将两张参考图融合成一张高级感产品海报，保留主体轮廓和品牌色',
+      images: ['https://example.com/reference-1.png', 'https://example.com/reference-2.png'],
+      aspectRatio: '1:1',
       imageSize: '2K',
-      reference_images: [],
+      optimizeChineseText: true,
+      replyType: 'json',
     },
     null,
     2,
   );
-  const curlExample = `curl -X POST ${endpoint} \\
-  -H "Content-Type: application/json" \\
-  -H "X-API-Key: px_your_api_key" \\
-  -d '${requestExample}'`;
-  const jsExample = `const response = await fetch('${endpoint}', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'X-API-Key': 'px_your_api_key',
+  const successExample = `{
+  "image": {
+    "prompt": "...",
+    "modelName": "Nano Banana Pro",
+    "dimensions": "1:1",
+    "imageSize": "2K",
+    "imagePath": "https://pixory.top/uploads/generated/xxx.png",
+    "referenceImages": ["https://example.com/reference-1.png"],
+    "createdAt": "2026-06-15T00:00:00.000Z"
   },
-  body: JSON.stringify(${requestExample}),
-});
-
-const result = await response.json();
-console.log(result.image.imagePath, result.usage.remainingCredits);`;
+  "usage": {
+    "creditsUsed": 32,
+    "remainingCredits": 968
+  }
+}`;
+  const errorExample = `{
+  "error": "API Key 额度不足，需要 32，剩余 12"
+}`;
+  const requestRows = [
+    ['model', 'string', '是', '支持 gpt-image-2、Nano_Banana_Pro；也兼容 nano-banana-pro 写法。'],
+    ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
+    ['images', 'string[]', '否', '参考图 URL 数组，最多 9 张。也兼容旧字段 reference_images。'],
+    ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。也兼容旧字段 dimensions。'],
+    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT Image 2 默认 STANDARD。'],
+    ['quality', 'string', '否', 'GPT Image 2 可传 low、medium、high；不传会自动匹配。'],
+    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
+    ['replyType', 'string', '否', '当前推荐传 json；字段会保留兼容，不影响返回结构。'],
+  ];
+  const modelRows = [
+    { model: 'gpt-image-2', name: 'GPT Image 2', cost: 'STANDARD 20 / 2K 28 / 4K 36', note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
+  ];
+  const ratioRows = [
+    ['1:1', '1024x1024 / 2048x2048 / 2880x2880'],
+    ['16:9', '1280x720 / 2048x1152 / 3840x2160'],
+    ['9:16', '720x1280 / 1152x2048 / 2160x3840'],
+    ['4:3', '1152x864 / 2048x1536 / 3264x2448'],
+    ['3:4', '864x1152 / 1536x2048 / 2448x3264'],
+    ['3:2', '1536x1024 / 2016x1344 / 3504x2336'],
+    ['2:3', '1024x1536 / 1344x2016 / 2336x3504'],
+    ['21:9', '1456x624 / 3024x1296 / 3696x1584'],
+  ];
+  const endpointSections = [
+    {
+      id: 'gpt-image-2',
+      label: 'gpt-image-2 接口',
+      title: 'gpt-image-2 接口',
+      subtitle: '适合通用高质量生图。通过同一个 PIXORY 入口调用，model 固定传 gpt-image-2。',
+      model: 'gpt-image-2',
+      endpointPath: '/v1/api/generate',
+      compatiblePaths: ['/api/v1/generate', '/v1/api/generate', '/v1/images/generations', '/openapi/v1/images/generations', '/v1/chat/completions'],
+      request: JSON.stringify(
+        {
+          model: 'gpt-image-2',
+          prompt: '生成一张高级感黑金香水产品图，摄影棚布光，超清细节',
+          images: [],
+          aspectRatio: '2048x2048',
+          quality: 'medium',
+          replyType: 'json',
+        },
+        null,
+        2,
+      ),
+      bullets: ['支持 1:1、16:9、9:16 等比例，也兼容常见像素值。', 'STANDARD / 2K / 4K 会按 imageSize 或像素值自动计费。'],
+    },
+    {
+      id: 'nano-banana',
+      label: 'nano-banana 接口',
+      title: 'nano-banana 接口',
+      subtitle: '适合参考图重绘、融合、商品图改版和中文场景增强。model 可传 nano-banana-pro。',
+      model: 'nano-banana-pro',
+      endpointPath: '/v1/api/nano-banana',
+      compatiblePaths: ['/api/v1/generate', '/v1/api/nano-banana'],
+      request: requestExample,
+      bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
+    },
+  ];
 
   useEffect(() => {
     if (!user?.isAdmin) return;
@@ -700,47 +765,281 @@ console.log(result.image.imagePath, result.usage.remainingCredits);`;
   }
 
   return (
-    <section className="custom-scrollbar h-full overflow-auto px-3 py-3 sm:px-5 sm:py-5">
-      <div className="mx-auto grid max-w-6xl gap-4">
-        <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">PIXORY API</p>
-              <h1 className="mt-2 text-2xl font-black text-white">API 文档</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                使用管理员发放的 API Key 调用生图接口，额度按模型消耗自动扣减。
-              </p>
+    <section className="custom-scrollbar h-full overflow-auto px-4 py-10 sm:px-8 sm:py-14">
+      <div className="mx-auto grid max-w-[1600px] gap-6">
+        <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="rounded-2xl border border-white/10 bg-[#11131a] p-3 lg:sticky lg:top-24 lg:self-start">
+            <p className="px-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API 文档</p>
+            <div className="mt-3 grid gap-1.5 text-sm">
+              {[
+                ['1', 'gpt-image-2 接口', '#gpt-image-2'],
+                ['2', 'nano-banana 接口', '#nano-banana'],
+                ['3', '价格说明', '#pricing'],
+              ].map(([index, title, desc]) => (
+                <a key={title} className="flex items-center gap-3 rounded-xl px-3 py-2.5 font-semibold text-zinc-300 transition hover:bg-white/5 hover:text-white" href={desc}>
+                  <span className="font-mono text-xs font-black text-cyan-300">{index}</span>
+                  {title}
+                </a>
+              ))}
             </div>
-            <button
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white"
-              type="button"
-              onClick={() => void copyText(endpoint, 'endpoint')}
-            >
-              <Copy size={14} />
-              {copiedText === 'endpoint' ? '已复制' : '复制地址'}
-            </button>
-          </div>
+          </aside>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            {[
-              { label: 'Endpoint', value: '/api/v1/generate' },
-              { label: 'Method', value: 'POST' },
-              { label: 'Auth', value: 'X-API-Key' },
-            ].map((item) => (
-              <div key={item.label} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-                <p className="text-xs font-semibold text-zinc-500">{item.label}</p>
-                <p className="mt-2 break-all font-mono text-sm font-semibold text-white">{item.value}</p>
-              </div>
-            ))}
+          <div className="space-y-8">
+            {endpointSections.map((section) => {
+              const sectionCurl = `curl --location '${baseUrl}${section.endpointPath}' \\
+--header 'Authorization: Bearer ${apiKeyPlaceholder}' \\
+--header 'Content-Type: application/json' \\
+--data '${section.request}'`;
+              const sectionJs = `const PIXORY_API_KEY = '${apiKeyPlaceholder}';
+
+const response = await fetch('${baseUrl}${section.endpointPath}', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer ' + PIXORY_API_KEY,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify(${section.request}),
+});
+
+const result = await response.json();
+if (!response.ok) throw new Error(result.error || 'Generate failed');
+console.log(result.image.imagePath);`;
+              const sectionModels = modelRows.filter((item) =>
+                section.id === 'gpt-image-2' ? item.model === 'gpt-image-2' : item.model === 'nano-banana-pro',
+              );
+
+              return (
+                <div key={section.id} id={section.id} className="scroll-mt-28 space-y-5">
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="border-b border-white/10 px-5 py-5">
+                      <div className="mb-4 flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-orange-500/15 px-2.5 py-1 text-xs font-black text-orange-300">POST</span>
+                        <span className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-black text-emerald-200">同步返回结果</span>
+                      </div>
+                      <h1 className="text-[1.7rem] font-black text-white">{section.title}</h1>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">{section.subtitle}</p>
+                    </div>
+                    <div className="p-4">
+                      <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">
+                        <span className="flex-none rounded-md bg-orange-500/15 px-2.5 py-1 text-xs font-black text-orange-300">POST</span>
+                        <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}</code>
+                      </div>
+                      <div className="mt-3 rounded-xl border border-white/10 bg-black/15 p-3">
+                        <div className="text-xs font-bold text-zinc-500">兼容路径</div>
+                        <div className="mt-2 grid gap-2">
+                          {section.compatiblePaths.map((path) => (
+                            <code key={path} className="break-all rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs font-black text-zinc-100">{path}</code>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="grid gap-3 md:grid-cols-2">
+                    <article className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-start gap-3">
+                        <ShieldCheck size={18} className="mt-0.5 text-sky-200" />
+                        <div>
+                          <h3 className="text-base font-black text-white">服务端调用</h3>
+                          <p className="mt-1 text-sm leading-6 text-zinc-400">
+                            不要把 <code className="rounded-md bg-sky-500/10 px-1.5 py-0.5 text-sky-200">{apiKeyPlaceholder}</code> 写进网页前端代码，避免密钥泄露和额度被盗刷。
+                          </p>
+                        </div>
+                      </div>
+                    </article>
+                    <article className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-start gap-3">
+                        <KeyRound size={18} className="mt-0.5 text-sky-200" />
+                        <div>
+                          <h3 className="text-base font-black text-white">按 Key 扣额度</h3>
+                          <p className="mt-1 text-sm leading-6 text-zinc-400">生成成功后按模型扣减额度，失败会自动退回预扣额度；额度不足会直接拒绝。</p>
+                        </div>
+                      </div>
+                    </article>
+                  </section>
+
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ShieldCheck size={17} /></div>
+                      <h2 className="text-base font-black text-white">认证方式</h2>
+                    </div>
+                    <div className="p-5">
+                      <p className="text-sm leading-6 text-zinc-300">请求头必须携带 API Key：</p>
+                      <pre className="mt-3 overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{`Authorization: Bearer ${apiKeyPlaceholder}
+Content-Type: application/json`}</pre>
+                    </div>
+                  </section>
+
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><Info size={17} /></div>
+                      <h2 className="text-base font-black text-white">请求参数</h2>
+                    </div>
+                    <div className="overflow-auto p-5">
+                      <table className="w-full min-w-[760px] border-collapse text-left text-xs">
+                        <thead className="bg-white/[0.04] text-zinc-400">
+                          <tr>
+                            <th className="px-4 py-3 font-semibold">参数名</th>
+                            <th className="px-4 py-3 font-semibold">类型</th>
+                            <th className="px-4 py-3 font-semibold">必填</th>
+                            <th className="px-4 py-3 font-semibold">说明</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/10">
+                          {requestRows.map(([name, type, required, desc]) => (
+                            <tr key={`${section.id}-${name}`} className="align-top">
+                              <td className="px-4 py-3"><code className="rounded-md border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 font-mono font-semibold text-sky-200">{name}</code></td>
+                              <td className="px-4 py-3 text-zinc-300">{type}</td>
+                              <td className="px-4 py-3 text-zinc-300">{required}</td>
+                              <td className="px-4 py-3 leading-6 text-zinc-400">{desc}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  {section.id === 'gpt-image-2' ? (
+                    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                      <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ImagePlus size={17} /></div>
+                        <h2 className="text-base font-black text-white">gpt-image-2 像素比例说明</h2>
+                      </div>
+                      <div className="grid gap-2 p-5 text-xs md:grid-cols-2 xl:grid-cols-4">
+                        {ratioRows.map(([ratio, pixels]) => (
+                          <div key={`${section.id}-${ratio}`} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <code className="font-mono font-black text-sky-200">{ratio}</code>
+                            <p className="mt-2 leading-5 text-zinc-500">{pixels}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><CodeIcon size={17} /></div>
+                      <h2 className="text-base font-black text-white">请求示例</h2>
+                    </div>
+                    <div className="grid gap-4 p-5 xl:grid-cols-2">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-black text-white">JSON Body</h3>
+                          <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(section.request, `${section.id}-body`)}>
+                            {copiedText === `${section.id}-body` ? '已复制' : '复制'}
+                          </button>
+                        </div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{section.request}</pre>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-black text-white">cURL</h3>
+                          <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(sectionCurl, `${section.id}-curl`)}>
+                            {copiedText === `${section.id}-curl` ? '已复制' : '复制'}
+                          </button>
+                        </div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{sectionCurl}</pre>
+                      </div>
+                      <div className="space-y-3 xl:col-span-2">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-black text-white">JavaScript</h3>
+                          <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(sectionJs, `${section.id}-js`)}>
+                            {copiedText === `${section.id}-js` ? '已复制' : '复制'}
+                          </button>
+                        </div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{sectionJs}</pre>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><Copy size={17} /></div>
+                      <h2 className="text-base font-black text-white">返回响应</h2>
+                    </div>
+                    <div className="grid gap-4 p-5 xl:grid-cols-2">
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-200">200</span>生成成功</div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{successExample}</pre>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-red-500/15 px-2 py-0.5 text-xs text-red-200">400 / 401 / 402 / 500</span>生成失败</div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{errorExample}</pre>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ImagePlus size={17} /></div>
+                      <h2 className="text-base font-black text-white">模型消耗积分额度</h2>
+                    </div>
+                    <div className="grid gap-3 p-5">
+                      {sectionModels.map((item) => (
+                        <article key={`${section.id}-${item.model}`} className="rounded-xl border border-white/10 bg-black/20 p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                              <h3 className="font-black text-white">{item.name}</h3>
+                              <code className="mt-2 inline-flex rounded-md border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-200">{item.model}</code>
+                            </div>
+                            <div className="rounded-xl border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs font-black text-sky-100">{item.cost}</div>
+                          </div>
+                          <p className="mt-3 text-xs leading-5 text-zinc-400">{item.note}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              );
+            })}
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <section id="pricing" className="scroll-mt-28 rounded-[24px] border border-white/10 bg-[#10131b] p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-black text-white">价格说明</h2>
+                    <p className="mt-1 text-sm text-zinc-500">生成成功后按模型扣减 API Key 额度，失败会自动退回预扣额度。</p>
+                  </div>
+                  <span className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-black text-cyan-100">按张计费</span>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {modelRows.map((item) => (
+                    <article key={item.model} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-black text-white">{item.name}</h3>
+                          <code className="mt-2 inline-flex rounded-lg border border-cyan-300/15 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100">{item.model}</code>
+                        </div>
+                        <span className="rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black text-amber-100">{item.cost}</span>
+                      </div>
+                      <p className="mt-3 text-xs leading-5 text-zinc-500">{item.note}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+                <h2 className="text-base font-black text-white">比例 / 像素别名</h2>
+                <div className="mt-4 grid gap-2 text-xs">
+                  {ratioRows.map(([ratio, pixels]) => (
+                    <div key={ratio} className="grid gap-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 sm:grid-cols-[72px_1fr]">
+                      <code className="font-mono font-black text-cyan-100">{ratio}</code>
+                      <span className="text-zinc-500">{pixels}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
           </div>
         </div>
 
         {user?.isAdmin ? (
-          <div className="rounded-[22px] border border-sky-400/15 bg-sky-400/[0.04] p-5">
+          <div className="rounded-[24px] border border-white/10 bg-[#10131b] p-5">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h2 className="text-base font-black text-white">发放 API Key</h2>
-                <p className="mt-1 text-xs text-zinc-500">完整 Key 只在生成后显示一次，请复制后发给用户。</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API KEY</p>
+                <h2 className="mt-2 text-xl font-black text-white">发放 API Key</h2>
+                <p className="mt-1 text-sm text-zinc-500">给用户生成带额度的 Key，完整 Key 只在生成后显示一次。</p>
               </div>
               <button
                 className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 text-sm text-zinc-200 transition hover:border-white/20 hover:text-white disabled:opacity-50"
@@ -839,70 +1138,6 @@ console.log(result.image.imagePath, result.usage.remainingCredits);`;
             </div>
           </div>
         ) : null}
-
-        <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-            <h2 className="text-base font-black text-white">请求参数</h2>
-            <div className="mt-4 grid gap-2 text-sm">
-              {[
-                ['prompt', 'string', '必填，图像提示词'],
-                ['model', 'string', 'gpt-image-2 或 Nano_Banana_Pro'],
-                ['dimensions', 'string', '1:1、16:9、9:16 等比例'],
-                ['imageSize', 'string', 'STANDARD、2K、4K'],
-                ['quality', 'string', 'GPT Image 2 可传 low、medium、high'],
-                ['optimizeChineseText', 'boolean', 'Nano Banana Pro 可开启中文优化'],
-                ['reference_images', 'string[]', '可选，公网可访问图片 URL'],
-              ].map(([name, type, desc]) => (
-                <div key={name} className="grid gap-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 sm:grid-cols-[150px_120px_1fr]">
-                  <code className="font-mono text-sky-200">{name}</code>
-                  <span className="text-zinc-400">{type}</span>
-                  <span className="text-zinc-500">{desc}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-            <h2 className="text-base font-black text-white">响应格式</h2>
-            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{`{
-  "image": {
-    "prompt": "...",
-    "modelName": "Nano Banana Pro",
-    "dimensions": "1:1",
-    "imageSize": "2K",
-    "imagePath": "https://pixory.top/uploads/generated/xxx.png",
-    "referenceImages": [],
-    "createdAt": "2026-06-15T00:00:00.000Z"
-  },
-  "usage": {
-    "creditsUsed": 24,
-    "remainingCredits": 76
-  }
-}`}</pre>
-          </div>
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-2">
-          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-base font-black text-white">curl 示例</h2>
-              <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(curlExample, 'curl')}>
-                {copiedText === 'curl' ? '已复制' : '复制'}
-              </button>
-            </div>
-            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{curlExample}</pre>
-          </div>
-
-          <div className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-base font-black text-white">JavaScript 示例</h2>
-              <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300" type="button" onClick={() => void copyText(jsExample, 'js')}>
-                {copiedText === 'js' ? '已复制' : '复制'}
-              </button>
-            </div>
-            <pre className="mt-4 overflow-auto rounded-2xl border border-white/8 bg-[#050505] p-4 text-xs leading-6 text-zinc-300">{jsExample}</pre>
-          </div>
-        </div>
       </div>
     </section>
   );
