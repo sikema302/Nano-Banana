@@ -133,6 +133,7 @@ type PublicApiKeyRecord = {
   name: string;
   keyHash: string;
   keyPreview: string;
+  encryptedKey?: string;
   totalCredits: number;
   usedCredits: number;
   createdAt: string;
@@ -1378,6 +1379,7 @@ function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKey
     name: normalizeString(value.name) || 'API Key',
     keyHash,
     keyPreview: normalizeString(value.keyPreview) || 'px_...',
+    encryptedKey: normalizeString(value.encryptedKey) || undefined,
     totalCredits,
     usedCredits: Math.min(usedCredits, totalCredits),
     createdAt: normalizeString(value.createdAt) || nowIso(),
@@ -1398,10 +1400,13 @@ function serializeApiKeyRecords(records: PublicApiKeyRecord[]) {
 }
 
 function publicApiKeyRecord(record: PublicApiKeyRecord) {
+  const plainKey = decryptPublicApiKey(record.encryptedKey);
   return {
     id: record.id,
     name: record.name,
     keyPreview: record.keyPreview,
+    plainKey,
+    copyable: Boolean(plainKey),
     totalCredits: record.totalCredits,
     usedCredits: record.usedCredits,
     remainingCredits: Math.max(0, record.totalCredits - record.usedCredits),
@@ -1421,6 +1426,43 @@ function hashPublicApiKey(key: string) {
 
 function previewPublicApiKey(key: string) {
   return `${key.slice(0, 8)}...${key.slice(-6)}`;
+}
+
+function getPublicApiKeyCipherKey() {
+  return crypto.createHash('sha256').update(`pixory-public-api-key:${tokenSecret}`).digest();
+}
+
+function encryptPublicApiKey(key: string) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getPublicApiKeyCipherKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(key, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('hex')}.${authTag.toString('hex')}.${encrypted.toString('hex')}`;
+}
+
+function decryptPublicApiKey(payload: string | undefined) {
+  const normalized = normalizeString(payload);
+  if (!normalized) return '';
+
+  const parts = normalized.split('.');
+  if (parts.length !== 3) return '';
+
+  try {
+    const [ivHex, authTagHex, encryptedHex] = parts;
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      getPublicApiKeyCipherKey(),
+      Buffer.from(ivHex, 'hex'),
+    );
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encryptedHex, 'hex')),
+      decipher.final(),
+    ]);
+    return decrypted.toString('utf8');
+  } catch {
+    return '';
+  }
 }
 
 async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
@@ -1458,6 +1500,7 @@ async function createPublicApiKey(name: string, totalCredits: number, createdBy:
     name: normalizeString(name) || 'API Key',
     keyHash: hashPublicApiKey(plainKey),
     keyPreview: previewPublicApiKey(plainKey),
+    encryptedKey: encryptPublicApiKey(plainKey),
     totalCredits: Math.max(1, Math.floor(totalCredits)),
     usedCredits: 0,
     createdAt: nowIso(),
@@ -1469,17 +1512,35 @@ async function createPublicApiKey(name: string, totalCredits: number, createdBy:
 }
 
 async function revokePublicApiKey(id: string) {
+  const targetId = normalizeString(id);
+  if (!targetId) return null;
+
   const records = await readPublicApiKeyRecords();
+  const revokedAt = nowIso();
   let found = false;
   const nextRecords = records.map((record) => {
-    if (record.id !== id) return record;
+    if (record.id !== targetId) return record;
     found = true;
-    return { ...record, revokedAt: record.revokedAt || nowIso() };
+    return { ...record, revokedAt: record.revokedAt || revokedAt };
   });
 
   if (!found) return null;
   await writePublicApiKeyRecords(nextRecords);
-  return nextRecords.find((record) => record.id === id) || null;
+
+  const persistedRecords = await readPublicApiKeyRecords();
+  return persistedRecords.find((record) => record.id === targetId) || nextRecords.find((record) => record.id === targetId) || null;
+}
+
+async function deletePublicApiKey(id: string) {
+  const targetId = normalizeString(id);
+  if (!targetId) return false;
+
+  const records = await readPublicApiKeyRecords();
+  const nextRecords = records.filter((record) => record.id !== targetId);
+  if (nextRecords.length === records.length) return false;
+
+  await writePublicApiKeyRecords(nextRecords);
+  return true;
 }
 
 async function reservePublicApiKeyCredits(plainKey: string, credits: number) {
@@ -3482,6 +3543,20 @@ async function start() {
       res.json({ key: publicApiKeyRecord(key) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Revoke API key failed' });
+    }
+  });
+
+  app.delete('/api/admin/api-keys/:id', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const deleted = await deletePublicApiKey(normalizeString(req.params.id));
+      if (!deleted) {
+        res.status(404).json({ error: 'API key not found' });
+        return;
+      }
+
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Delete API key failed' });
     }
   });
 

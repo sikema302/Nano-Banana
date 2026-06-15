@@ -26,6 +26,7 @@ import {
   clearSession,
   createPublicApiKey,
   createInviteCode,
+  deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   fetchAdminDashboard,
   fetchAdminInviteCodes,
@@ -1049,8 +1050,8 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
         credits: keyCredits,
       });
       setGeneratedKey(payload.apiKey);
-      setApiKeys((current) => [payload.key, ...current]);
       setKeyName('');
+      await refreshKeys();
       onNotice('API Key 已生成，请及时复制完整 Key');
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'API Key 生成失败');
@@ -1063,11 +1064,23 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
     if (!window.confirm('确认停用这个 API Key 吗？停用后无法继续调用接口。')) return;
 
     try {
-      const payload = await revokePublicApiKey(id);
-      setApiKeys((current) => current.map((item) => (item.id === id ? payload.key : item)));
+      await revokePublicApiKey(id);
+      await refreshKeys();
       onNotice('API Key 已停用');
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'API Key 停用失败');
+    }
+  }
+
+  async function handleDeleteApiKey(id: string) {
+    if (!window.confirm('确认删除这个 API Key 吗？删除后将无法恢复。')) return;
+
+    try {
+      await deletePublicApiKey(id);
+      await refreshKeys();
+      onNotice('API Key 已删除');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 删除失败');
     }
   }
 
@@ -1143,21 +1156,41 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
             {apiKeys.length > 0 ? apiKeys.map((item) => (
               <tr key={item.id} className="text-zinc-300">
                 <td className="px-3 py-3 font-semibold text-white">{item.name}</td>
-                <td className="px-3 py-3 font-mono text-zinc-500">{item.keyPreview}</td>
+                <td className="px-3 py-3 font-mono text-zinc-500">
+                  <div>{item.keyPreview}</div>
+                  {!item.copyable ? <div className="mt-1 text-[11px] text-amber-300/80">旧 Key 暂不可复制</div> : null}
+                </td>
                 <td className="px-3 py-3">
                   <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
                   <span className="text-zinc-500"> / {item.totalCredits}</span>
                 </td>
                 <td className="px-3 py-3">{item.revokedAt ? '已停用' : '可用'}</td>
                 <td className="px-3 py-3 text-right">
-                  <button
-                    className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
-                    disabled={Boolean(item.revokedAt)}
-                    type="button"
-                    onClick={() => void handleRevokeApiKey(item.id)}
-                  >
-                    停用
-                  </button>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/20 disabled:opacity-40"
+                      disabled={!item.copyable}
+                      type="button"
+                      onClick={() => void copyText(item.plainKey, `api-key-${item.id}`)}
+                    >
+                      {copiedText === `api-key-${item.id}` ? '已复制' : '复制 Key'}
+                    </button>
+                    <button
+                      className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
+                      disabled={Boolean(item.revokedAt)}
+                      type="button"
+                      onClick={() => void handleRevokeApiKey(item.id)}
+                    >
+                      停用
+                    </button>
+                    <button
+                      className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-200 transition hover:border-white/20 hover:text-white"
+                      type="button"
+                      onClick={() => void handleDeleteApiKey(item.id)}
+                    >
+                      删除
+                    </button>
+                  </div>
                 </td>
               </tr>
             )) : (

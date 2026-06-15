@@ -117,6 +117,8 @@ export interface PublicApiKeyInfo {
   id: string;
   name: string;
   keyPreview: string;
+  plainKey: string;
+  copyable: boolean;
   totalCredits: number;
   usedCredits: number;
   remainingCredits: number;
@@ -450,6 +452,16 @@ export async function revokePublicApiKey(id: string) {
     `/api/admin/api-keys/${encodeURIComponent(id)}/revoke`,
     {
       method: 'POST',
+    },
+    true,
+  );
+}
+
+export async function deletePublicApiKey(id: string) {
+  return request<{ ok: boolean }>(
+    `/api/admin/api-keys/${encodeURIComponent(id)}`,
+    {
+      method: 'DELETE',
     },
     true,
   );
