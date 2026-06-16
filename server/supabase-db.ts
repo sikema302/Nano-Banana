@@ -230,6 +230,16 @@ export async function findUserByUsername(username: string): Promise<UserRow | nu
   return toUserRow(data as Record<string, unknown>);
 }
 
+export async function findUserById(userId: string): Promise<UserRow | null> {
+  const { data, error } = await getSupabase()
+    .from('users')
+    .select('id, username, password_hash, email, created_at')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return toUserRow(data as Record<string, unknown>);
+}
+
 export async function createUser(
   username: string,
   passwordHash: string,
@@ -1091,6 +1101,17 @@ export async function syncInviteCodeBalanceForUser(userId: string): Promise<void
   const invite = await getRedeemedInviteCodeForUser(userId);
   if (!invite?.code) return;
 
+  const user = await findUserById(userId);
+  const isInviteUser =
+    Boolean(user?.username?.startsWith('invite-')) || String(user?.password_hash || '') === INVITE_USER_PASSWORD_HASH;
+
+  if (!isInviteUser) {
+    if (invite.low_balance_since) {
+      await updateInviteCodeCredits(invite.code, Number(invite.credits || 0), null);
+    }
+    return;
+  }
+
   const credits = await getUserCredits(userId);
   const remainingCredits = credits.remainingCredits;
   const currentCredits = Number(invite.credits || 0);
@@ -1134,6 +1155,15 @@ export async function reclaimLowBalanceInviteCodes(): Promise<void> {
 
     const redeemedBy = invite.redeemed_by || '';
     if (redeemedBy) {
+      const user = await findUserById(redeemedBy);
+      const isInviteUser =
+        Boolean(user?.username?.startsWith('invite-')) || String(user?.password_hash || '') === INVITE_USER_PASSWORD_HASH;
+
+      if (!isInviteUser) {
+        await updateInviteCodeCredits(invite.code, creditsToReturn, null);
+        continue;
+      }
+
       const userCredits = await getUserCredits(redeemedBy);
       await setUserTotalCredits(redeemedBy, userCredits.usedCredits);
     }

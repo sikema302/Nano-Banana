@@ -1255,7 +1255,10 @@ function AdminView({
   recordModelOptions: string[];
   recordResolutionOptions: string[];
   loading: boolean;
-  onCreateInviteCode: (credits: number) => Promise<void>;
+  onCreateInviteCode: (
+    credits: number,
+    options?: { quiet?: boolean; refresh?: boolean },
+  ) => Promise<InviteCodeInfo | null | undefined>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
   onLoadSection: (
@@ -1285,6 +1288,9 @@ function AdminView({
   const [deletingCode, setDeletingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
+  const [inviteBatchCount, setInviteBatchCount] = useState(1);
+  const [batchCopied, setBatchCopied] = useState(false);
+  const [generatedInviteCodes, setGeneratedInviteCodes] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
@@ -1299,9 +1305,10 @@ function AdminView({
   const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
   const [recordRange, setRecordRange] = useState<RecordRange>('all');
   const [recordPage, setRecordPage] = useState(1);
-  const normalizedCredits = Math.max(0, Number(credits) || 0);
-  const isInvalidCredits = normalizedCredits <= 0 || normalizedCredits > adminCredits.remainingCredits;
-  const inviteCreditsTotal = normalizedCredits;
+  const normalizedCredits = Math.max(0, Math.floor(Number(credits) || 0));
+  const normalizedInviteBatchCount = Math.max(1, Math.min(100, Math.floor(Number(inviteBatchCount) || 1)));
+  const inviteCreditsTotal = normalizedCredits * normalizedInviteBatchCount;
+  const isInvalidCredits = normalizedCredits <= 0 || normalizedInviteBatchCount <= 0 || inviteCreditsTotal > adminCredits.remainingCredits;
   const today = new Date();
   const todayKey = formatDateKey(today);
   const todayRecords = dashboardStats.todayRecordCount > 0
@@ -1536,8 +1543,24 @@ function AdminView({
   async function handleCreateInviteCode() {
     setSubmitting(true);
     try {
-      await onCreateInviteCode(normalizedCredits);
+      const nextCodes: string[] = [];
+      for (let index = 0; index < normalizedInviteBatchCount; index += 1) {
+        const inviteCode = await onCreateInviteCode(normalizedCredits, {
+          quiet: true,
+          refresh: index === normalizedInviteBatchCount - 1,
+        });
+        if (!inviteCode?.code) {
+          throw new Error('\u9080\u8bf7\u7801\u751f\u6210\u5931\u8d25');
+        }
+        nextCodes.push(inviteCode.code);
+      }
       setCredits(100);
+      setInviteBatchCount(1);
+      if (nextCodes.length > 0) {
+        setGeneratedInviteCodes(nextCodes);
+        setBatchCopied(false);
+        onNotice(`\u5df2\u751f\u6210 ${nextCodes.length} \u4e2a\u9080\u8bf7\u7801`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1591,6 +1614,37 @@ function AdminView({
       setSelectedInviteCodes([]);
     } finally {
       setBulkDeleting(false);
+    }
+  }
+
+  async function handleCopyGeneratedInviteCodes() {
+    const value = generatedInviteCodes.join('\n');
+    if (!value) return;
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error('copy failed');
+        }
+      }
+
+      setBatchCopied(true);
+      window.setTimeout(() => setBatchCopied(false), 1800);
+    } catch {
+      window.alert('\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5');
     }
   }
 
@@ -1761,13 +1815,22 @@ function AdminView({
                       value={credits}
                       onChange={(event) => setCredits(Math.max(0, Number(event.target.value) || 0))}
                     />
+                    <span className="text-xs font-semibold text-zinc-500">{"\u6570\u91cf"}</span>
+                    <input
+                      className={`w-20 rounded-xl border px-3 py-2 text-sm font-semibold outline-none ${isInvalidCredits ? 'border-rose-500/50 bg-rose-500/10 text-rose-100' : 'border-white/10 bg-black/40 text-white'}`}
+                      min={1}
+                      max={100}
+                      type="number"
+                      value={inviteBatchCount}
+                      onChange={(event) => setInviteBatchCount(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}
+                    />
                     <button
                       className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
                       disabled={submitting || isInvalidCredits}
                       type="button"
                       onClick={() => void handleCreateInviteCode()}
                     >
-                      {submitting ? '生成中...' : '生成邀请码'}
+                      {submitting ? '生成中...' : normalizedInviteBatchCount > 1 ? '批量生成' : '生成邀请码'}
                     </button>
                   </div>
                 </div>
@@ -1975,11 +2038,12 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[900px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1040px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
                           <th className="px-3 py-2 font-medium">用户 ID</th>
+                          <th className="px-3 py-2 font-medium">{"\u9080\u8bf7\u7801"}</th>
                           <th className="px-3 py-2 font-medium">生成次数</th>
                           <th className="px-3 py-2 font-medium">剩余 / 总额</th>
                           <th className="px-3 py-2 font-medium">Key 积分消耗</th>
@@ -2001,10 +2065,12 @@ function AdminView({
                         {pagedUsers.map((item) => {
                           const usageRate = item.totalCredits > 0 ? (item.usedCredits / item.totalCredits) * 100 : 0;
                           const trend = item.usageTrend || usageTrendByUserId[item.userId] || Array.from({ length: 7 }, () => 0);
+                          const inviteCode = item.inviteCode || invitePrefixesByUserId[item.userId]?.[0] || '';
                           return (
                             <tr key={item.userId} className="text-zinc-300">
                               <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
                               <td className="max-w-[240px] truncate px-3 py-3 text-zinc-500">{item.userId}</td>
+                              <td className="max-w-[180px] truncate px-3 py-3 font-mono text-zinc-400">{inviteCode || '-'}</td>
                               <td className="px-3 py-3">{item.generations}</td>
                               <td className="px-3 py-3">
                                 <div className="flex items-center justify-between gap-3">
@@ -2225,6 +2291,46 @@ function AdminView({
           </div>
         </div>
       </div>
+      {generatedInviteCodes.length > 0 ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <button
+            aria-label="Close generated invite codes dialog"
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setGeneratedInviteCodes([])}
+          />
+          <div className="relative w-full max-w-xl rounded-[28px] border border-white/10 bg-[#090909] p-5 shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-black text-white">{"\u6279\u91cf\u751f\u6210\u5b8c\u6210"}</h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {"\u5171"} {generatedInviteCodes.length} {"\u4e2a\u9080\u8bf7\u7801\uff0c\u4e00\u884c\u4e00\u4e2a\u3002"}
+                </p>
+              </div>
+              <button
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-white/25 hover:text-white"
+                type="button"
+                onClick={() => setGeneratedInviteCodes([])}
+              >
+                {"\u5173\u95ed"}
+              </button>
+            </div>
+            <textarea
+              className="mt-4 h-56 w-full resize-none rounded-2xl border border-white/10 bg-black/45 p-4 font-mono text-sm leading-6 text-zinc-100 outline-none"
+              readOnly
+              value={generatedInviteCodes.join('\n')}
+            />
+            <button
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-black transition hover:bg-zinc-200"
+              type="button"
+              onClick={() => void handleCopyGeneratedInviteCodes()}
+            >
+              <Copy size={15} />
+              {batchCopied ? '\u5df2\u590d\u5236' : '\u590d\u5236\u5168\u90e8'}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2599,7 +2705,10 @@ export default function App() {
     }
   }
 
-  async function handleCreateInviteCode(credits: number) {
+  async function handleCreateInviteCode(
+    credits: number,
+    options: { quiet?: boolean; refresh?: boolean } = {},
+  ) {
     try {
       const payload = await createInviteCode({ credits });
       setAdminOverview((current) => ({
@@ -2607,11 +2716,17 @@ export default function App() {
         inviteCodes: payload.inviteCode ? [payload.inviteCode, ...current.inviteCodes] : current.inviteCodes,
         adminCredits: payload.adminCredits,
       }));
-      setNotice(`已生成邀请码：${payload.inviteCode?.code || ''}`);
-      void fetchMe().then(setUser).catch(() => undefined);
-      void loadAdminSection('invites', { page: 1, pageSize: 10 });
+      if (!options.quiet) {
+        setNotice(`已生成邀请码：${payload.inviteCode?.code || ''}`);
+      }
+      if (options.refresh !== false) {
+        void fetchMe().then(setUser).catch(() => undefined);
+        void loadAdminSection('invites', { page: 1, pageSize: 10 });
+      }
+      return payload.inviteCode || null;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码生成失败');
+      return null;
     }
   }
 

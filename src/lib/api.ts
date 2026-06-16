@@ -55,6 +55,7 @@ export interface GenerationRecord {
 export interface AdminUserSummary {
   userId: string;
   username: string;
+  inviteCode?: string;
   generations: number;
   creditsUsed: number;
   totalCredits: number;

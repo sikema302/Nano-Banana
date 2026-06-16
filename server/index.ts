@@ -770,6 +770,7 @@ function toPagination(page: number, pageSize: number, total: number): Pagination
 type AdminUserSummaryRow = {
   userId: string;
   username: string;
+  inviteCode?: string;
   generations: number;
   creditsUsed: number;
   totalCredits: number;
@@ -809,9 +810,12 @@ function summarizeRecordStats(records: ReturnType<typeof toGeneration>[]) {
 
 async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
   const db = await getSupabaseDb();
-  const generationSummaries = await db.getGenerationSummaries();
-  const registeredUsers = await db.getRegisteredUsers();
-  const creditRows = await db.getAllCreditRows();
+  const [generationSummaries, registeredUsers, creditRows, inviteRows] = await Promise.all([
+    db.getGenerationSummaries(),
+    db.getRegisteredUsers(),
+    db.getAllCreditRows(),
+    db.listInviteCodes(1, 100000),
+  ]);
   const summaryByUserId = new Map(
     generationSummaries.map((row) => [
       row.user_id,
@@ -824,12 +828,19 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
       },
     ]),
   );
+  const inviteCodeByUserId = new Map<string, string>();
+  for (const row of inviteRows.codes) {
+    const redeemedBy = normalizeString(row.redeemed_by);
+    if (!redeemedBy || inviteCodeByUserId.has(redeemedBy)) continue;
+    inviteCodeByUserId.set(redeemedBy, normalizeString(row.code));
+  }
   const userMap = new Map<string, AdminUserSummaryRow>();
 
   for (const row of registeredUsers) {
     userMap.set(row.user_id, {
       userId: row.user_id,
       username: row.username,
+      inviteCode: inviteCodeByUserId.get(row.user_id) || '',
       generations: 0,
       creditsUsed: 0,
       totalCredits: row.total_credits,
@@ -844,6 +855,7 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
       userMap.set(row.user_id, {
         userId: row.user_id,
         username: row.username,
+        inviteCode: inviteCodeByUserId.get(row.user_id) || '',
         generations: 0,
         creditsUsed: 0,
         totalCredits: row.total_credits,
@@ -859,6 +871,7 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
     userMap.set(summary.userId, {
       userId: summary.userId,
       username: current?.username || summary.username,
+      inviteCode: current?.inviteCode || inviteCodeByUserId.get(summary.userId) || '',
       generations: summary.generations,
       creditsUsed: summary.creditsUsed,
       totalCredits: current?.totalCredits || 0,
@@ -1899,6 +1912,13 @@ function getUserCredits(db: SqlDatabase, userId: string) {
   return toCreditSummary(getOne<Record<string, unknown>>(db, 'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?', [userId]));
 }
 
+function isInviteManagedUser(db: SqlDatabase, userId: string) {
+  if (normalizeString(userId).startsWith('invite-')) return true;
+
+  const creditOwner = getOne<Record<string, unknown>>(db, 'SELECT username FROM user_credits WHERE user_id = ?', [userId]);
+  return normalizeString(creditOwner?.username).startsWith('invite-');
+}
+
 function ensureUserCredits(db: SqlDatabase, userId: string, username: string, totalCredits = 0) {
   const existing = getOne<Record<string, unknown>>(db, 'SELECT user_id FROM user_credits WHERE user_id = ?', [userId]);
   if (existing) {
@@ -1954,6 +1974,13 @@ function syncInviteCodeBalanceForUser(db: SqlDatabase, userId: string) {
     [userId],
   );
   if (!invite?.code) return;
+
+  if (!isInviteManagedUser(db, userId)) {
+    if (invite.low_balance_since) {
+      db.run('UPDATE invite_codes SET low_balance_since = NULL WHERE code = ?', [String(invite.code)]);
+    }
+    return;
+  }
 
   const credits = getUserCredits(db, userId);
   const remainingCredits = credits.remainingCredits;
@@ -2014,6 +2041,11 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
 
     const redeemedBy = invite.redeemed_by ? String(invite.redeemed_by) : '';
     if (redeemedBy) {
+      if (!isInviteManagedUser(db, redeemedBy)) {
+        db.run('UPDATE invite_codes SET low_balance_since = NULL WHERE code = ?', [String(invite.code)]);
+        continue;
+      }
+
       const userCredits = getUserCredits(db, redeemedBy);
       setUserTotalCredits(db, redeemedBy, userCredits.usedCredits);
     }
