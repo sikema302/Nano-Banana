@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import {
   BookOpen,
   Bookmark,
@@ -614,6 +614,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
   const [copiedText, setCopiedText] = useState('');
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
   const apiKeyPlaceholder = 'px_your_api_key';
+  const apiKeyHighlightClassName = 'font-mono text-[1.08em] font-black tracking-[0.04em] text-[#8fd3ff]';
   const requestExample = JSON.stringify(
     {
       model: 'nano-banana-pro',
@@ -659,15 +660,66 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     { model: 'gpt-image-2', name: 'GPT Image 2', cost: 'STANDARD 20 / 2K 28 / 4K 36', note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
   ];
-  const ratioRows = [
-    ['1:1', '1024x1024 / 2048x2048 / 2880x2880'],
-    ['16:9', '1280x720 / 2048x1152 / 3840x2160'],
-    ['9:16', '720x1280 / 1152x2048 / 2160x3840'],
-    ['4:3', '1152x864 / 2048x1536 / 3264x2448'],
-    ['3:4', '864x1152 / 1536x2048 / 2448x3264'],
-    ['3:2', '1536x1024 / 2016x1344 / 3504x2336'],
-    ['2:3', '1024x1536 / 1344x2016 / 2336x3504'],
-    ['21:9', '1456x624 / 3024x1296 / 3696x1584'],
+  const gptPixelGroups = [
+    {
+      label: '\u6807\u51c6 / 1K',
+      cost: '\u6210\u529f\u6263 20 \u70b9',
+      rows: [
+        ['1024x1024', '1:1'],
+        ['1280x720', '16:9'],
+        ['720x1280', '9:16'],
+        ['1152x864', '4:3'],
+        ['864x1152', '3:4'],
+        ['1536x1024', '3:2'],
+        ['1024x1536', '2:3'],
+        ['1456x624', '21:9'],
+      ],
+    },
+    {
+      label: '2K',
+      cost: '\u6210\u529f\u6263 28 \u70b9',
+      rows: [
+        ['2048x2048', '1:1'],
+        ['2048x1152', '16:9'],
+        ['1152x2048', '9:16'],
+        ['2048x1536', '4:3'],
+        ['1536x2048', '3:4'],
+        ['2016x1344', '3:2'],
+        ['1344x2016', '2:3'],
+        ['3024x1296', '21:9'],
+      ],
+    },
+    {
+      label: '4K',
+      cost: '\u6210\u529f\u6263 36 \u70b9',
+      rows: [
+        ['2880x2880', '1:1'],
+        ['3840x2160', '16:9'],
+        ['2160x3840', '9:16'],
+        ['3264x2448', '4:3'],
+        ['2448x3264', '3:4'],
+        ['3504x2336', '3:2'],
+        ['2336x3504', '2:3'],
+        ['3696x1584', '21:9'],
+      ],
+    },
+  ];
+  const pricingCards = [
+    {
+      model: 'gpt-image-2',
+      rows: [
+        ['\u6807\u51c6 / 1K', '20 \u70b9 / \u5f20'],
+        ['2K', '28 \u70b9 / \u5f20'],
+        ['4K', '36 \u70b9 / \u5f20'],
+      ],
+    },
+    {
+      model: 'nano-banana-pro',
+      rows: [
+        ['\u57fa\u7840\u751f\u6210', '24 \u70b9 / \u5f20'],
+        ['AI\u589e\u5f3a', '\u989d\u5916 +8 \u70b9 / \u5f20'],
+      ],
+    },
   ];
   const endpointSections = [
     {
@@ -704,6 +756,16 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
       bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
     },
   ];
+
+  function renderHighlightedApiKey(value: string) {
+    const parts = value.split(apiKeyPlaceholder);
+    return parts.map((part, index) => (
+      <Fragment key={`${value.length}-${index}`}>
+        {part}
+        {index < parts.length - 1 ? <span className={apiKeyHighlightClassName}>{apiKeyPlaceholder}</span> : null}
+      </Fragment>
+    ));
+  }
 
   async function copyText(value: string, label: string) {
     try {
@@ -809,7 +871,7 @@ console.log(result.image.imagePath);`;
                         <div>
                           <h3 className="text-base font-black text-white">服务端调用</h3>
                           <p className="mt-1 text-sm leading-6 text-zinc-400">
-                            不要把 <code className="rounded-md bg-sky-500/10 px-1.5 py-0.5 text-sky-200">{apiKeyPlaceholder}</code> 写进网页前端代码，避免密钥泄露和额度被盗刷。
+                            不要把 <code className="rounded-md bg-[#12314d] px-2 py-0.5 font-mono text-[1.02em] font-black tracking-[0.04em] text-[#8fd3ff]">{apiKeyPlaceholder}</code> 写进网页前端代码，避免密钥泄露和额度被盗刷。
                           </p>
                         </div>
                       </div>
@@ -832,8 +894,8 @@ console.log(result.image.imagePath);`;
                     </div>
                     <div className="p-5">
                       <p className="text-sm leading-6 text-zinc-300">请求头必须携带 API Key：</p>
-                      <pre className="mt-3 overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{`Authorization: Bearer ${apiKeyPlaceholder}
-Content-Type: application/json`}</pre>
+                      <pre className="mt-3 overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{renderHighlightedApiKey(`Authorization: Bearer ${apiKeyPlaceholder}
+Content-Type: application/json`)}</pre>
                     </div>
                   </section>
 
@@ -870,14 +932,24 @@ Content-Type: application/json`}</pre>
                     <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
                       <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
                         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ImagePlus size={17} /></div>
-                        <h2 className="text-base font-black text-white">gpt-image-2 像素比例说明</h2>
+                        <h2 className="text-base font-black text-white">{'gpt-image-2 \u50cf\u7d20\u6bd4\u4f8b\u8bf4\u660e'}</h2>
                       </div>
-                      <div className="grid gap-2 p-5 text-xs md:grid-cols-2 xl:grid-cols-4">
-                        {ratioRows.map(([ratio, pixels]) => (
-                          <div key={`${section.id}-${ratio}`} className="rounded-xl border border-white/10 bg-black/20 p-3">
-                            <code className="font-mono font-black text-sky-200">{ratio}</code>
-                            <p className="mt-2 leading-5 text-zinc-500">{pixels}</p>
-                          </div>
+                      <div className="grid gap-4 p-5">
+                        {gptPixelGroups.map((group) => (
+                          <article key={group.label} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                              <h3 className="text-base font-black text-white">{group.label}</h3>
+                              <span className="rounded-xl border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs font-black text-sky-100">{group.cost}</span>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                              {group.rows.map(([pixels, ratio]) => (
+                                <div key={`${group.label}-${pixels}`} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                  <span className="font-mono text-sm font-black text-sky-200">{pixels}</span>
+                                  <span className="ml-2 text-xs font-semibold text-zinc-500">{ratio}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </article>
                         ))}
                       </div>
                     </section>
@@ -905,7 +977,7 @@ Content-Type: application/json`}</pre>
                             {copiedText === `${section.id}-curl` ? '已复制' : '复制'}
                           </button>
                         </div>
-                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{sectionCurl}</pre>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{renderHighlightedApiKey(sectionCurl)}</pre>
                       </div>
                       <div className="space-y-3 xl:col-span-2">
                         <div className="flex items-center justify-between">
@@ -914,7 +986,7 @@ Content-Type: application/json`}</pre>
                             {copiedText === `${section.id}-js` ? '已复制' : '复制'}
                           </button>
                         </div>
-                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{sectionJs}</pre>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{renderHighlightedApiKey(sectionJs)}</pre>
                       </div>
                     </div>
                   </section>
@@ -960,43 +1032,32 @@ Content-Type: application/json`}</pre>
               );
             })}
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              <section id="pricing" className="scroll-mt-28 rounded-[24px] border border-white/10 bg-[#10131b] p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-xl font-black text-white">价格说明</h2>
-                    <p className="mt-1 text-sm text-zinc-500">生成成功后按模型扣减 API Key 额度，失败会自动退回预扣额度。</p>
-                  </div>
-                  <span className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-black text-cyan-100">按张计费</span>
-                </div>
-                <div className="mt-4 grid gap-3">
-                  {modelRows.map((item) => (
-                    <article key={item.model} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-black text-white">{item.name}</h3>
-                          <code className="mt-2 inline-flex rounded-lg border border-cyan-300/15 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100">{item.model}</code>
+            <section id="pricing" className="scroll-mt-28 overflow-hidden rounded-[24px] border border-white/10 bg-[#10131b]">
+              <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><KeyRound size={17} /></div>
+                <h2 className="text-xl font-black text-white">{'\u4ef7\u683c\u8bf4\u660e'}</h2>
+              </div>
+              <div className="grid gap-4 p-5 xl:grid-cols-2">
+                {pricingCards.map((item) => (
+                  <article key={item.model} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <code className="inline-flex rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-sm font-black text-cyan-100">
+                      {item.model}
+                    </code>
+                    <div className="mt-4 grid gap-2">
+                      {item.rows.map(([label, value]) => (
+                        <div
+                          key={`${item.model}-${label}`}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
+                        >
+                          <span className="text-sm font-semibold text-zinc-400">{label}</span>
+                          <span className="text-sm font-black text-sky-100">{value}</span>
                         </div>
-                        <span className="rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black text-amber-100">{item.cost}</span>
-                      </div>
-                      <p className="mt-3 text-xs leading-5 text-zinc-500">{item.note}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-
-              <section className="rounded-[22px] border border-white/8 bg-black/35 p-5">
-                <h2 className="text-base font-black text-white">比例 / 像素别名</h2>
-                <div className="mt-4 grid gap-2 text-xs">
-                  {ratioRows.map(([ratio, pixels]) => (
-                    <div key={ratio} className="grid gap-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 sm:grid-cols-[72px_1fr]">
-                      <code className="font-mono font-black text-cyan-100">{ratio}</code>
-                      <span className="text-zinc-500">{pixels}</span>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </section>
-            </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           </div>
         </div>
 
