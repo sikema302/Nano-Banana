@@ -3327,33 +3327,6 @@ export default function App() {
             ) : null}
             <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={openPurchasePage} />
 
-            {!user ? (
-              <button
-                className="group relative w-full overflow-hidden rounded-2xl border border-pink-300/35 bg-[radial-gradient(circle_at_18%_20%,rgba(255,210,235,0.28)_0%,rgba(255,143,205,0.16)_28%,rgba(219,92,168,0.07)_62%,rgba(255,255,255,0.03)_100%)] px-4 py-3.5 text-left shadow-[0_18px_42px_rgba(219,92,168,0.16),inset_0_0_0_1px_rgba(255,255,255,0.04)] transition hover:-translate-y-0.5 hover:border-pink-200/60 hover:shadow-[0_22px_54px_rgba(219,92,168,0.24),inset_0_0_0_1px_rgba(255,255,255,0.06)]"
-                type="button"
-                onClick={() => {
-                  setAuthMode('invite');
-                  setAuthOpen(true);
-                }}
-              >
-                <span className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-pink-300/20 blur-2xl transition group-hover:bg-pink-200/30" />
-                <span className="relative flex items-center justify-between gap-3">
-                  <span className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-pink-200/25 bg-pink-200/12 text-pink-100 shadow-[inset_0_0_18px_rgba(255,255,255,0.05)]">
-                      <KeyRound size={17} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-black text-white">邀请码登录</span>
-                      <span className="mt-0.5 block truncate text-[11px] font-semibold text-pink-100/70">有邀请码？直接进入体验额度</span>
-                    </span>
-                  </span>
-                  <span className="shrink-0 rounded-full border border-pink-200/25 bg-black/25 px-3 py-1 text-[11px] font-black text-pink-50 transition group-hover:bg-pink-200/15">
-                    立即填写
-                  </span>
-                </span>
-              </button>
-            ) : null}
-
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={loading || !!healthError || !user || !hasEnoughCredits}
@@ -3769,6 +3742,19 @@ export default function App() {
                     {'\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206(20%\u4f18\u60e0)'}
                   </button>
                 </div>
+                {!user ? (
+                  <button
+                    className="group mt-1.5 inline-flex h-9 min-w-[150px] items-center justify-center gap-1.5 rounded-lg border border-[#ff8fcd]/45 bg-[linear-gradient(180deg,rgba(255,143,205,0.12)_0%,rgba(219,92,168,0.06)_100%)] px-3.5 text-[15px] font-black text-[#ffd9ef] shadow-[0_10px_22px_rgba(219,92,168,0.14),inset_0_0_0_1px_rgba(255,255,255,0.03)] transition hover:-translate-y-0.5 hover:border-[#ffd1ea] hover:bg-[linear-gradient(180deg,rgba(255,143,205,0.2)_0%,rgba(219,92,168,0.09)_100%)] hover:text-white"
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('invite');
+                      setAuthOpen(true);
+                    }}
+                  >
+                    <KeyRound size={15} className="text-[#ffb7df] transition group-hover:text-white" />
+                    {'\u586b\u5199\u9080\u8bf7\u7801'}
+                  </button>
+                ) : null}
               </div>
 
               {healthError ? (
@@ -4040,7 +4026,7 @@ export default function App() {
               ) : null}
 
               <button
-                className="rounded-2xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+                className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:opacity-60"
                 disabled={authLoading}
                 type="submit"
               >
