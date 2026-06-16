@@ -375,7 +375,7 @@ function StageCard({
           </button>
         ) : (
           <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-semibold text-zinc-400">
-            Empty
+            待生成
           </div>
         )}
       </div>
@@ -384,7 +384,7 @@ function StageCard({
         <div className="flex min-w-0 flex-1 flex-col justify-center rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3 sm:py-0">
           <div className="flex items-center gap-3 text-sm font-semibold text-white">
             <LoaderCircle className="animate-spin text-pink-200" size={16} />
-            Preparing your canvas...
+            正在为你生成画面...
           </div>
           <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
             <div className="generation-scan h-full w-1/2 rounded-full bg-[linear-gradient(90deg,transparent,#ff8fcd,#fff1f8,transparent)]" />
@@ -443,8 +443,8 @@ function StageCard({
           ) : null}
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 py-3 text-sm font-semibold text-pink-100 sm:ml-3 sm:py-0">
-          Ready for your next prompt
+        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 py-3 text-[11px] font-semibold text-pink-100 sm:ml-3 sm:py-0">
+          下一张作品，等你输入灵感
         </div>
       )}
     </article>
