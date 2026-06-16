@@ -3312,10 +3312,7 @@ export default function App() {
         <header className="shrink-0 flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-xl border border-pink-300/25 bg-[linear-gradient(135deg,#ffb3da_0%,#ff8fcd_45%,#db5ca8_100%)] shadow-[0_0_24px_rgba(255,143,205,0.32)]" />
-            <div className="flex items-end gap-2">
-              <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
-              <span className="pb-0.5 text-sm text-zinc-500">/ Studio</span>
-            </div>
+            <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
           </div>
 
           <nav className="order-3 flex w-full overflow-x-auto rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:order-none sm:w-auto">
@@ -3341,24 +3338,20 @@ export default function App() {
           </nav>
 
           <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
-            <div className="hidden items-center overflow-hidden rounded-2xl border border-pink-300/20 bg-[linear-gradient(135deg,rgba(255,143,205,0.14)_0%,rgba(219,92,168,0.08)_100%)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:inline-flex">
-              <div className="flex items-center gap-2 border-r border-pink-300/12 px-3 py-2.5">
-                <div className="h-2 w-2 rounded-full bg-pink-300 shadow-[0_0_12px_rgba(255,143,205,0.7)]" />
-                <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-pink-200/75">Support</span>
-              </div>
-              <div className="flex items-center gap-3 px-3 py-2.5">
+            <div className="hidden items-center gap-2 rounded-xl border border-pink-300/20 bg-[linear-gradient(135deg,rgba(255,143,205,0.12)_0%,rgba(219,92,168,0.06)_100%)] px-2 py-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:inline-flex">
+              <div className="flex items-center gap-2">
                 <span className="text-sm font-black text-white">微信</span>
-                <span className="rounded-lg bg-white/[0.03] px-2.5 py-1 text-sm font-black tracking-[0.06em] text-pink-50">lzp983813676</span>
+                <span className="rounded-md bg-white/[0.04] px-2 py-1 text-[12px] font-bold tracking-[0.04em] text-pink-50">lzp983813676</span>
                 <button
                   className={
                     wechatCopied
-                      ? 'inline-flex items-center gap-1.5 rounded-xl border border-emerald-300/20 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-100 transition'
-                      : 'inline-flex items-center gap-1.5 rounded-xl border border-pink-300/20 bg-pink-500/10 px-2.5 py-1.5 text-[11px] font-bold text-pink-100 transition hover:bg-pink-500/20'
+                      ? 'inline-flex items-center gap-1 rounded-lg border border-emerald-300/20 bg-emerald-500/15 px-2 py-1 text-[11px] font-bold text-emerald-100 transition'
+                      : 'inline-flex items-center gap-1 rounded-lg border border-pink-300/20 bg-pink-500/10 px-2 py-1 text-[11px] font-bold text-pink-100 transition hover:bg-pink-500/20'
                   }
                   type="button"
                   onClick={() => void handleCopyWechat()}
                 >
-                  <Copy size={12} />
+                  <Copy size={11} />
                   {wechatCopied ? '已复制' : '复制'}
                 </button>
               </div>
@@ -3372,7 +3365,7 @@ export default function App() {
               购买积分
             </button>
             <div
-              className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 md:inline-flex"
+              className="hidden"
               title={healthError || healthText}
             >
               <span className={healthError ? 'h-2.5 w-2.5 rounded-full bg-rose-400' : 'h-2.5 w-2.5 rounded-full bg-emerald-400'} />
