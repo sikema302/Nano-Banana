@@ -106,6 +106,16 @@ export interface AdminDashboardStats {
   usedInviteCodeCount: number;
 }
 
+export interface AdminImageStorageStats {
+  uploadsTotalBytes: number;
+  generatedBytes: number;
+  generatedCount: number;
+  referenceBytes: number;
+  referenceCount: number;
+  referenceStorageEnabled: boolean;
+  retentionDays: number;
+}
+
 export interface AdminRecordsStats {
   todayCreditsUsed: number;
   todayRecordCount: number;
@@ -357,6 +367,7 @@ function appendOptionalParam(query: URLSearchParams, key: string, value: unknown
 export async function fetchAdminDashboard() {
   return request<{
     stats: AdminDashboardStats;
+    imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
   }>('/api/admin/dashboard', {}, true);
 }

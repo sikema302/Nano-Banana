@@ -73,6 +73,16 @@ type GeneratedImagePayload = {
   createdAt: string;
 };
 
+type ImageStorageStats = {
+  uploadsTotalBytes: number;
+  generatedBytes: number;
+  generatedCount: number;
+  referenceBytes: number;
+  referenceCount: number;
+  referenceStorageEnabled: boolean;
+  retentionDays: number;
+};
+
 type ReferenceUploadInput = {
   name: string;
   mimeType: string;
@@ -177,6 +187,7 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 7));
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
+const STORE_REFERENCE_IMAGES = normalizeEnvValue(process.env.STORE_REFERENCE_IMAGES || 'false').toLowerCase() === 'true';
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
@@ -437,6 +448,62 @@ async function pathExists(targetPath: string) {
   } catch {
     return false;
   }
+}
+
+async function getDirectoryUsage(targetPath: string): Promise<{ bytes: number; count: number }> {
+  try {
+    const entries = await fs.readdir(targetPath, { withFileTypes: true });
+    let bytes = 0;
+    let count = 0;
+
+    for (const entry of entries) {
+      const fullPath = path.join(targetPath, entry.name);
+      if (entry.isDirectory()) {
+        const nested = await getDirectoryUsage(fullPath);
+        bytes += nested.bytes;
+        count += nested.count;
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      const stats = await fs.stat(fullPath);
+      bytes += stats.size;
+      count += 1;
+    }
+
+    return { bytes, count };
+  } catch {
+    return { bytes: 0, count: 0 };
+  }
+}
+
+async function getImageStorageStats(): Promise<ImageStorageStats> {
+  if (IS_VERCEL) {
+    return {
+      uploadsTotalBytes: 0,
+      generatedBytes: 0,
+      generatedCount: 0,
+      referenceBytes: 0,
+      referenceCount: 0,
+      referenceStorageEnabled: STORE_REFERENCE_IMAGES,
+      retentionDays: IMAGE_RETENTION_DAYS,
+    };
+  }
+
+  const [generated, references] = await Promise.all([
+    getDirectoryUsage(GENERATED_DIR),
+    getDirectoryUsage(REFERENCES_DIR),
+  ]);
+
+  return {
+    uploadsTotalBytes: generated.bytes + references.bytes,
+    generatedBytes: generated.bytes,
+    generatedCount: generated.count,
+    referenceBytes: references.bytes,
+    referenceCount: references.count,
+    referenceStorageEnabled: STORE_REFERENCE_IMAGES,
+    retentionDays: IMAGE_RETENTION_DAYS,
+  };
 }
 
 async function ensureRuntimeDirectories() {
@@ -2518,11 +2585,8 @@ async function persistGeneratedImage(source: string) {
 
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
   // Vercel 鐜涓嬩笉淇濆瓨鍙傝€冨浘鐗囧埌鏈湴鏂囦欢绯荤粺锛岀洿鎺ヨ繑鍥炲師濮?data URL
-  if (IS_VERCEL) {
-    return referenceImages
-      .slice(0, 9)
-      .map((item) => normalizeString(item.data))
-      .filter(Boolean);
+  if (IS_VERCEL || !STORE_REFERENCE_IMAGES) {
+    return [];
   }
 
   const output: string[] = [];
@@ -3087,7 +3151,7 @@ async function start() {
       const modelReferenceImages = [
         ...referenceImagesInput
           .map((item) => normalizeString(item.data))
-          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+          .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
         ...referenceImages
           .map((item) => toPublicAssetUrl(req, item))
           .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
@@ -3635,6 +3699,8 @@ async function start() {
 
   app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
     try {
+      const imageStorage = await getImageStorageStats();
+
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const [users, adminCredits, recordPage, invitePage, usedInvitePage] = await Promise.all([
@@ -3672,6 +3738,7 @@ async function start() {
             recordCount: recordPage.total,
             usedInviteCodeCount: usedInvitePage.total,
           },
+          imageStorage,
           adminCredits,
         });
         return;
@@ -3701,6 +3768,7 @@ async function start() {
             recordCount,
             usedInviteCodeCount: usedInviteCount,
           },
+          imageStorage,
           adminCredits: getAdminCreditSummary(db),
         };
       });

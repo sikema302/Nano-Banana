@@ -49,6 +49,7 @@ import {
   register,
   revokePublicApiKey,
   type AdminDashboardStats,
+  type AdminImageStorageStats,
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
@@ -116,6 +117,7 @@ interface AdminOverviewState {
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
+  imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
   recordResolutionOptions: string[];
@@ -137,6 +139,16 @@ const emptyDashboardStats: AdminDashboardStats = {
   inviteCodeCount: 0,
   recordCount: 0,
   usedInviteCodeCount: 0,
+};
+
+const emptyImageStorageStats: AdminImageStorageStats = {
+  uploadsTotalBytes: 0,
+  generatedBytes: 0,
+  generatedCount: 0,
+  referenceBytes: 0,
+  referenceCount: 0,
+  referenceStorageEnabled: false,
+  retentionDays: 7,
 };
 
 const emptyRecordsStats: AdminRecordsStats = {
@@ -251,6 +263,14 @@ function formatHourKey(value: string | Date) {
     hour12: false,
   });
   return formatter.format(date);
+}
+
+function formatStorageSize(value: number) {
+  const size = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size >= 10 * 1024 ? 0 : 1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GB`;
 }
 
 function getModelCredits(
@@ -1293,6 +1313,7 @@ function AdminView({
   inviteCodesPage,
   adminCredits,
   dashboardStats,
+  imageStorageStats,
   recordsStats,
   recordModelOptions,
   recordResolutionOptions,
@@ -1312,6 +1333,7 @@ function AdminView({
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
+  imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
   recordResolutionOptions: string[];
@@ -1820,6 +1842,49 @@ function AdminView({
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">低积分提醒</p>
                   <p className="mt-2 text-2xl font-black text-amber-200">{dashboardLowCreditUserCount}</p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-white">图片占用统计</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    生成图保留在本地，参考图默认不落盘，本地图片按 {imageStorageStats.retentionDays} 天自动清理。
+                  </p>
+                </div>
+                <span
+                  className={
+                    imageStorageStats.referenceStorageEnabled
+                      ? 'rounded-full border border-amber-400/25 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-200'
+                      : 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200'
+                  }
+                >
+                  {imageStorageStats.referenceStorageEnabled ? '参考图本地存储：已开启' : '参考图本地存储：已关闭'}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">总占用</p>
+                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.uploadsTotalBytes)}</p>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    共 {imageStorageStats.generatedCount + imageStorageStats.referenceCount} 张本地图片
+                  </p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">生成图占用</p>
+                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.generatedBytes)}</p>
+                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.generatedCount} 张图片</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">参考图占用</p>
+                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.referenceBytes)}</p>
+                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.referenceCount} 张图片</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">清理策略</p>
+                  <p className="mt-2 text-2xl font-black text-sky-100">{imageStorageStats.retentionDays} 天</p>
+                  <p className="mt-2 text-xs text-zinc-500">自动清理本地旧图，不影响网站正常运行。</p>
                 </div>
               </div>
             </div>
@@ -2424,6 +2489,7 @@ export default function App() {
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
     dashboardStats: emptyDashboardStats,
+    imageStorageStats: emptyImageStorageStats,
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
     recordResolutionOptions: [],
@@ -2706,6 +2772,7 @@ export default function App() {
         setAdminOverview((current) => ({
           ...current,
           dashboardStats: payload.stats,
+          imageStorageStats: payload.imageStorage,
           adminCredits: payload.adminCredits,
         }));
         return;
@@ -3889,6 +3956,7 @@ export default function App() {
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
               dashboardStats={adminOverview.dashboardStats}
+              imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
               recordModelOptions={adminOverview.recordModelOptions}
               recordResolutionOptions={adminOverview.recordResolutionOptions}
