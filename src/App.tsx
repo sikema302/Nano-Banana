@@ -3257,7 +3257,7 @@ export default function App() {
                   return (
                     <button
                       key={item.value}
-                      className={`rounded-2xl border px-4 py-5 text-left transition ${
+                      className={`rounded-xl border px-4 py-2 text-center transition ${
                         active
                           ? 'border-white bg-white text-black'
                           : 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
@@ -3265,10 +3265,7 @@ export default function App() {
                       type="button"
                       onClick={() => setImageSize(item.value)}
                     >
-                      <span className="block text-4xl font-black leading-none">{item.label}</span>
-                      <span className={`mt-2 block text-xs font-semibold leading-5 ${active ? 'text-emerald-600' : 'text-emerald-300'}`}>
-                        {item.hint}
-                      </span>
+                      <span className="block text-sm font-black leading-none">{item.label}</span>
                     </button>
                   );
                 })}
@@ -3638,7 +3635,7 @@ export default function App() {
                           }}
                         >
                           <span className="block text-[13px] font-black leading-none">{item.label}</span>
-                          {item.hint ? (
+                          {item.hint && !isNanoBananaPro ? (
                             <span className={active ? 'mt-1 block truncate text-[10px] font-semibold text-[#744960]' : 'mt-1 block truncate text-[10px] font-semibold text-zinc-500'}>
                               {item.hint}
                             </span>

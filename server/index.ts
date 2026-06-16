@@ -1067,6 +1067,45 @@ function inferImageSizeFromAspectRatio(value: string) {
   return '';
 }
 
+function getGptImageAspectRatio(ratio: string, imageSize: string) {
+  const pixelRatios: Record<string, Record<string, string>> = {
+    STANDARD: {
+      '1:1': '1024x1024',
+      '16:9': '1280x720',
+      '9:16': '720x1280',
+      '4:3': '1152x864',
+      '3:4': '864x1152',
+      '3:2': '1536x1024',
+      '2:3': '1024x1536',
+      '21:9': '1456x624',
+    },
+    '2K': {
+      '1:1': '2048x2048',
+      '16:9': '2048x1152',
+      '9:16': '1152x2048',
+      '4:3': '2048x1536',
+      '3:4': '1536x2048',
+      '3:2': '2016x1344',
+      '2:3': '1344x2016',
+      '21:9': '3024x1296',
+    },
+    '4K': {
+      '1:1': '2880x2880',
+      '16:9': '3840x2160',
+      '9:16': '2160x3840',
+      '4:3': '3264x2448',
+      '3:4': '2448x3264',
+      '3:2': '3504x2336',
+      '2:3': '2336x3504',
+      '21:9': '3696x1584',
+    },
+  };
+
+  if (ratio === 'auto') return ratio;
+  const sizeKey = imageSize === '2K' || imageSize === '4K' ? imageSize : 'STANDARD';
+  return pixelRatios[sizeKey]?.[ratio] || ratio;
+}
+
 function generateInviteCode() {
   return `PIXORY-${randomHex(4).toUpperCase()}`;
 }
@@ -2275,6 +2314,8 @@ async function callVisionaryGeneration({
   }
 
   const aspectRatio = ratio || '1:1';
+  const visionaryAspectRatio =
+    modelId === 'gpt-image-2' ? getGptImageAspectRatio(aspectRatio, imageSize) : aspectRatio;
   const requestConfig =
     modelId === 'gpt-image-2'
       ? {
@@ -2283,7 +2324,7 @@ async function callVisionaryGeneration({
             prompt,
             model: 'gpt-image-2',
             images,
-            aspectRatio,
+            aspectRatio: visionaryAspectRatio,
             imageSize: imageSize === 'STANDARD' ? undefined : imageSize,
             quality: normalizeGptQuality(quality, imageSize),
             replyType: 'json',
@@ -2295,7 +2336,7 @@ async function callVisionaryGeneration({
             prompt,
             model: 'nano-banana-pro',
             images,
-            aspectRatio,
+            aspectRatio: visionaryAspectRatio,
             imageSize: imageSize || '2K',
             optimizeChineseText,
             replyType: 'json',
