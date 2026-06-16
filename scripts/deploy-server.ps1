@@ -7,7 +7,7 @@ param(
   [string]$BackupsDir = '',
   [string]$HealthUrl = 'http://154.9.24.91:3001/api/health',
   [string]$Password = '',
-  [int]$KeepBackups = 5,
+  [int]$KeepBackups = 2,
   [switch]$SkipLint,
   [switch]$SkipInstall,
   [switch]$SkipBackup,
@@ -159,6 +159,8 @@ if [ '$skipBackupFlag' = '0' ] && [ -n "`$(find '$RemoteProjectPath' -mindepth 1
     --exclude='./.git' \
     --exclude='./.runtime' \
     --exclude='./.deploy-backups' \
+    --exclude='./uploads' \
+    --exclude='./.uploads' \
     -C '$RemoteProjectPath' .
   echo "Created backup: `$backup_archive"
 fi
