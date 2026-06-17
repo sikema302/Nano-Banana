@@ -35,9 +35,11 @@ import {
   fetchAdminUsers,
   fetchPublicApiKeys,
   deleteImage,
+  acknowledgePromoCoupon,
   fetchHealth,
   fetchMe,
   fetchModels,
+  fetchPromoCoupon,
   fetchUserHistory,
   fetchUserImages,
   generateImage,
@@ -59,6 +61,7 @@ import {
   type InviteCodeInfo,
   type ModelInfo,
   type PaginationInfo,
+  type PromoCouponInfo,
   type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
@@ -273,6 +276,18 @@ function formatStorageSize(value: number) {
   return `${(size / (1024 * 1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GB`;
 }
 
+function formatCouponTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
 function getModelCredits(
   model: Pick<ModelInfo, 'id' | 'creditsCost'> | null,
   options?: {
@@ -329,7 +344,7 @@ function CreditsSummary({
           type="button"
           onClick={onOpenPurchase}
         >
-          在线购买积分(20%优惠)
+          在线购买积分
         </button>
       </div>
       {selectedModel ? (
@@ -2511,6 +2526,8 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authForm, setAuthForm] = useState({ username: '', password: '', email: '', inviteCode: '' });
+  const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
+  const [promoCouponOpen, setPromoCouponOpen] = useState(false);
 
   const sideFavoriteItems = user ? favorites : [];
   const sideBackupItems = user ? backup : [];
@@ -2523,6 +2540,8 @@ export default function App() {
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
+  const activePromoCoupon = promoCoupon?.active ? promoCoupon : null;
+  const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
 
   useEffect(() => {
     fetchHealth()
@@ -2544,6 +2563,7 @@ export default function App() {
         .catch(() => {
           clearSession();
           setUser(null);
+          setPromoCoupon(null);
         });
     }
   }, []);
@@ -2664,9 +2684,11 @@ export default function App() {
       setBackup(backupPayload.images);
       setDiscarded(discardedPayload.images);
       setHistoryRecords(historyPayload.history);
+      void loadPromoCoupon({ allowPopup: true });
     } catch (error) {
       clearSession();
       setUser(null);
+      setPromoCoupon(null);
       setNotice(error instanceof Error ? error.message : '登录状态已失效，请重新登录');
     } finally {
       setLoadingUserData(false);
@@ -2681,6 +2703,21 @@ export default function App() {
       setHistoryRecords(payload.history);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '历史记录加载失败');
+    }
+  }
+
+  async function loadPromoCoupon(options: { allowPopup?: boolean } = {}) {
+    if (!getStoredUser() && !user) return null;
+
+    try {
+      const payload = await fetchPromoCoupon();
+      setPromoCoupon(payload.coupon);
+      if (options.allowPopup && payload.coupon.shouldPopup) {
+        setPromoCouponOpen(true);
+      }
+      return payload.coupon;
+    } catch {
+      return null;
     }
   }
 
@@ -2921,7 +2958,24 @@ export default function App() {
   }
 
   function openPurchasePage() {
-    window.open('https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer');
+    window.open(activePromoCoupon?.purchaseUrl || 'https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer');
+  }
+
+  async function closePromoCoupon() {
+    setPromoCouponOpen(false);
+    if (!promoCoupon?.active) return;
+
+    try {
+      const payload = await acknowledgePromoCoupon();
+      setPromoCoupon(payload.coupon);
+    } catch {
+      // Closing the modal should never block the user's purchase flow.
+    }
+  }
+
+  function openPromoPurchasePage() {
+    openPurchasePage();
+    void closePromoCoupon();
   }
 
   async function handleCopyWechat() {
@@ -3226,6 +3280,14 @@ export default function App() {
 
       setUser(nextUser);
       setAuthOpen(false);
+      void fetchPromoCoupon()
+        .then((payload) => {
+          setPromoCoupon(payload.coupon);
+          if (payload.coupon.shouldPopup) {
+            setPromoCouponOpen(true);
+          }
+        })
+        .catch(() => undefined);
       setNotice(`欢迎回来，${nextUser.username}`);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : '登录失败');
@@ -3241,13 +3303,21 @@ export default function App() {
     setBackup([]);
     setDiscarded([]);
     setHistoryRecords([]);
+    setPromoCoupon(null);
+    setPromoCouponOpen(false);
     setAdminOverview({
       users: [],
+      usersPage: emptyPage,
       records: [],
       recordsPage: emptyPage,
       inviteCodes: [],
       inviteCodesPage: emptyPage,
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
+      dashboardStats: emptyDashboardStats,
+      imageStorageStats: emptyImageStorageStats,
+      recordsStats: emptyRecordsStats,
+      recordModelOptions: [],
+      recordResolutionOptions: [],
     });
     setActiveTab('create');
     setCurrentImage(null);
@@ -3864,9 +3934,19 @@ export default function App() {
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
                   </span>
                   <button className="text-[#ff8fcd] transition hover:text-[#ffb0dd]" type="button" onClick={openPurchasePage}>
-                    {'\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206(20%\u4f18\u60e0)'}
+                    {activePromoCoupon ? '使用 9 折券购买积分' : '\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206'}
                   </button>
                 </div>
+                {user && activePromoCoupon ? (
+                  <button
+                    className="inline-flex max-w-full items-center gap-2 rounded-xl border border-[#ff8fcd]/30 bg-[#341625]/60 px-3 py-2 text-left text-[12px] font-bold text-[#ffd9ef] transition hover:border-[#ffd1ea] hover:text-white"
+                    type="button"
+                    onClick={() => setPromoCouponOpen(true)}
+                  >
+                    <Sparkles size={14} className="shrink-0 text-[#ffb7df]" />
+                    <span className="truncate">今日 9 折优惠券，{promoCouponExpiresText || '今晚 0 点'} 失效</span>
+                  </button>
+                ) : null}
                 {!user ? (
                   <button
                     className="group mt-1.5 inline-flex h-9 min-w-[150px] items-center justify-center gap-1.5 rounded-lg border border-[#ff8fcd]/45 bg-[linear-gradient(180deg,rgba(255,143,205,0.12)_0%,rgba(219,92,168,0.06)_100%)] px-3.5 text-[15px] font-black text-[#ffd9ef] shadow-[0_10px_22px_rgba(219,92,168,0.14),inset_0_0_0_1px_rgba(255,255,255,0.03)] transition hover:-translate-y-0.5 hover:border-[#ffd1ea] hover:bg-[linear-gradient(180deg,rgba(255,143,205,0.2)_0%,rgba(219,92,168,0.09)_100%)] hover:text-white"
@@ -4066,6 +4146,64 @@ export default function App() {
             </div>
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3 sm:p-4">
               <img alt={previewImage.prompt} className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]" src={previewImage.imageUrl} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {promoCouponOpen && activePromoCoupon ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-4 backdrop-blur-sm">
+          <button className="absolute inset-0" type="button" onClick={() => void closePromoCoupon()} aria-label="关闭优惠券弹窗" />
+          <div className="relative z-10 w-full max-w-[440px] overflow-hidden rounded-[30px] border border-[#ff8fcd]/30 bg-[#0c080b] shadow-[0_28px_90px_rgba(219,92,168,0.28)]">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_0%,rgba(255,143,205,0.34),transparent_34%),radial-gradient(circle_at_100%_22%,rgba(219,92,168,0.18),transparent_38%)]" />
+            <div className="relative p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[12px] font-black uppercase tracking-[0.24em] text-[#ffb7df]">PIXORY COUPON</p>
+                  <h2 className="mt-2 text-2xl font-black text-white">今日专属 9 折券</h2>
+                </div>
+                <button
+                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 text-zinc-400 transition hover:border-[#ff8fcd]/40 hover:text-white"
+                  type="button"
+                  onClick={() => void closePromoCoupon()}
+                  aria-label="关闭"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-[24px] border border-[#ff8fcd]/30 bg-[#23101a]/80 p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]">
+                <div className="flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-bold text-[#ffd9ef]">购买积分可用</p>
+                    <p className="mt-1 text-[13px] text-zinc-400">每个账户 2-3 天随机发放一张</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-5xl font-black leading-none text-white">9</p>
+                    <p className="text-sm font-black text-[#ffb7df]">折优惠</p>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] font-bold text-[#ffd9ef]">
+                  有效期至 {promoCouponExpiresText || '今晚 0 点'}，过期自动失效
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]">
+                <button
+                  className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110"
+                  type="button"
+                  onClick={openPromoPurchasePage}
+                >
+                  立即使用优惠券
+                </button>
+                <button
+                  className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold text-zinc-400 transition hover:border-white/20 hover:text-white"
+                  type="button"
+                  onClick={() => void closePromoCoupon()}
+                >
+                  稍后再说
+                </button>
+              </div>
             </div>
           </div>
         </div>

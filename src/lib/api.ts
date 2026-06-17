@@ -71,6 +71,17 @@ export interface CreditSummary {
   remainingCredits: number;
 }
 
+export interface PromoCouponInfo {
+  couponId: string;
+  discountPercent: number;
+  issuedAt: string;
+  expiresAt: string;
+  nextEligibleAt: string;
+  purchaseUrl: string;
+  active: boolean;
+  shouldPopup: boolean;
+}
+
 export interface InviteCodeInfo {
   code: string;
   credits: number;
@@ -253,6 +264,20 @@ export async function fetchMe() {
   const result = await request<{ user: UserInfo }>('/api/auth/me', {}, true);
   setSession(getToken() || '', result.user);
   return result.user;
+}
+
+export async function fetchPromoCoupon() {
+  return request<{ coupon: PromoCouponInfo }>('/api/user/promo-coupon', {}, true);
+}
+
+export async function acknowledgePromoCoupon() {
+  return request<{ coupon: PromoCouponInfo }>(
+    '/api/user/promo-coupon/ack',
+    {
+      method: 'POST',
+    },
+    true,
+  );
 }
 
 export async function register(payload: { username: string; password: string; email?: string }) {

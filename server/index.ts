@@ -63,6 +63,27 @@ type PublicUser = {
   creditsRemaining?: number;
 };
 
+type PromoCouponRecord = {
+  couponId: string;
+  discountPercent: number;
+  issuedAt: string;
+  expiresAt: string;
+  nextEligibleAt: string;
+  popupSeenAt?: string;
+  source: 'welcome' | 'scheduled';
+};
+
+type PromoCouponPayload = {
+  couponId: string;
+  discountPercent: number;
+  issuedAt: string;
+  expiresAt: string;
+  nextEligibleAt: string;
+  purchaseUrl: string;
+  active: boolean;
+  shouldPopup: boolean;
+};
+
 type GeneratedImagePayload = {
   prompt: string;
   modelName: string;
@@ -188,6 +209,11 @@ const DEFAULT_PORT = 3001;
 const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 7));
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const STORE_REFERENCE_IMAGES = normalizeEnvValue(process.env.STORE_REFERENCE_IMAGES || 'false').toLowerCase() === 'true';
+const PROMO_PURCHASE_URL = 'https://pay.ldxp.cn/shop/RHPYAKWG';
+const PROMO_COUPON_DISCOUNT_PERCENT = 10;
+const PROMO_COUPON_POPUP_WINDOW_MS = 10 * 60 * 1000;
+const PROMO_COUPON_SETTING_PREFIX = 'promo_coupon_v1:';
+const PROMO_COUPON_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
@@ -1486,6 +1512,230 @@ function setSetting(db: SqlDatabase, key: string, value: string) {
   );
 }
 
+function promoCouponSettingKey(userId: string) {
+  return `${PROMO_COUPON_SETTING_PREFIX}${userId}`;
+}
+
+function parsePromoCouponRecord(raw: string): PromoCouponRecord | null {
+  const value = parseJsonSetting<Partial<PromoCouponRecord> | null>(raw, null);
+  if (!value || typeof value !== 'object') return null;
+
+  const couponId = normalizeString(value.couponId);
+  const issuedAt = normalizeString(value.issuedAt);
+  const expiresAt = normalizeString(value.expiresAt);
+  const nextEligibleAt = normalizeString(value.nextEligibleAt);
+  if (!couponId || !issuedAt || !expiresAt || !nextEligibleAt) return null;
+
+  return {
+    couponId,
+    discountPercent: Math.max(1, Math.floor(Number(value.discountPercent || PROMO_COUPON_DISCOUNT_PERCENT))),
+    issuedAt,
+    expiresAt,
+    nextEligibleAt,
+    popupSeenAt: normalizeString(value.popupSeenAt) || undefined,
+    source: value.source === 'welcome' ? 'welcome' : 'scheduled',
+  } satisfies PromoCouponRecord;
+}
+
+function serializePromoCouponRecord(record: PromoCouponRecord) {
+  return JSON.stringify(record);
+}
+
+function addDaysStrictIso(base: string, days: number) {
+  const date = new Date(base);
+  if (Number.isNaN(date.getTime())) return nowIso();
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function nextChinaMidnightIso(base: string) {
+  const source = new Date(base);
+  const now = Number.isNaN(source.getTime()) ? new Date() : source;
+  const shifted = new Date(now.getTime() + PROMO_COUPON_TIMEZONE_OFFSET_MS);
+  shifted.setUTCHours(24, 0, 0, 0);
+  return new Date(shifted.getTime() - PROMO_COUPON_TIMEZONE_OFFSET_MS).toISOString();
+}
+
+function randomCouponIntervalDays() {
+  const randomByte = Number.parseInt(randomHex(1), 16);
+  return randomByte % 2 === 0 ? 2 : 3;
+}
+
+function isPromoCouponActive(record: PromoCouponRecord | null, now = nowIso()) {
+  if (!record) return false;
+  const expiresAt = new Date(record.expiresAt).getTime();
+  const current = new Date(now).getTime();
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(current)) return false;
+  return current < expiresAt;
+}
+
+function toPromoCouponPayload(record: PromoCouponRecord | null, options?: { shouldPopup?: boolean }): PromoCouponPayload {
+  return {
+    couponId: record?.couponId || '',
+    discountPercent: record?.discountPercent || PROMO_COUPON_DISCOUNT_PERCENT,
+    issuedAt: record?.issuedAt || '',
+    expiresAt: record?.expiresAt || '',
+    nextEligibleAt: record?.nextEligibleAt || '',
+    purchaseUrl: PROMO_PURCHASE_URL,
+    active: isPromoCouponActive(record),
+    shouldPopup: Boolean(options?.shouldPopup),
+  };
+}
+
+function shouldShowPromoCouponPopup(record: PromoCouponRecord | null, createdAt: string, now = nowIso()) {
+  if (!record || !isPromoCouponActive(record, now) || record.popupSeenAt) return false;
+  const createdTime = new Date(createdAt).getTime();
+  const currentTime = new Date(now).getTime();
+  if (!Number.isFinite(createdTime) || !Number.isFinite(currentTime)) return false;
+  return currentTime - createdTime <= PROMO_COUPON_POPUP_WINDOW_MS;
+}
+
+function issuePromoCoupon(createdAt: string, now = nowIso()): PromoCouponRecord {
+  const createdTime = new Date(createdAt).getTime();
+  const currentTime = new Date(now).getTime();
+  const isWelcomeCoupon =
+    Number.isFinite(createdTime) &&
+    Number.isFinite(currentTime) &&
+    currentTime - createdTime <= PROMO_COUPON_POPUP_WINDOW_MS;
+
+  return {
+    couponId: `PIXORY90-${randomHex(3).toUpperCase()}`,
+    discountPercent: PROMO_COUPON_DISCOUNT_PERCENT,
+    issuedAt: now,
+    expiresAt: nextChinaMidnightIso(now),
+    nextEligibleAt: addDaysStrictIso(now, randomCouponIntervalDays()),
+    source: isWelcomeCoupon ? 'welcome' : 'scheduled',
+  };
+}
+
+async function getSupabaseUserCreatedAt(user: AuthUser) {
+  const db = await getSupabaseDb();
+  const row = await db.findUserById(user.userId);
+  return normalizeString(row?.created_at) || nowIso();
+}
+
+function getSqliteUserCreatedAt(db: SqlDatabase, user: AuthUser) {
+  const row = getOne<{ created_at: string }>(
+    db,
+    `
+      SELECT u.created_at
+      FROM users u
+      LEFT JOIN user_migrations m ON m.legacy_user_id = u.id
+      WHERE m.supabase_user_id = ? OR u.username = ?
+      ORDER BY datetime(u.created_at) DESC
+      LIMIT 1
+    `,
+    [user.userId, user.username],
+  );
+  return normalizeString(row?.created_at) || nowIso();
+}
+
+async function getOrRefreshSupabasePromoCoupon(user: AuthUser) {
+  if (isAdminUser(user)) {
+    return toPromoCouponPayload(null);
+  }
+
+  const db = await getSupabaseDb();
+  const settingKey = promoCouponSettingKey(user.userId);
+  const createdAt = await getSupabaseUserCreatedAt(user);
+  const now = nowIso();
+  let record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
+
+  if (!record || (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime())) {
+    record = issuePromoCoupon(createdAt, now);
+    await db.setSetting(settingKey, serializePromoCouponRecord(record));
+  }
+
+  return toPromoCouponPayload(record, {
+    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+  });
+}
+
+async function getOrRefreshSqlitePromoCoupon(db: SqlDatabase, user: AuthUser) {
+  if (isAdminUser(user)) {
+    return toPromoCouponPayload(null);
+  }
+
+  const settingKey = promoCouponSettingKey(user.userId);
+  const createdAt = getSqliteUserCreatedAt(db, user);
+  const now = nowIso();
+  let record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
+
+  if (!record || (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime())) {
+    record = issuePromoCoupon(createdAt, now);
+    setSetting(db, settingKey, serializePromoCouponRecord(record));
+  }
+
+  return toPromoCouponPayload(record, {
+    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+  });
+}
+
+async function getOrRefreshPromoCoupon(user: AuthUser) {
+  if (USE_SUPABASE) {
+    return getOrRefreshSupabasePromoCoupon(user);
+  }
+
+  return withWriteDb((db) => {
+    ensureSchema(db);
+    return getOrRefreshSqlitePromoCoupon(db, user);
+  });
+}
+
+async function acknowledgeSupabasePromoCoupon(user: AuthUser) {
+  if (isAdminUser(user)) {
+    return toPromoCouponPayload(null);
+  }
+
+  const db = await getSupabaseDb();
+  const settingKey = promoCouponSettingKey(user.userId);
+  const createdAt = await getSupabaseUserCreatedAt(user);
+  const now = nowIso();
+  const record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
+
+  if (!record) {
+    return toPromoCouponPayload(null);
+  }
+
+  if (!record.popupSeenAt) {
+    record.popupSeenAt = now;
+    await db.setSetting(settingKey, serializePromoCouponRecord(record));
+  }
+
+  return toPromoCouponPayload(record, {
+    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+  });
+}
+
+async function acknowledgePromoCoupon(user: AuthUser) {
+  if (USE_SUPABASE) {
+    return acknowledgeSupabasePromoCoupon(user);
+  }
+
+  return withWriteDb((db) => {
+    ensureSchema(db);
+    if (isAdminUser(user)) {
+      return toPromoCouponPayload(null);
+    }
+
+    const settingKey = promoCouponSettingKey(user.userId);
+    const createdAt = getSqliteUserCreatedAt(db, user);
+    const now = nowIso();
+    const record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
+    if (!record) {
+      return toPromoCouponPayload(null);
+    }
+
+    if (!record.popupSeenAt) {
+      record.popupSeenAt = now;
+      setSetting(db, settingKey, serializePromoCouponRecord(record));
+    }
+
+    return toPromoCouponPayload(record, {
+      shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+    });
+  });
+}
+
 function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKeyRecord | null {
   const id = normalizeString(value.id);
   const keyHash = normalizeString(value.keyHash);
@@ -2607,6 +2857,42 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
 
 // 鈹€鈹€鈹€ 鏈嶅姟鍣ㄥ惎鍔?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
+async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadInput[]) {
+  if (IS_VERCEL) {
+    return [];
+  }
+
+  const output: string[] = [];
+
+  for (const item of referenceImages.slice(0, 9)) {
+    const data = normalizeString(item.data);
+    if (!data.startsWith('data:image/')) continue;
+
+    const base64 = data.split(',').pop() || '';
+    if (!base64) continue;
+
+    const extension = fileExtensionFromMimeType(item.mimeType);
+    const fileName = `temp-reference-${Date.now()}-${randomHex(3)}.${extension}`;
+    const target = path.join(REFERENCES_DIR, fileName);
+    await fs.writeFile(target, Buffer.from(base64, 'base64'));
+    output.push(`/uploads/references/${fileName}`);
+  }
+
+  return output;
+}
+
+async function cleanupTemporaryReferenceImages(referenceImages: string[]) {
+  await Promise.all(
+    referenceImages
+      .filter((item) => item.startsWith('/uploads/references/temp-reference-'))
+      .map(async (item) => {
+        const target = path.resolve(ROOT_DIR, item.replace(/^\/+/, ''));
+        if (!target.startsWith(REFERENCES_DIR)) return;
+        await fs.unlink(target).catch(() => undefined);
+      }),
+  );
+}
+
 async function start() {
   if (!IS_VERCEL) {
     await ensureRuntimeDirectories();
@@ -2958,6 +3244,24 @@ async function start() {
 
   // 鈹€鈹€鈹€ 妯″瀷鍒楄〃 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
+  app.get('/api/user/promo-coupon', requireAuth, async (req, res) => {
+    try {
+      const coupon = await getOrRefreshPromoCoupon(req.authUser!);
+      res.json({ coupon });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch promo coupon failed' });
+    }
+  });
+
+  app.post('/api/user/promo-coupon/ack', requireAuth, async (req, res) => {
+    try {
+      const coupon = await acknowledgePromoCoupon(req.authUser!);
+      res.json({ coupon });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Acknowledge promo coupon failed' });
+    }
+  });
+
   app.get('/api/models', requireAuth, (_req, res) => {
     res.json({ models });
   });
@@ -3148,31 +3452,41 @@ async function start() {
       }
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
+      const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
       const modelReferenceImages = [
         ...referenceImagesInput
           .map((item) => normalizeString(item.data))
-          .filter((item) => item.startsWith('data:image/') || item.startsWith('http://') || item.startsWith('https://')),
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
         ...referenceImages
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...temporaryReferenceImages
           .map((item) => toPublicAssetUrl(req, item))
           .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
       ];
       const uniqueModelReferenceImages = Array.from(new Set(modelReferenceImages));
 
       if (referenceImagesInput.length > 0 && uniqueModelReferenceImages.length === 0) {
+        await cleanupTemporaryReferenceImages(temporaryReferenceImages);
         throw new Error('当前部署未提供可公网访问的参考图链接，请配置 APP_URL / CANONICAL_WEB_ORIGIN，或改用已公开的图片链接后再试。');
       }
 
       const createdAt = nowIso();
-      const generatedImageSource = await callVisionaryGeneration({
-        prompt,
-        modelId,
-        ratio,
-        imageSize,
-        quality: modelId === 'gpt-image-2' ? requestedQuality : '',
-        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
-        images: uniqueModelReferenceImages,
-      });
-      const imagePath = await persistGeneratedImage(generatedImageSource);
+      let imagePath = '';
+      try {
+        const generatedImageSource = await callVisionaryGeneration({
+          prompt,
+          modelId,
+          ratio,
+          imageSize,
+          quality: modelId === 'gpt-image-2' ? requestedQuality : '',
+          optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+          images: uniqueModelReferenceImages,
+        });
+        imagePath = await persistGeneratedImage(generatedImageSource);
+      } finally {
+        await cleanupTemporaryReferenceImages(temporaryReferenceImages);
+      }
 
       const payload: GeneratedImagePayload = {
         prompt,
