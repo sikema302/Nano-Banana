@@ -82,6 +82,13 @@ interface DisplayImage extends GeneratedImagePayload {
   category?: ImageCategory;
 }
 
+interface GenerationProgress {
+  completed: number;
+  total: number;
+  visual: number;
+  startedAt: number;
+}
+
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT Image 2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
@@ -288,6 +295,20 @@ function formatCouponTime(value: string) {
   }).format(date);
 }
 
+function getGenerationPercent(progress: GenerationProgress | null) {
+  if (!progress) return 0;
+  const completedPercent = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
+  return Math.max(4, Math.min(99, Math.round(Math.max(progress.visual, completedPercent))));
+}
+
+function getGenerationHint(percent: number) {
+  if (percent < 18) return '正在理解你的提示词，先把灵感翻译成画面语言。';
+  if (percent < 38) return '正在规划构图、光影和主体关系，画面骨架快搭好了。';
+  if (percent < 62) return '细节正在慢慢长出来，材质、色彩和氛围都在校准。';
+  if (percent < 84) return '进入精修阶段了，系统正在检查边缘、纹理和整体一致性。';
+  return '最后收尾中，请别刷新页面，好图马上抵达。';
+}
+
 function getModelCredits(
   model: Pick<ModelInfo, 'id' | 'creditsCost'> | null,
   options?: {
@@ -359,6 +380,7 @@ function CreditsSummary({
 function StageCard({
   item,
   loading,
+  progress,
   showActions,
   onDownload,
   onSave,
@@ -367,12 +389,16 @@ function StageCard({
 }: {
   item: DisplayImage | null;
   loading?: boolean;
+  progress?: GenerationProgress | null;
   showActions?: boolean;
   onDownload?: () => void;
   onSave?: (category: ImageCategory) => void;
   onDelete?: () => void;
   onPreview?: (item: DisplayImage) => void;
 }) {
+  const percent = loading ? getGenerationPercent(progress || null) : 0;
+  const currentBatch = progress ? Math.min(progress.completed + 1, progress.total) : 1;
+
   return (
     <article className="stage-card relative flex min-h-[118px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[118px] sm:flex-row sm:p-3">
       <div
@@ -396,13 +422,36 @@ function StageCard({
       </div>
 
       {loading ? (
-        <div className="flex min-w-0 flex-1 flex-col justify-center rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3 sm:py-0">
-          <div className="flex items-center gap-3 text-sm font-semibold text-white">
-            <LoaderCircle className="animate-spin text-pink-200" size={16} />
-            正在为你生成画面...
+        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
+          <div className="pointer-events-none absolute inset-0 opacity-70">
+            <div className="generation-grid h-full w-full" />
           </div>
-          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-            <div className="generation-scan h-full w-1/2 rounded-full bg-[linear-gradient(90deg,transparent,#ff8fcd,#fff1f8,transparent)]" />
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[13px] font-black text-white">
+                <LoaderCircle className="animate-spin text-[#ffb7df]" size={15} />
+                <span>正在生成你的作品</span>
+              </div>
+              <p className="mt-1 truncate text-[11px] font-semibold text-zinc-400">
+                {progress && progress.total > 1 ? `第 ${currentBatch} / ${progress.total} 张` : '保持页面打开，灵感正在成形'}
+              </p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-2xl font-black leading-none text-[#ffd9ef]">{percent}%</p>
+              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#ff8fcd]">render</p>
+            </div>
+          </div>
+          <div className="relative mt-3">
+            <div className="h-2 overflow-hidden rounded-full border border-white/8 bg-black/45 shadow-[inset_0_0_10px_rgba(0,0,0,0.55)]">
+              <div
+                className="generation-progress-fill relative h-full rounded-full bg-[linear-gradient(90deg,#ff8fcd_0%,#ffd1ea_48%,#7dd3fc_100%)] shadow-[0_0_18px_rgba(255,143,205,0.7)] transition-[width] duration-700 ease-out"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <div className="generation-scan pointer-events-none absolute inset-y-0 left-0 h-2 w-1/3 rounded-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.8),transparent)]" />
+          </div>
+          <div className="relative mt-2 text-[11px] font-semibold text-[#ffd9ef]/90">
+            {getGenerationHint(percent)}
           </div>
         </div>
       ) : item ? (
@@ -2515,6 +2564,7 @@ export default function App() {
   });
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [loadingUserData, setLoadingUserData] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [healthText, setHealthText] = useState('正在检查本地服务...');
@@ -2573,6 +2623,29 @@ export default function App() {
 
     void loadPrivateData();
   }, [user]);
+
+  useEffect(() => {
+    if (!loading) return;
+
+    const timer = window.setInterval(() => {
+      setGenerationProgress((current) => {
+        if (!current) return current;
+
+        const elapsedSeconds = (Date.now() - current.startedAt) / 1000;
+        const completedPercent = current.total > 0 ? (current.completed / current.total) * 100 : 0;
+        const timeDrift = Math.min(32, elapsedSeconds * 2.8);
+        const target = Math.min(94, Math.max(current.visual, completedPercent + timeDrift + 8));
+        const nextVisual = current.visual + (target - current.visual) * 0.24;
+
+        return {
+          ...current,
+          visual: Math.min(94, nextVisual),
+        };
+      });
+    }, 700);
+
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   useEffect(() => {
     if (activeTab === 'history') {
@@ -3026,6 +3099,12 @@ export default function App() {
     }
 
     setLoading(true);
+    setGenerationProgress({
+      completed: 0,
+      total: batchCount,
+      visual: 6,
+      startedAt: Date.now(),
+    });
     setNotice('');
     const generatedImages: DisplayImage[] = [];
 
@@ -3037,6 +3116,16 @@ export default function App() {
       }));
 
       for (let index = 0; index < batchCount; index += 1) {
+        setGenerationProgress((current) =>
+          current
+            ? {
+                ...current,
+                completed: index,
+                visual: Math.max(current.visual, Math.min(88, (index / current.total) * 100 + 8)),
+              }
+            : current,
+        );
+
         const response = await generateImage({
           prompt,
           model: selectedModel,
@@ -3048,6 +3137,15 @@ export default function App() {
         });
 
         generatedImages.push(toDisplayImage(response.image));
+        setGenerationProgress((current) =>
+          current
+            ? {
+                ...current,
+                completed: index + 1,
+                visual: Math.max(current.visual, Math.min(96, ((index + 1) / current.total) * 100)),
+              }
+            : current,
+        );
       }
 
       commitGeneratedImages(generatedImages);
@@ -3069,6 +3167,7 @@ export default function App() {
       }
     } finally {
       setLoading(false);
+      setGenerationProgress(null);
     }
   }
   async function saveDisplayImage(targetImage: DisplayImage, category: ImageCategory) {
@@ -3541,6 +3640,7 @@ export default function App() {
               <StageCard
                 item={item}
                 loading={index === 0 && loading}
+                progress={index === 0 && loading ? generationProgress : null}
                 showActions={Boolean(index === 0 && item && !loading && user)}
                 onDownload={downloadCurrentImage}
                 onSave={saveCurrentImage}
@@ -4012,6 +4112,7 @@ export default function App() {
                     <StageCard
                       item={item}
                       loading={index === 0 && loading}
+                      progress={index === 0 && loading ? generationProgress : null}
                       showActions={Boolean(item && !(index === 0 && loading) && user)}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
