@@ -2565,6 +2565,7 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
+  const [pendingGenerationSlot, setPendingGenerationSlot] = useState(false);
   const [loadingUserData, setLoadingUserData] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [healthText, setHealthText] = useState('正在检查本地服务...');
@@ -3099,6 +3100,7 @@ export default function App() {
     }
 
     setLoading(true);
+    setPendingGenerationSlot(true);
     setGenerationProgress({
       completed: 0,
       total: batchCount,
@@ -3168,6 +3170,7 @@ export default function App() {
     } finally {
       setLoading(false);
       setGenerationProgress(null);
+      setPendingGenerationSlot(false);
     }
   }
   async function saveDisplayImage(targetImage: DisplayImage, category: ImageCategory) {
@@ -3324,7 +3327,7 @@ export default function App() {
     }
   }
 
-  async function deleteStageImage(index: number, item: DisplayImage) {
+  async function deleteStageImage(_index: number, item: DisplayImage) {
     try {
       if (item.savedImageId && user) {
         await deleteSavedImage({
@@ -3340,11 +3343,11 @@ export default function App() {
         });
       }
 
-      if (index === 0) {
+      if (currentImage && item.imageUrl === currentImage.imageUrl) {
         setCurrentImage(historyQueue[0] || null);
         setHistoryQueue((current) => current.slice(1));
       } else {
-        setHistoryQueue((current) => current.filter((_, queueIndex) => queueIndex !== index - 1));
+        setHistoryQueue((current) => current.filter((queuedItem) => queuedItem.imageUrl !== item.imageUrl));
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除失败');
@@ -3424,9 +3427,11 @@ export default function App() {
     setNotice('已退出登录');
   }
 
-  const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) =>
-    index === 0 ? currentImage : historyQueue[index - 1] || null,
-  );
+  const stageSourceCards = currentImage ? [currentImage, ...historyQueue] : historyQueue;
+  const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => {
+    if (pendingGenerationSlot && index === 0) return null;
+    return stageSourceCards[pendingGenerationSlot ? index - 1 : index] || null;
+  });
 
   function handleTabChange(nextTab: AppTab) {
     if (typeof window !== 'undefined') {
@@ -3641,10 +3646,10 @@ export default function App() {
                 item={item}
                 loading={index === 0 && loading}
                 progress={index === 0 && loading ? generationProgress : null}
-                showActions={Boolean(index === 0 && item && !loading && user)}
-                onDownload={downloadCurrentImage}
-                onSave={saveCurrentImage}
-                onDelete={() => void deleteCurrentImage()}
+                showActions={Boolean(item && !(index === 0 && loading) && user)}
+                onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
+                onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
+                onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}
                 onPreview={(target) => setPreviewImage(target)}
               />
             </div>
