@@ -551,7 +551,7 @@ function SidePanel({
 
         {actionLabel && onAction ? (
           <button
-            className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-zinc-300 transition hover:border-white/20 hover:text-white"
+            className="btn-secondary min-h-0 px-3 py-1.5 text-xs"
             type="button"
             onClick={onAction}
           >
@@ -560,11 +560,11 @@ function SidePanel({
         ) : null}
       </div>
 
-      <div className="min-h-[138px] rounded-2xl border border-white/8 bg-black/40 p-3">
+      <div className="card min-h-[138px] p-3">
         {items.length > 0 ? (
           <div className="custom-scrollbar flex max-w-full gap-3 overflow-x-auto overflow-y-hidden pb-1">
             {items.map((item) => (
-              <article key={item.id} className="w-36 shrink-0 rounded-2xl border border-white/8 bg-white/[0.03] p-2.5">
+              <article key={item.id} className="card w-36 shrink-0 p-2.5">
                 <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.imageUrl} />
                 <p className="mt-2 text-xs leading-5 text-zinc-300">{item.prompt}</p>
                 <p className="mt-2 text-[11px] text-zinc-500">{formatTime(item.createdAt)}</p>
@@ -573,7 +573,7 @@ function SidePanel({
                   <div className="mt-2 flex gap-2">
                     {onMove ? (
                       <button
-                        className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-white/20 hover:text-white"
+                        className="btn-secondary min-h-0 px-2 py-1 text-[11px]"
                         type="button"
                         onClick={() => onMove(item)}
                       >
@@ -582,7 +582,7 @@ function SidePanel({
                     ) : null}
                     {onDelete ? (
                       <button
-                        className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-white/20 hover:text-white"
+                        className="btn-ghost min-h-0 px-2 py-1 text-[11px]"
                         type="button"
                         onClick={() => onDelete(item)}
                       >
@@ -624,14 +624,14 @@ function HistoryView({
   const pageRecords = sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <section className="min-h-0 overflow-auto px-3 py-3 sm:px-5 sm:py-4 lg:h-full lg:overflow-hidden">
-      <div className="flex min-h-[420px] flex-col rounded-[20px] border border-white/8 bg-black/35 lg:h-full lg:min-h-0">
+    <section className="page-shell min-h-0 overflow-auto py-4 lg:h-full lg:overflow-hidden">
+      <div className="card flex min-h-[420px] flex-col lg:h-full lg:min-h-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
           <h2 className="text-sm font-semibold text-white">历史记录</h2>
           <div className="flex items-center gap-2 text-xs text-zinc-400">
             <span>排序</span>
             <select
-              className="rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 outline-none"
+              className="input min-h-0 px-2 py-1 text-xs"
               value={sortKey}
               onChange={(event) => {
                 setSortKey(event.target.value as 'createdAt' | 'creditsUsed' | 'modelName');
@@ -878,10 +878,10 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
   }
 
   return (
-    <section className="custom-scrollbar h-full overflow-auto px-4 py-10 sm:px-8 sm:py-14">
-      <div className="mx-auto grid max-w-[1600px] gap-6">
+    <section className="custom-scrollbar page-shell h-full overflow-auto py-10 sm:py-14">
+      <div className="grid gap-6">
         <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="rounded-2xl border border-white/10 bg-[#11131a] p-3 lg:sticky lg:top-24 lg:self-start">
+          <aside className="card p-3 lg:sticky lg:top-24 lg:self-start">
             <p className="px-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API 文档</p>
             <div className="mt-3 grid gap-1.5 text-sm">
               {[
@@ -889,7 +889,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
                 ['2', 'nano-banana 接口', '#nano-banana'],
                 ['3', '价格说明', '#pricing'],
               ].map(([index, title, desc]) => (
-                <a key={title} className="flex items-center gap-3 rounded-xl px-3 py-2.5 font-semibold text-zinc-300 transition hover:bg-white/5 hover:text-white" href={desc}>
+                <a key={title} className="btn-ghost justify-start px-3 py-2.5 font-semibold" href={desc}>
                   <span className="font-mono text-xs font-black text-cyan-300">{index}</span>
                   {title}
                 </a>
@@ -1834,10 +1834,10 @@ function AdminView({
   ];
 
   return (
-    <section className="flex min-h-0 flex-col overflow-auto px-3 py-3 sm:px-4 sm:py-4 lg:h-full lg:overflow-hidden lg:px-5">
+    <section className="page-shell flex min-h-0 flex-col overflow-auto py-4 lg:h-full lg:overflow-hidden">
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
-        <aside className="flex flex-col rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04)_0%,rgba(255,255,255,0.02)_100%)] p-3">
-          <div className="mb-4 rounded-[18px] border border-white/8 bg-black/20 p-4">
+        <aside className="app-panel flex flex-col p-3">
+          <div className="card mb-4 p-4">
             <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
             <p className="mt-2 text-lg font-black text-white">后台管理</p>
             <p className="mt-1 text-xs leading-5 text-zinc-500">邀请码、用户、记录和运行状态集中处理。</p>
@@ -2158,7 +2158,7 @@ function AdminView({
                       <span>共 {inviteCodesPage.total || filteredInviteCodes.length} 条邀请码，每页 10 条</span>
                       <div className="flex items-center gap-2">
                         <button
-                          className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40"
+ className="btn-secondary min-h-0 px-3 py-1 text-xs disabled:opacity-40"
                           disabled={currentInvitePage <= 1}
                           type="button"
                           onClick={() => setInvitePage((current) => Math.max(1, current - 1))}
@@ -3615,12 +3615,12 @@ export default function App() {
             </div>
 
             {notice ? (
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-100">
+              <div className="app-alert">
                 {notice}
               </div>
             ) : null}
             {healthError ? (
-              <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+              <div className="app-alert app-alert-error">
                 {healthError}
               </div>
             ) : null}
@@ -3722,15 +3722,15 @@ export default function App() {
   );
 
   return (
-    <main className="min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-[#060606] text-white lg:h-[100dvh] lg:overflow-hidden">
+    <main className="dark-ai-app lg:h-[100dvh] lg:overflow-hidden">
       <div className="flex min-h-[100dvh] flex-col bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)] lg:h-[100dvh] lg:overflow-hidden">
-        <header className="shrink-0 flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-3 py-2.5 sm:px-5">
+        <header className="app-header shrink-0 flex flex-wrap items-center justify-between gap-4 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-xl border border-pink-300/25 bg-[linear-gradient(135deg,#ffb3da_0%,#ff8fcd_45%,#db5ca8_100%)] shadow-[0_0_24px_rgba(255,143,205,0.32)]" />
+            <div className="brand-mark h-8 w-8" />
             <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
           </div>
 
-          <nav className="order-3 flex w-full overflow-x-auto rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:order-none sm:w-auto">
+          <nav className="nav-shell order-3 flex w-full overflow-x-auto p-1 sm:order-none sm:w-auto">
             {tabs
               .filter((item) => !item.hidden)
               .map((item) => {
@@ -3739,8 +3739,8 @@ export default function App() {
                 return (
                   <button
                     key={item.id}
-                    className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
-                      active ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+                    className={`btn-ghost inline-flex min-h-0 items-center gap-2 px-3 py-2 text-sm transition ${
+                      active ? 'nav-tab-active' : ''
                     }`}
                     type="button"
                     onClick={() => handleTabChange(item.id)}
@@ -3773,7 +3773,7 @@ export default function App() {
             </div>
             {/* 购买积分按钮 - 头部导航栏 */}
             <button
-              className="hidden rounded-xl border border-pink-300/35 bg-[linear-gradient(135deg,#ff8fcd_0%,#db5ca8_100%)] px-3.5 py-2 text-xs font-black text-white shadow-[0_10px_22px_rgba(219,92,168,0.24)] transition hover:brightness-110 md:block"
+              className="btn-primary hidden px-3.5 py-2 text-xs md:inline-flex"
               type="button"
               onClick={openPurchasePage}
             >
@@ -3787,7 +3787,7 @@ export default function App() {
             </div>
             {user ? (
               <button
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-zinc-300 transition hover:border-white/20 hover:text-white"
+                className="btn-secondary px-4 py-2 text-sm"
                 type="button"
                 onClick={logout}
               >
@@ -3796,7 +3796,7 @@ export default function App() {
               </button>
             ) : (
               <button
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-zinc-300 transition hover:border-white/20 hover:text-white"
+                className="btn-secondary px-4 py-2 text-sm"
                 type="button"
                 onClick={() => {
                   setAuthMode('login');
@@ -3817,13 +3817,13 @@ export default function App() {
               : 'min-h-0 flex-1 overflow-auto lg:overflow-hidden'
           }
         >
-          <aside className={activeTab === 'create' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.015)_0%,rgba(255,255,255,0)_100%)] px-3 pb-4 pt-3 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+8px)] lg:pt-2' : 'hidden'}>
-            <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:h-full lg:overflow-hidden lg:pr-1" onSubmit={handleGenerate}>
+          <aside className={activeTab === 'create' ? 'app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
+            <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
               <section className="space-y-2">
                 <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
                 <div className="relative">
                   <select
-                    className="w-full rounded-2xl border border-white/12 bg-[#080808] px-4 py-2.5 pr-28 text-[13px] font-semibold text-white outline-none transition focus:border-[#ff8fcd]/45"
+                    className="input w-full pr-28 text-[13px] font-semibold"
                     value={selectedModel}
                     onChange={(event) => handleModelSelect(event.target.value)}
                   >
@@ -3843,14 +3843,14 @@ export default function App() {
 
               <section className="space-y-2">
                 <div className="flex items-center justify-between gap-3 text-[12px] font-extrabold text-zinc-400">
-                  <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09\uff08\u53ef\u4ece\u6587\u4ef6\u5939\u62d6\u62fd\u5230\u6b64\u533a\u57df\uff09'}</span>
+                  <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
                   <span className="shrink-0 text-[11px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
                 </div>
                 <div
                   className={
                     draggingReferences
-                      ? 'rounded-2xl border border-[#ff8fcd]/45 bg-[#130a12] p-2 shadow-[inset_0_0_0_1px_rgba(255,143,205,0.14)]'
-                      : 'rounded-2xl border border-white/8 bg-[#050505] p-2'
+                      ? 'card p-2 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
+                      : 'card p-2'
                   }
                   onDragEnter={(event) => {
                     event.preventDefault();
@@ -3872,7 +3872,7 @@ export default function App() {
                   }}
                 >
                   <div className="flex flex-wrap gap-2">
-                    <label className="flex h-[56px] w-[56px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/16 bg-[#080808] text-zinc-500 transition hover:border-[#ff8fcd]/45 hover:text-white">
+                    <label className="btn-secondary flex h-[56px] w-[56px] cursor-pointer flex-col items-center justify-center border-dashed p-0 text-zinc-500 hover:text-white">
                       <input className="hidden" type="file" accept="image/*" multiple onChange={handleReferenceUpload} />
                       <ImagePlus size={18} />
                       <span className="mt-1 text-[11px] font-bold">{'\u6dfb\u52a0'}</span>
@@ -3902,7 +3902,7 @@ export default function App() {
                 </div>
                 <div>
                   <textarea
-                    className="h-[96px] w-full resize-none rounded-2xl border border-white/10 bg-[#050505] px-4 py-3 text-[13px] leading-5 text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff8fcd]/45"
+                    className="input h-[96px] resize-none text-[13px] leading-5 placeholder:text-zinc-600"
                     placeholder="请详细描述您想生成的画面..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
@@ -3910,10 +3910,10 @@ export default function App() {
                 </div>
               </section>
 
-              <div className={isNanoBananaPro ? 'grid gap-2 xl:grid-cols-[1.15fr_1fr]' : 'space-y-2'}>
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
                 <section className="space-y-2">
                   <div className="text-[12px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
-                  <div className={isNanoBananaPro ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-3 gap-2'}>
+                  <div className={`grid gap-2 ${isNanoBananaPro ? 'grid-cols-2' : 'grid-cols-3'}`}>
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
 
@@ -3922,8 +3922,8 @@ export default function App() {
                           key={item.value}
                           className={
                             active
-                              ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
-                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                              ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[16px] font-black'
+                              : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[16px] font-black text-zinc-400'
                           }
                           type="button"
                           onClick={() => {
@@ -3937,12 +3937,7 @@ export default function App() {
                             }
                           }}
                         >
-                          <span className="block text-[13px] font-black leading-none">{item.label}</span>
-                          {item.hint && !isNanoBananaPro ? (
-                            <span className={active ? 'mt-1 block truncate text-[10px] font-semibold text-[#744960]' : 'mt-1 block truncate text-[10px] font-semibold text-zinc-500'}>
-                              {item.hint}
-                            </span>
-                          ) : null}
+                          <span className="block whitespace-nowrap leading-none">{item.label}</span>
                         </button>
                       );
                     })}
@@ -3961,13 +3956,13 @@ export default function App() {
                             key={item.value}
                           className={
                             active
-                                ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
-                                : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                                ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
+                                : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
                           }
                           type="button"
                           onClick={() => setGptQuality(item.value)}
                         >
-                          <span className="block text-[13px] font-black leading-none">{item.label}</span>
+                          <span className="block whitespace-nowrap leading-none">{item.label}</span>
                         </button>
                       );
                     })}
@@ -3985,24 +3980,24 @@ export default function App() {
                       <button
                         className={
                           optimizeChineseText
-                            ? 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
-                            : 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
+                            ? 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
+                            : 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(false)}
                       >
-                          <span className="block text-[13px] font-black leading-none">{'\u5173'}</span>
+                          <span className="block whitespace-nowrap leading-none">{'\u5173'}</span>
                       </button>
                       <button
                         className={
                           optimizeChineseText
-                            ? 'rounded-xl bg-[#ffd9ef] px-3 py-2 text-[#341425] shadow-[0_10px_22px_rgba(255,217,239,0.08)]'
-                            : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-3 py-2 text-zinc-400 transition hover:border-white/20 hover:text-white'
+                            ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
+                            : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(true)}
                       >
-                          <span className="block text-[13px] font-black leading-none">{'\u5f00'}</span>
+                          <span className="block whitespace-nowrap leading-none">{'\u5f00'}</span>
                       </button>
                     </div>
                   </section>
@@ -4020,8 +4015,8 @@ export default function App() {
                         key={value}
                           className={
                             active
-                              ? 'rounded-xl bg-[#ffd9ef] px-2.5 py-2 text-[12px] font-black text-[#341425] shadow-[0_8px_18px_rgba(255,217,239,0.08)]'
-                              : 'rounded-xl border border-white/10 bg-[#0b0b0b] px-2.5 py-2 text-[12px] font-black text-zinc-400 transition hover:border-white/20 hover:text-white'
+                              ? 'btn-primary min-h-0 px-2.5 py-2 text-[12px] font-black'
+                              : 'btn-secondary min-h-0 px-2.5 py-2 text-[12px] font-black text-zinc-400'
                           }
                         type="button"
                         onClick={() => setDimensions(value)}
@@ -4038,13 +4033,13 @@ export default function App() {
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
                   </span>
-                  <button className="text-[#ff8fcd] transition hover:text-[#ffb0dd]" type="button" onClick={openPurchasePage}>
+                  <button className="btn-ghost min-h-0 px-0 py-0 text-[13px] text-[var(--primary-hover)]" type="button" onClick={openPurchasePage}>
                     {activePromoCoupon ? '使用 9 折券购买积分' : '\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206'}
                   </button>
                 </div>
                 {user && activePromoCoupon ? (
                   <button
-                    className="inline-flex max-w-full items-center gap-2 rounded-xl border border-[#ff8fcd]/30 bg-[#341625]/60 px-3 py-2 text-left text-[12px] font-bold text-[#ffd9ef] transition hover:border-[#ffd1ea] hover:text-white"
+                    className="btn-secondary inline-flex min-h-0 max-w-full px-3 py-2 text-left text-[12px] font-bold"
                     type="button"
                     onClick={() => setPromoCouponOpen(true)}
                   >
@@ -4054,7 +4049,7 @@ export default function App() {
                 ) : null}
                 {!user ? (
                   <button
-                    className="group mt-1.5 inline-flex h-9 min-w-[150px] items-center justify-center gap-1.5 rounded-lg border border-[#ff8fcd]/45 bg-[linear-gradient(180deg,rgba(255,143,205,0.12)_0%,rgba(219,92,168,0.06)_100%)] px-3.5 text-[15px] font-black text-[#ffd9ef] shadow-[0_10px_22px_rgba(219,92,168,0.14),inset_0_0_0_1px_rgba(255,255,255,0.03)] transition hover:-translate-y-0.5 hover:border-[#ffd1ea] hover:bg-[linear-gradient(180deg,rgba(255,143,205,0.2)_0%,rgba(219,92,168,0.09)_100%)] hover:text-white"
+                    className="btn-secondary group mt-1.5 h-9 min-w-[150px] px-3.5 text-[15px] font-black"
                     type="button"
                     onClick={() => {
                       setAuthMode('invite');
@@ -4068,11 +4063,11 @@ export default function App() {
               </div>
 
               {healthError ? (
-                <div className="rounded-[20px] border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-[12px] text-rose-100">{healthError}</div>
+                <div className="app-alert app-alert-error">{healthError}</div>
               ) : null}
 
               <div className="grid gap-2.5 pt-1 xl:mt-auto xl:grid-cols-[200px_minmax(0,1fr)]">
-                <div className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]">
+                <div className="card p-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] font-black text-white">{'\u6570\u91cf'}</span>
                     <div className="flex items-center overflow-hidden rounded-xl border border-[#db5ca8] bg-[#341625]">
@@ -4098,7 +4093,7 @@ export default function App() {
                 </div>
 
                 <button
-                  className="flex min-h-[76px] items-center justify-center gap-2.5 rounded-2xl bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-5 py-3.5 text-[16px] font-black text-white shadow-[0_16px_30px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-primary flex min-h-[76px] items-center justify-center gap-2.5 px-5 py-3.5 text-[16px] font-black disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={loading || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
@@ -4316,8 +4311,8 @@ export default function App() {
       ) : null}
 
       {authOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-4">
-          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[28px] border border-white/10 bg-[#0b0b0c] p-5 shadow-[0_20px_80px_rgba(0,0,0,0.45)] sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-4 backdrop-blur-sm">
+          <div className="card auth-card max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto p-5 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
@@ -4328,7 +4323,7 @@ export default function App() {
                 </h2>
               </div>
               <button
-                className="rounded-xl border border-white/10 p-2 text-zinc-400 transition hover:border-white/20 hover:text-white"
+                className="btn-secondary min-h-0 p-2"
                 type="button"
                 onClick={() => setAuthOpen(false)}
               >
@@ -4340,7 +4335,7 @@ export default function App() {
               {authMode === 'invite' ? (
                 <label className="grid gap-2 text-sm text-zinc-300">
                   <span>邀请码</span>
-                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                  <div className="input flex items-center gap-3">
                     <Sparkles size={16} className="text-zinc-500" />
                     <input
                       className="w-full bg-transparent uppercase tracking-[0.18em] outline-none placeholder:normal-case placeholder:tracking-normal"
@@ -4356,7 +4351,7 @@ export default function App() {
                 <>
                   <label className="grid gap-2 text-sm text-zinc-300">
                     <span>用户名</span>
-                    <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                    <div className="input flex items-center gap-3">
                       <UserRound size={16} className="text-zinc-500" />
                       <input
                         className="w-full bg-transparent outline-none"
@@ -4369,7 +4364,7 @@ export default function App() {
                   <label className="grid gap-2 text-sm text-zinc-300">
                     <span>密码</span>
                     <input
-                      className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 outline-none"
+                      className="input"
                       type="password"
                       value={authForm.password}
                       onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
@@ -4380,7 +4375,7 @@ export default function App() {
                     <label className="grid gap-2 text-sm text-zinc-300">
                       <span>邮箱（可选）</span>
                       <input
-                        className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 outline-none"
+                        className="input"
                         value={authForm.email}
                         onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
                       />
@@ -4390,13 +4385,13 @@ export default function App() {
               )}
 
               {authError ? (
-                <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                <div className="app-alert app-alert-error">
                   {authError}
                 </div>
               ) : null}
 
               <button
-                className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:opacity-60"
+                className="btn-primary px-4 py-3 text-sm font-black disabled:opacity-60"
                 disabled={authLoading}
                 type="submit"
               >
@@ -4406,13 +4401,13 @@ export default function App() {
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-500">
               <button
-                className="transition hover:text-white"
+                className="btn-ghost min-h-0 px-0 py-0 text-sm"
                 type="button"
                 onClick={() => setAuthMode((current) => (current === 'register' ? 'login' : 'register'))}
               >
                 {authMode === 'register' ? '已有账号？去登录' : '没有账号？去注册'}
               </button>
-              <button className="transition hover:text-white" type="button" onClick={() => setAuthMode('invite')}>
+              <button className="btn-ghost min-h-0 px-0 py-0 text-sm" type="button" onClick={() => setAuthMode('invite')}>
                 填写邀请码
               </button>
             </div>
