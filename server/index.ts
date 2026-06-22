@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import bcrypt from 'bcryptjs';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -2945,6 +2946,12 @@ async function start() {
     next();
   });
 
+  app.use(
+    compression({
+      threshold: 1024,
+    }),
+  );
+
   app.use(express.json({ limit: '20mb' }));
 
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
@@ -4826,11 +4833,34 @@ async function start() {
 
   if (hasDistBuild) {
     // 闈欐€佽祫婧愭枃浠讹紙assets锛変紭鍏堝鐞?
-    app.use('/assets', express.static(path.join(DIST_DIR, 'assets')));
+    app.use(
+      '/assets',
+      express.static(path.join(DIST_DIR, 'assets'), {
+        immutable: true,
+        maxAge: '1y',
+        setHeaders: (res) => {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        },
+      }),
+    );
     // 鍏朵粬闈欐€佹枃浠?
-    app.use(express.static(DIST_DIR));
+    app.use(
+      express.static(DIST_DIR, {
+        index: false,
+        maxAge: 0,
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+            return;
+          }
+
+          res.setHeader('Cache-Control', 'public, max-age=300');
+        },
+      }),
+    );
     // 鍓嶇璺敱 fallback锛堟帓闄?API 鍜?uploads锛?
     app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       res.sendFile(path.join(DIST_DIR, 'index.html'));
     });
   }
