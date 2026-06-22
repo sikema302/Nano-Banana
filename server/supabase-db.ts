@@ -1153,6 +1153,9 @@ export async function reclaimLowBalanceInviteCodes(): Promise<void> {
     const creditsToReturn = Number(invite.credits || 0);
     if (creditsToReturn <= 0) continue;
 
+    // 已按需求停用“邀请码余额耗尽后自动处理用户和邀请码记录”的逻辑。
+    // 如需恢复自动回收，请取消下面这段代码的注释。
+    /*
     const redeemedBy = invite.redeemed_by || '';
     if (redeemedBy) {
       const user = await findUserById(redeemedBy);
@@ -1170,6 +1173,7 @@ export async function reclaimLowBalanceInviteCodes(): Promise<void> {
 
     await zeroInviteCode(invite.code);
     await adjustAdminTotalCredits(creditsToReturn);
+    */
   }
 }
 

@@ -2366,6 +2366,9 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
     const creditsToReturn = Number(invite.credits || 0);
     if (creditsToReturn <= 0) continue;
 
+    // 已按需求停用“邀请码余额耗尽后自动处理用户和邀请码记录”的逻辑。
+    // 如需恢复自动回收，请取消下面这段代码的注释。
+    /*
     const redeemedBy = invite.redeemed_by ? String(invite.redeemed_by) : '';
     if (redeemedBy) {
       if (!isInviteManagedUser(db, redeemedBy)) {
@@ -2379,6 +2382,7 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
 
     db.run('UPDATE invite_codes SET credits = 0, low_balance_since = NULL WHERE code = ?', [String(invite.code)]);
     adjustAdminTotalCredits(db, creditsToReturn);
+    */
   }
 }
 
