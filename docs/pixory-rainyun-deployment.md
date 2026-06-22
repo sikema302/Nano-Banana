@@ -102,8 +102,8 @@ Server-only secrets should remain only on the server:
 Visionary key routing:
 
 - Nano Banana Pro uses `VISIONARY_BANANA_PRO_API_KEY`.
-- GPT Image 2 standard uses `VISIONARY_GPT_IMAGE_2_API_KEY`.
-- GPT Image 2 2K and 4K use `VISIONARY_GPT_IMAGE_2_HD_API_KEY`.
+- GPT-image-2 Plus standard uses `VISIONARY_GPT_IMAGE_2_API_KEY`.
+- GPT-image-2 Plus 2K and 4K use `VISIONARY_GPT_IMAGE_2_HD_API_KEY`.
 
 ## Deploy flow
 

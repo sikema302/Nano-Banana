@@ -90,7 +90,7 @@ interface GenerationProgress {
 }
 
 const defaultModels: ModelInfo[] = [
-  { id: 'gpt-image-2', name: 'GPT Image 2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
+  { id: 'gpt-image-2', name: 'GPT-image-2 Plus', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
 ];
 
@@ -735,13 +735,13 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', '参考图 URL 数组，最多 9 张。也兼容旧字段 reference_images。'],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。也兼容旧字段 dimensions。'],
-    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT Image 2 默认 STANDARD。'],
-    ['quality', 'string', '否', 'GPT Image 2 可传 low、medium、high；不传会自动匹配。'],
+    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 Plus 默认 STANDARD。'],
+    ['quality', 'string', '否', 'GPT-image-2 Plus 可传 low、medium、high；不传会自动匹配。'],
     ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
     ['replyType', 'string', '否', '当前推荐传 json；字段会保留兼容，不影响返回结构。'],
   ];
   const modelRows = [
-    { model: 'gpt-image-2', name: 'GPT Image 2', cost: 'STANDARD 20 / 2K 28 / 4K 36', note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: 'STANDARD 20 / 2K 28 / 4K 36', note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
   ];
   const gptPixelGroups = [

@@ -211,7 +211,6 @@ const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IM
 const STORE_REFERENCE_IMAGES = normalizeEnvValue(process.env.STORE_REFERENCE_IMAGES || 'false').toLowerCase() === 'true';
 const PROMO_PURCHASE_URL = 'https://pay.ldxp.cn/shop/RHPYAKWG';
 const PROMO_COUPON_DISCOUNT_PERCENT = 10;
-const PROMO_COUPON_POPUP_WINDOW_MS = 10 * 60 * 1000;
 const PROMO_COUPON_SETTING_PREFIX = 'promo_coupon_v1:';
 const PROMO_COUPON_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -378,7 +377,7 @@ const SUPABASE_SYNC_TABLES = [
 const models = [
   {
     id: 'gpt-image-2',
-    name: 'GPT Image 2',
+    name: 'GPT-image-2 Plus',
     description: 'OpenAI最强生图模型！',
     creditsCost: 20,
   },
@@ -1581,52 +1580,20 @@ function toPromoCouponPayload(record: PromoCouponRecord | null, options?: { shou
   };
 }
 
-function shouldShowPromoCouponPopup(record: PromoCouponRecord | null, createdAt: string, now = nowIso()) {
+function shouldShowPromoCouponPopup(record: PromoCouponRecord | null, now = nowIso()) {
   if (!record || !isPromoCouponActive(record, now) || record.popupSeenAt) return false;
-  const createdTime = new Date(createdAt).getTime();
-  const currentTime = new Date(now).getTime();
-  if (!Number.isFinite(createdTime) || !Number.isFinite(currentTime)) return false;
-  return currentTime - createdTime <= PROMO_COUPON_POPUP_WINDOW_MS;
+  return true;
 }
 
-function issuePromoCoupon(createdAt: string, now = nowIso()): PromoCouponRecord {
-  const createdTime = new Date(createdAt).getTime();
-  const currentTime = new Date(now).getTime();
-  const isWelcomeCoupon =
-    Number.isFinite(createdTime) &&
-    Number.isFinite(currentTime) &&
-    currentTime - createdTime <= PROMO_COUPON_POPUP_WINDOW_MS;
-
+function issuePromoCoupon(now = nowIso()): PromoCouponRecord {
   return {
     couponId: `PIXORY90-${randomHex(3).toUpperCase()}`,
     discountPercent: PROMO_COUPON_DISCOUNT_PERCENT,
     issuedAt: now,
     expiresAt: nextChinaMidnightIso(now),
     nextEligibleAt: addDaysStrictIso(now, randomCouponIntervalDays()),
-    source: isWelcomeCoupon ? 'welcome' : 'scheduled',
+    source: 'scheduled',
   };
-}
-
-async function getSupabaseUserCreatedAt(user: AuthUser) {
-  const db = await getSupabaseDb();
-  const row = await db.findUserById(user.userId);
-  return normalizeString(row?.created_at) || nowIso();
-}
-
-function getSqliteUserCreatedAt(db: SqlDatabase, user: AuthUser) {
-  const row = getOne<{ created_at: string }>(
-    db,
-    `
-      SELECT u.created_at
-      FROM users u
-      LEFT JOIN user_migrations m ON m.legacy_user_id = u.id
-      WHERE m.supabase_user_id = ? OR u.username = ?
-      ORDER BY datetime(u.created_at) DESC
-      LIMIT 1
-    `,
-    [user.userId, user.username],
-  );
-  return normalizeString(row?.created_at) || nowIso();
 }
 
 async function getOrRefreshSupabasePromoCoupon(user: AuthUser) {
@@ -1636,17 +1603,20 @@ async function getOrRefreshSupabasePromoCoupon(user: AuthUser) {
 
   const db = await getSupabaseDb();
   const settingKey = promoCouponSettingKey(user.userId);
-  const createdAt = await getSupabaseUserCreatedAt(user);
   const now = nowIso();
   let record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
 
-  if (!record || (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime())) {
-    record = issuePromoCoupon(createdAt, now);
+  if (!record) {
+    return toPromoCouponPayload(null);
+  }
+
+  if (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime()) {
+    record = issuePromoCoupon(now);
     await db.setSetting(settingKey, serializePromoCouponRecord(record));
   }
 
   return toPromoCouponPayload(record, {
-    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+    shouldPopup: shouldShowPromoCouponPopup(record, now),
   });
 }
 
@@ -1656,17 +1626,20 @@ async function getOrRefreshSqlitePromoCoupon(db: SqlDatabase, user: AuthUser) {
   }
 
   const settingKey = promoCouponSettingKey(user.userId);
-  const createdAt = getSqliteUserCreatedAt(db, user);
   const now = nowIso();
   let record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
 
-  if (!record || (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime())) {
-    record = issuePromoCoupon(createdAt, now);
+  if (!record) {
+    return toPromoCouponPayload(null);
+  }
+
+  if (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime()) {
+    record = issuePromoCoupon(now);
     setSetting(db, settingKey, serializePromoCouponRecord(record));
   }
 
   return toPromoCouponPayload(record, {
-    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+    shouldPopup: shouldShowPromoCouponPopup(record, now),
   });
 }
 
@@ -1688,7 +1661,6 @@ async function acknowledgeSupabasePromoCoupon(user: AuthUser) {
 
   const db = await getSupabaseDb();
   const settingKey = promoCouponSettingKey(user.userId);
-  const createdAt = await getSupabaseUserCreatedAt(user);
   const now = nowIso();
   const record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
 
@@ -1702,7 +1674,7 @@ async function acknowledgeSupabasePromoCoupon(user: AuthUser) {
   }
 
   return toPromoCouponPayload(record, {
-    shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+    shouldPopup: shouldShowPromoCouponPopup(record, now),
   });
 }
 
@@ -1718,7 +1690,6 @@ async function acknowledgePromoCoupon(user: AuthUser) {
     }
 
     const settingKey = promoCouponSettingKey(user.userId);
-    const createdAt = getSqliteUserCreatedAt(db, user);
     const now = nowIso();
     const record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
     if (!record) {
@@ -1731,7 +1702,7 @@ async function acknowledgePromoCoupon(user: AuthUser) {
     }
 
     return toPromoCouponPayload(record, {
-      shouldPopup: shouldShowPromoCouponPopup(record, createdAt, now),
+      shouldPopup: shouldShowPromoCouponPopup(record, now),
     });
   });
 }

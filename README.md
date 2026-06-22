@@ -63,7 +63,7 @@ Notes:
 
 - `SUPABASE_SERVICE_ROLE_KEY` is server-only.
 - `VITE_*` variables are safe for the frontend build.
-- Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT Image 2 standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT Image 2 2K/4K. `VISIONARY_API_KEY` remains a fallback.
+- Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT-image-2 Plus standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT-image-2 Plus 2K/4K. `VISIONARY_API_KEY` remains a fallback.
 - Image retention defaults to 7 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
 - Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
 
