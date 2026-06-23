@@ -820,7 +820,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
           prompt: '生成一张高级感黑金香水产品图，摄影棚布光，超清细节',
           images: [],
           aspectRatio: '2048x2048',
-          quality: 'medium',
+          quality: 'low',
           replyType: 'json',
         },
         null,
@@ -2699,8 +2699,7 @@ export default function App() {
     });
     setGptQuality((current) => {
       if (modelId !== 'gpt-image-2') return current;
-      if (imageSize === '4K') return 'high';
-      if (imageSize === '2K') return current === 'low' || current === 'medium' || current === 'high' ? current : 'medium';
+      if (imageSize === '2K' || imageSize === '4K') return 'low';
       return 'medium';
     });
     if (modelId !== 'Nano_Banana_Pro') {
@@ -3929,10 +3928,8 @@ export default function App() {
                           onClick={() => {
                             setImageSize(item.value);
                             if (selectedModel === 'gpt-image-2') {
-                              if (item.value === '4K') {
-                                setGptQuality('high');
-                              } else if (item.value === '2K') {
-                                setGptQuality('medium');
+                              if (item.value === '2K' || item.value === '4K') {
+                                setGptQuality('low');
                               }
                             }
                           }}
