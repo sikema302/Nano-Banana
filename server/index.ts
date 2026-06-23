@@ -2631,7 +2631,8 @@ async function callVisionaryGeneration({
             images,
             aspectRatio: visionaryAspectRatio,
             imageSize: imageSize || '2K',
-            optimizeChineseText,
+            // Keep local billing at +8 for AI enhancement, but use the standard upstream route.
+            optimizeChineseText: false,
             replyType: 'json',
           },
         };
