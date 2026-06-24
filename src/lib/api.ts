@@ -221,6 +221,38 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
+function parseJsonPayload<T>(text: string): T | { error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T | { error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown };
+  } catch {
+    return null;
+  }
+}
+
+function stringifyApiError(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object') return '';
+
+  const record = value as Record<string, unknown>;
+  return (
+    stringifyApiError(record.message) ||
+    stringifyApiError(record.error) ||
+    stringifyApiError(record.detail) ||
+    stringifyApiError(record.failure_reason)
+  );
+}
+
+function getApiErrorMessage(payload: unknown, responseText: string) {
+  const fromPayload = stringifyApiError(payload);
+  if (fromPayload) return fromPayload;
+
+  const trimmedText = responseText.trim();
+  if (trimmedText) return trimmedText;
+
+  return '服务接口返回异常';
+}
+
 async function request<T>(input: string, init: RequestInit = {}, auth = false): Promise<T> {
   const headers = new Headers(init.headers || {});
   headers.set('Content-Type', 'application/json');
@@ -237,20 +269,11 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
     headers,
   });
 
-  let payload: T | { error?: string } | null = null;
-
-  try {
-    payload = (await response.json()) as T | { error?: string };
-  } catch {
-    payload = null;
-  }
+  const responseText = await response.text().catch(() => '');
+  const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
-    const message =
-      payload && typeof payload === 'object' && 'error' in payload && payload.error
-        ? payload.error
-        : '服务器返回了异常响应';
-    throw new Error(message);
+    throw new Error(getApiErrorMessage(payload, responseText));
   }
 
   return payload as T;

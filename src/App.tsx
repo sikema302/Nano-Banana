@@ -3193,12 +3193,21 @@ export default function App() {
         void loadAdminSection('dashboard');
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '\u751f\u6210\u5931\u8d25';
+      const noticeMessage =
+        generatedImages.length > 0
+          ? `\u5df2\u6210\u529f\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247\uff0c\u540e\u7eed\u8bf7\u6c42\u5931\u8d25\uff1a${errorMessage}`
+          : errorMessage;
+
+      setLoading(false);
+      setGenerationProgress(null);
+      setPendingGenerationSlot(false);
+
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
-        setNotice(`\u5df2\u6210\u529f\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247\uff0c\u540e\u7eed\u8bf7\u6c42\u5931\u8d25\uff1a${error instanceof Error ? error.message : '\u751f\u6210\u5931\u8d25'}`);
-      } else {
-        setNotice(error instanceof Error ? error.message : '\u751f\u6210\u5931\u8d25');
       }
+      setNotice(noticeMessage);
+      window.alert(noticeMessage);
     } finally {
       setLoading(false);
       setGenerationProgress(null);

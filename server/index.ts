@@ -127,8 +127,10 @@ type VisionaryGenerationResponse = {
   }>;
   url?: string;
   status?: string;
-  error?: string;
-  failure_reason?: string;
+  error?: unknown;
+  message?: unknown;
+  detail?: unknown;
+  failure_reason?: unknown;
 };
 
 type PaginationResult = {
@@ -2268,6 +2270,14 @@ function setUserTotalCredits(db: SqlDatabase, userId: string, totalCredits: numb
   ]);
 }
 
+function incrementUserUsedCredits(db: SqlDatabase, userId: string, amount: number) {
+  db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
+    Math.max(0, Math.floor(amount)),
+    nowIso(),
+    userId,
+  ]);
+}
+
 function adjustUserTotalCredits(db: SqlDatabase, userId: string, delta: number) {
   const credits = getUserCredits(db, userId);
   setUserTotalCredits(db, userId, credits.totalCredits + delta);
@@ -2584,6 +2594,27 @@ async function getPublicUser(user: AuthUser) {
 
 // 鈹€鈹€鈹€ Visionary API 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
+function stringifyApiErrorValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (!value || typeof value !== 'object') return '';
+
+  const record = value as Record<string, unknown>;
+  return (
+    stringifyApiErrorValue(record.message) ||
+    stringifyApiErrorValue(record.error) ||
+    stringifyApiErrorValue(record.detail) ||
+    stringifyApiErrorValue(record.failure_reason) ||
+    stringifyApiErrorValue(record.reason)
+  );
+}
+
+function getVisionaryErrorMessage(payload: unknown, fallback: string) {
+  const message = stringifyApiErrorValue(payload);
+  if (message) return message;
+  return fallback;
+}
+
 async function callVisionaryGeneration({
   prompt,
   modelId,
@@ -2647,10 +2678,26 @@ async function callVisionaryGeneration({
     body: JSON.stringify(requestConfig.body),
   });
 
-  const payload = (await response.json().catch(() => null)) as VisionaryGenerationResponse | null;
+  const responseText = await response.text().catch(() => '');
+  let payload: VisionaryGenerationResponse | null = null;
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText) as VisionaryGenerationResponse;
+    } catch {
+      payload = null;
+    }
+  }
   if (!response.ok) {
-    const message = payload?.error || payload?.failure_reason || `Visionary API request failed (${response.status})`;
-    throw new Error(message);
+    throw new Error(getVisionaryErrorMessage(payload || responseText, `Visionary API request failed (${response.status})`));
+  }
+
+  const responseStatus = normalizeString(payload?.status).toLowerCase();
+  const upstreamError = getVisionaryErrorMessage(payload, '');
+  if (upstreamError && (responseStatus === 'failed' || responseStatus === 'error' || Boolean(payload?.error))) {
+    throw new Error(upstreamError);
+  }
+  if (responseStatus === 'failed' || responseStatus === 'error' || responseStatus === 'rejected') {
+    throw new Error(upstreamError || `Visionary API returned status: ${responseStatus}`);
   }
 
   const imageUrl =
@@ -4372,10 +4419,7 @@ async function start() {
           const userCredits = await db.getUserCredits(redeemedBy);
           creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
           if (creditsToReturn > 0) {
-            await db.setUserTotalCredits(
-              redeemedBy,
-              Math.max(userCredits.usedCredits, userCredits.totalCredits - creditsToReturn),
-            );
+            await db.incrementUsedCredits(redeemedBy, creditsToReturn);
           }
         }
 
@@ -4412,11 +4456,7 @@ async function start() {
           const userCredits = getUserCredits(db, redeemedBy);
           creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
           if (creditsToReturn > 0) {
-            setUserTotalCredits(
-              db,
-              redeemedBy,
-              Math.max(userCredits.usedCredits, userCredits.totalCredits - creditsToReturn),
-            );
+            incrementUserUsedCredits(db, redeemedBy, creditsToReturn);
           }
         }
 
@@ -4484,10 +4524,7 @@ async function start() {
             return;
           }
 
-          await db.setUserTotalCredits(
-            redeemedBy,
-            Math.max(userCredits.usedCredits, userCredits.totalCredits - reclaimableCredits),
-          );
+          await db.incrementUsedCredits(redeemedBy, reclaimableCredits);
           await db.syncInviteCodeBalanceForUser(redeemedBy);
         } else {
           const nextCredits = currentCredits - reclaimableCredits;
@@ -4535,11 +4572,7 @@ async function start() {
             throw new Error('No remaining credits can be reclaimed');
           }
 
-          setUserTotalCredits(
-            db,
-            redeemedBy,
-            Math.max(userCredits.usedCredits, userCredits.totalCredits - reclaimableCredits),
-          );
+          incrementUserUsedCredits(db, redeemedBy, reclaimableCredits);
           syncInviteCodeBalanceForUser(db, redeemedBy);
         } else {
           const nextCredits = currentCredits - reclaimableCredits;
