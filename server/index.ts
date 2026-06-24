@@ -4393,6 +4393,217 @@ async function start() {
     }
   });
 
+  app.post('/api/admin/invite-codes/batch', requireAuth, requireAdmin, async (req, res) => {
+    const requestedCredits = Number(req.body?.credits);
+    const requestedCount = Number(req.body?.count);
+
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    if (!Number.isFinite(requestedCount) || requestedCount <= 0 || requestedCount > 100) {
+      res.status(400).json({ error: 'Count must be between 1 and 100' });
+      return;
+    }
+
+    try {
+      const credits = Math.floor(requestedCredits);
+      const count = Math.floor(requestedCount);
+      const totalCredits = credits * count;
+
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const adminCredits = await db.getAdminCreditSummary();
+        if (totalCredits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
+
+        const codes: string[] = [];
+        while (codes.length < count) {
+          const code = generateInviteCode();
+          if (codes.includes(code) || await db.getInviteCode(code)) continue;
+          codes.push(code);
+        }
+
+        const inviteRows = await db.createInviteCodes(codes, credits, req.authUser!.username);
+        await db.adjustAdminTotalCredits(-totalCredits);
+
+        res.status(201).json({
+          inviteCodes: inviteRows.map((invite) => toInviteCode({
+            code: invite.code,
+            credits: invite.credits,
+            issued_credits: invite.issued_credits,
+            created_by: invite.created_by,
+            created_at: invite.created_at,
+            redeemed_by: invite.redeemed_by,
+            redeemed_at: invite.redeemed_at,
+            low_balance_since: invite.low_balance_since,
+          })),
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+        const adminCredits = getAdminCreditSummary(db);
+
+        if (totalCredits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
+
+        const inviteCodes = Array.from({ length: count }, () => {
+          let code = generateInviteCode();
+          while (getOne(db, 'SELECT code FROM invite_codes WHERE code = ?', [code])) {
+            code = generateInviteCode();
+          }
+
+          db.run(
+            'INSERT INTO invite_codes (code, credits, issued_credits, created_by, created_at, low_balance_since) VALUES (?, ?, ?, ?, ?, ?)',
+            [
+              code,
+              credits,
+              credits,
+              req.authUser!.username,
+              nowIso(),
+              credits < INVITE_RECLAIM_THRESHOLD ? nowIso() : null,
+            ],
+          );
+
+          const invite = getOne<Record<string, unknown>>(db, 'SELECT * FROM invite_codes WHERE code = ?', [code]);
+          return invite ? toInviteCode(invite) : null;
+        }).filter((item): item is ReturnType<typeof toInviteCode> => Boolean(item));
+
+        adjustAdminTotalCredits(db, -totalCredits);
+
+        return {
+          inviteCodes,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.status(201).json(payload);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Create invite codes failed' });
+    }
+  });
+
+  app.delete('/api/admin/invite-codes/batch', requireAuth, requireAdmin, async (req, res) => {
+    const codes: string[] = Array.from(new Set<string>(
+      (Array.isArray(req.body?.codes) ? req.body.codes : [])
+        .map((item) => normalizeString(item))
+        .filter(Boolean),
+    ));
+
+    if (codes.length === 0) {
+      res.status(400).json({ error: 'Invite codes are required' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const invites = await db.getInviteCodesByCodes(codes);
+        const inviteByCode = new Map(invites.map((invite) => [String(invite.code), invite]));
+        const missingCode = codes.find((code) => !inviteByCode.has(code));
+        if (missingCode) {
+          res.status(404).json({ error: `Invite code not found: ${missingCode}` });
+          return;
+        }
+
+        let creditsToReturnTotal = 0;
+        for (const code of codes) {
+          const invite = inviteByCode.get(code)!;
+          let creditsToReturn = Math.max(0, Number(invite.credits || 0));
+          const redeemedBy = normalizeString(invite.redeemed_by);
+
+          if (redeemedBy) {
+            const userCredits = await db.getUserCredits(redeemedBy);
+            creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
+            if (creditsToReturn > 0) {
+              await db.incrementUsedCredits(redeemedBy, creditsToReturn);
+            }
+          }
+
+          creditsToReturnTotal += creditsToReturn;
+        }
+
+        await db.deleteInviteCodes(codes);
+        if (creditsToReturnTotal > 0) {
+          await db.adjustAdminTotalCredits(creditsToReturnTotal);
+        }
+
+        res.json({
+          ok: true,
+          deletedCodes: codes,
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+
+        const invites = codes.map((code) => {
+          const invite = getOne<Record<string, unknown>>(
+            db,
+            'SELECT code, credits, redeemed_by FROM invite_codes WHERE code = ?',
+            [code],
+          );
+          if (!invite) {
+            throw new Error(`Invite code not found: ${code}`);
+          }
+          return invite;
+        });
+
+        let creditsToReturnTotal = 0;
+        for (const invite of invites) {
+          let creditsToReturn = Math.max(0, Number(invite.credits || 0));
+          const redeemedBy = normalizeString(invite.redeemed_by);
+
+          if (redeemedBy) {
+            const userCredits = getUserCredits(db, redeemedBy);
+            creditsToReturn = Math.min(creditsToReturn, userCredits.remainingCredits);
+            if (creditsToReturn > 0) {
+              incrementUserUsedCredits(db, redeemedBy, creditsToReturn);
+            }
+          }
+
+          creditsToReturnTotal += creditsToReturn;
+        }
+
+        for (const code of codes) {
+          db.run('DELETE FROM invite_codes WHERE code = ?', [code]);
+        }
+        if (creditsToReturnTotal > 0) {
+          adjustAdminTotalCredits(db, creditsToReturnTotal);
+        }
+
+        return {
+          ok: true,
+          deletedCodes: codes,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Delete invite codes failed';
+      if (message.startsWith('Invite code not found')) {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(400).json({ error: message });
+    }
+  });
+
   app.delete('/api/admin/invite-codes/:code', requireAuth, requireAdmin, async (req, res) => {
     const code = normalizeString(req.params.code);
 

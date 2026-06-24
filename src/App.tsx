@@ -26,8 +26,10 @@ import {
   clearSession,
   createPublicApiKey,
   createInviteCode,
+  createInviteCodesBatch,
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
+  deleteInviteCodesBatch,
   fetchAdminDashboard,
   fetchAdminInviteCodes,
   fetchAdminOverview,
@@ -1383,7 +1385,9 @@ function AdminView({
   recordResolutionOptions,
   loading,
   onCreateInviteCode,
+  onCreateInviteCodesBatch,
   onDeleteInviteCode,
+  onDeleteInviteCodesBatch,
   onReclaimInviteCode,
   onLoadSection,
   onPreview,
@@ -1406,7 +1410,9 @@ function AdminView({
     credits: number,
     options?: { quiet?: boolean; refresh?: boolean },
   ) => Promise<InviteCodeInfo | null | undefined>;
+  onCreateInviteCodesBatch: (credits: number, count: number) => Promise<InviteCodeInfo[]>;
   onDeleteInviteCode: (code: string) => Promise<void>;
+  onDeleteInviteCodesBatch: (codes: string[]) => Promise<string[]>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
@@ -1708,16 +1714,13 @@ function AdminView({
   async function handleCreateInviteCode() {
     setSubmitting(true);
     try {
-      const nextCodes: string[] = [];
-      for (let index = 0; index < normalizedInviteBatchCount; index += 1) {
-        const inviteCode = await onCreateInviteCode(normalizedCredits, {
-          quiet: true,
-          refresh: index === normalizedInviteBatchCount - 1,
-        });
-        if (!inviteCode?.code) {
-          throw new Error('\u9080\u8bf7\u7801\u751f\u6210\u5931\u8d25');
-        }
-        nextCodes.push(inviteCode.code);
+      const inviteCodes = normalizedInviteBatchCount > 1
+        ? await onCreateInviteCodesBatch(normalizedCredits, normalizedInviteBatchCount)
+        : [await onCreateInviteCode(normalizedCredits, { quiet: true, refresh: true })].filter(Boolean);
+      const nextCodes = inviteCodes.map((item) => item.code).filter(Boolean);
+
+      if (nextCodes.length !== normalizedInviteBatchCount) {
+        throw new Error('\u9080\u8bf7\u7801\u751f\u6210\u5931\u8d25');
       }
       setCredits(100);
       setInviteBatchCount(1);
@@ -1726,6 +1729,8 @@ function AdminView({
         setBatchCopied(false);
         onNotice(`\u5df2\u751f\u6210 ${nextCodes.length} \u4e2a\u9080\u8bf7\u7801`);
       }
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u9080\u8bf7\u7801\u751f\u6210\u5931\u8d25');
     } finally {
       setSubmitting(false);
     }
@@ -1773,10 +1778,10 @@ function AdminView({
 
     setBulkDeleting(true);
     try {
-      for (const code of availableCodes) {
-        await onDeleteInviteCode(code);
+      const deletedCodes = await onDeleteInviteCodesBatch(availableCodes);
+      if (deletedCodes.length > 0) {
+        setSelectedInviteCodes((current) => current.filter((code) => !deletedCodes.includes(code)));
       }
-      setSelectedInviteCodes([]);
     } finally {
       setBulkDeleting(false);
     }
@@ -3001,6 +3006,28 @@ export default function App() {
     }
   }
 
+  async function handleCreateInviteCodesBatch(credits: number, count: number) {
+    try {
+      const payload = await createInviteCodesBatch({ credits, count });
+      setAdminOverview((current) => ({
+        ...current,
+        inviteCodes: [...payload.inviteCodes, ...current.inviteCodes],
+        inviteCodesPage: {
+          ...current.inviteCodesPage,
+          total: current.inviteCodesPage.total + payload.inviteCodes.length,
+        },
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已生成 ${payload.inviteCodes.length} 个邀请码`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
+      return payload.inviteCodes;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '邀请码批量生成失败');
+      return [];
+    }
+  }
+
   async function handleDeleteInviteCode(code: string) {
     try {
       const payload = await deleteInviteCodeRequest(code);
@@ -3018,6 +3045,29 @@ export default function App() {
       void loadAdminSection('invites', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除邀请码失败');
+    }
+  }
+
+  async function handleDeleteInviteCodesBatch(codes: string[]) {
+    try {
+      const payload = await deleteInviteCodesBatch(codes);
+      const deletedCodeSet = new Set(payload.deletedCodes);
+      setAdminOverview((current) => ({
+        ...current,
+        inviteCodes: current.inviteCodes.filter((item) => !deletedCodeSet.has(item.code)),
+        inviteCodesPage: {
+          ...current.inviteCodesPage,
+          total: Math.max(0, current.inviteCodesPage.total - payload.deletedCodes.length),
+        },
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已批量删除 ${payload.deletedCodes.length} 个邀请码，并将积分退回给 admin。`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
+      return payload.deletedCodes;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '邀请码批量删除失败');
+      return [];
     }
   }
 
@@ -4182,7 +4232,9 @@ export default function App() {
               recordResolutionOptions={adminOverview.recordResolutionOptions}
               loading={adminLoading}
               onCreateInviteCode={handleCreateInviteCode}
+              onCreateInviteCodesBatch={handleCreateInviteCodesBatch}
               onDeleteInviteCode={handleDeleteInviteCode}
+              onDeleteInviteCodesBatch={handleDeleteInviteCodesBatch}
               onReclaimInviteCode={handleReclaimInviteCode}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}

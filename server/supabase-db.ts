@@ -434,6 +434,16 @@ export async function getInviteCode(code: string): Promise<InviteCodeRow | null>
   return data as unknown as InviteCodeRow;
 }
 
+export async function getInviteCodesByCodes(codes: string[]): Promise<InviteCodeRow[]> {
+  if (codes.length === 0) return [];
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .in('code', codes);
+  if (error) throw new Error(`Fetch invite codes failed: ${error.message}`);
+  return (data || []) as unknown as InviteCodeRow[];
+}
+
 export async function createInviteCode(
   code: string,
   credits: number,
@@ -454,6 +464,29 @@ export async function createInviteCode(
     .single();
   if (error) throw new Error(`Create invite code failed: ${error.message}`);
   return data as unknown as InviteCodeRow;
+}
+
+export async function createInviteCodes(
+  codes: string[],
+  credits: number,
+  createdBy: string,
+): Promise<InviteCodeRow[]> {
+  if (codes.length === 0) return [];
+  const lowBalanceSince = credits < INVITE_RECLAIM_THRESHOLD ? nowIso() : null;
+  const createdAt = nowIso();
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .insert(codes.map((code) => ({
+      code,
+      credits,
+      issued_credits: credits,
+      created_by: createdBy,
+      created_at: createdAt,
+      low_balance_since: lowBalanceSince,
+    })))
+    .select('*');
+  if (error) throw new Error(`Create invite codes failed: ${error.message}`);
+  return (data || []) as unknown as InviteCodeRow[];
 }
 
 export async function redeemInviteCode(code: string, userId: string): Promise<void> {
@@ -555,6 +588,15 @@ export async function deleteInviteCode(code: string): Promise<void> {
     .delete()
     .eq('code', code);
   if (error) throw new Error(`Delete invite code failed: ${error.message}`);
+}
+
+export async function deleteInviteCodes(codes: string[]): Promise<void> {
+  if (codes.length === 0) return;
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .delete()
+    .in('code', codes);
+  if (error) throw new Error(`Delete invite codes failed: ${error.message}`);
 }
 
 export async function listInviteCodes(

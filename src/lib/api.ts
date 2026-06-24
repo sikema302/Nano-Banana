@@ -538,11 +538,33 @@ export async function createInviteCode(payload: { credits: number }) {
   );
 }
 
+export async function createInviteCodesBatch(payload: { credits: number; count: number }) {
+  return request<{ inviteCodes: InviteCodeInfo[]; adminCredits: CreditSummary }>(
+    '/api/admin/invite-codes/batch',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    true,
+  );
+}
+
 export async function deleteInviteCode(code: string) {
   return request<{ ok: boolean; adminCredits: CreditSummary }>(
     `/api/admin/invite-codes/${encodeURIComponent(code)}`,
     {
       method: 'DELETE',
+    },
+    true,
+  );
+}
+
+export async function deleteInviteCodesBatch(codes: string[]) {
+  return request<{ ok: boolean; deletedCodes: string[]; adminCredits: CreditSummary }>(
+    '/api/admin/invite-codes/batch',
+    {
+      method: 'DELETE',
+      body: JSON.stringify({ codes }),
     },
     true,
   );
