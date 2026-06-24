@@ -1442,11 +1442,14 @@ function AdminView({
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
+  const [inviteSearchDraft, setInviteSearchDraft] = useState('');
   const [inviteSearch, setInviteSearch] = useState('');
   const [invitePage, setInvitePage] = useState(1);
+  const [userSearchDraft, setUserSearchDraft] = useState('');
   const [userSearch, setUserSearch] = useState('');
   const [userSortMode, setUserSortMode] = useState<UserSortMode>('recent-desc');
   const [userPage, setUserPage] = useState(1);
+  const [recordUserFilterDraft, setRecordUserFilterDraft] = useState('');
   const [recordUserFilter, setRecordUserFilter] = useState('');
   const [recordModelFilter, setRecordModelFilter] = useState('all');
   const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
@@ -1587,6 +1590,21 @@ function AdminView({
 
   function refreshCurrentSection() {
     return onLoadSection(section, getSectionParams(section));
+  }
+
+  function commitInviteSearch() {
+    setInvitePage(1);
+    setInviteSearch(inviteSearchDraft.trim());
+  }
+
+  function commitUserSearch() {
+    setUserPage(1);
+    setUserSearch(userSearchDraft.trim());
+  }
+
+  function commitRecordSearch() {
+    setRecordPage(1);
+    setRecordUserFilter(recordUserFilterDraft.trim());
   }
 
   useEffect(() => {
@@ -2062,8 +2080,14 @@ function AdminView({
                     <input
                       className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none placeholder:text-zinc-500 md:w-56"
                       placeholder="搜索邀请码 / 使用者"
-                      value={inviteSearch}
-                      onChange={(event) => setInviteSearch(event.target.value)}
+                      value={inviteSearchDraft}
+                      onChange={(event) => setInviteSearchDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          commitInviteSearch();
+                        }
+                      }}
                     />
                   </div>
                   <button
@@ -2207,10 +2231,13 @@ function AdminView({
                     <input
                       className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none md:w-72"
                       placeholder="搜索用户 ID、用户名、invite-/admin/credit-"
-                      value={userSearch}
-                      onChange={(event) => {
-                        setUserSearch(event.target.value);
-                        setUserPage(1);
+                      value={userSearchDraft}
+                      onChange={(event) => setUserSearchDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          commitUserSearch();
+                        }
                       }}
                     />
                     <button
@@ -2341,8 +2368,14 @@ function AdminView({
                     <input
                       className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
                       placeholder="搜索用户 / 邀请码 / 提示词"
-                      value={recordUserFilter}
-                      onChange={(event) => setRecordUserFilter(event.target.value)}
+                      value={recordUserFilterDraft}
+                      onChange={(event) => setRecordUserFilterDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          commitRecordSearch();
+                        }
+                      }}
                     />
                     <select
                       className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
