@@ -518,6 +518,17 @@ export async function revokePublicApiKey(id: string) {
   );
 }
 
+export async function deductPublicApiKeyCredits(id: string, credits: number) {
+  return request<{ key: PublicApiKeyInfo; deductedCredits: number }>(
+    `/api/admin/api-keys/${encodeURIComponent(id)}/deduct`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
 export async function deletePublicApiKey(id: string) {
   return request<{ ok: boolean }>(
     `/api/admin/api-keys/${encodeURIComponent(id)}`,

@@ -30,6 +30,7 @@ import {
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   deleteInviteCodesBatch,
+  deductPublicApiKeyCredits,
   fetchAdminDashboard,
   fetchAdminInviteCodes,
   fetchAdminOverview,
@@ -1168,6 +1169,7 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
   const [generatedKey, setGeneratedKey] = useState('');
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [submittingKey, setSubmittingKey] = useState(false);
+  const [deductingKeyId, setDeductingKeyId] = useState('');
   const [copiedText, setCopiedText] = useState('');
 
   useEffect(() => {
@@ -1243,6 +1245,28 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
       onNotice('API Key 已停用');
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'API Key 停用失败');
+    }
+  }
+
+  async function handleDeductApiKeyCredits(item: PublicApiKeyInfo) {
+    const rawValue = window.prompt(`请输入要从 ${item.name} 扣除的额度`, '10');
+    if (rawValue === null) return;
+
+    const credits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(credits) || credits <= 0) {
+      window.alert('请输入大于 0 的整数额度');
+      return;
+    }
+
+    setDeductingKeyId(item.id);
+    try {
+      const payload = await deductPublicApiKeyCredits(item.id, credits);
+      setApiKeys((current) => current.map((key) => (key.id === item.id ? payload.key : key)));
+      onNotice(`已从 API Key ${item.name} 扣除 ${payload.deductedCredits} 额度`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 扣额度失败');
+    } finally {
+      setDeductingKeyId('');
     }
   }
 
@@ -1348,6 +1372,14 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                       onClick={() => void copyText(item.plainKey, `api-key-${item.id}`)}
                     >
                       {copiedText === `api-key-${item.id}` ? '已复制' : '复制 Key'}
+                    </button>
+                    <button
+                      className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
+                      disabled={Boolean(item.revokedAt) || item.remainingCredits <= 0 || deductingKeyId === item.id}
+                      type="button"
+                      onClick={() => void handleDeductApiKeyCredits(item)}
+                    >
+                      {deductingKeyId === item.id ? '扣除中...' : '扣额度'}
                     </button>
                     <button
                       className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"

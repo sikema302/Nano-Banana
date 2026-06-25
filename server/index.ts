@@ -1879,6 +1879,35 @@ async function revokePublicApiKey(id: string) {
   return persistedRecords.find((record) => record.id === targetId) || nextRecords.find((record) => record.id === targetId) || null;
 }
 
+async function deductPublicApiKeyCredits(id: string, credits: number) {
+  const targetId = normalizeString(id);
+  const requestedCredits = Math.max(0, Math.floor(credits));
+  if (!targetId || requestedCredits <= 0) return null;
+
+  const records = await readPublicApiKeyRecords();
+  const index = records.findIndex((record) => record.id === targetId);
+  if (index < 0) return null;
+
+  const record = records[index];
+  const remainingCredits = Math.max(0, record.totalCredits - record.usedCredits);
+  const deductedCredits = Math.min(requestedCredits, remainingCredits);
+  if (deductedCredits <= 0) {
+    throw new Error('API Key has no remaining credits to deduct');
+  }
+
+  records[index] = {
+    ...record,
+    usedCredits: record.usedCredits + deductedCredits,
+  };
+  await writePublicApiKeyRecords(records);
+
+  const persistedRecords = await readPublicApiKeyRecords();
+  return {
+    record: persistedRecords.find((item) => item.id === targetId) || records[index],
+    deductedCredits,
+  };
+}
+
 async function deletePublicApiKey(id: string) {
   const targetId = normalizeString(id);
   if (!targetId) return false;
@@ -4043,6 +4072,30 @@ async function start() {
       res.json({ key: publicApiKeyRecord(key) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Revoke API key failed' });
+    }
+  });
+
+  app.post('/api/admin/api-keys/:id/deduct', requireAuth, requireAdmin, async (req, res) => {
+    const credits = Math.floor(Number(req.body?.credits));
+
+    if (!Number.isFinite(credits) || credits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    try {
+      const payload = await deductPublicApiKeyCredits(normalizeString(req.params.id), credits);
+      if (!payload) {
+        res.status(404).json({ error: 'API key not found' });
+        return;
+      }
+
+      res.json({
+        key: publicApiKeyRecord(payload.record),
+        deductedCredits: payload.deductedCredits,
+      });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Deduct API key credits failed' });
     }
   });
 
