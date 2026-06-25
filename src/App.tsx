@@ -50,6 +50,8 @@ import {
   login,
   loginWithInvite,
   moveImage,
+  rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
+  rechargePublicApiKeyCredits,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
   revokePublicApiKey,
@@ -1170,6 +1172,7 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [submittingKey, setSubmittingKey] = useState(false);
   const [deductingKeyId, setDeductingKeyId] = useState('');
+  const [rechargingKeyId, setRechargingKeyId] = useState('');
   const [copiedText, setCopiedText] = useState('');
 
   useEffect(() => {
@@ -1267,6 +1270,28 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
       onNotice(error instanceof Error ? error.message : 'API Key 扣额度失败');
     } finally {
       setDeductingKeyId('');
+    }
+  }
+
+  async function handleRechargeApiKeyCredits(item: PublicApiKeyInfo) {
+    const rawValue = window.prompt(`请输入要给 ${item.name} 充值的额度`, '100');
+    if (rawValue === null) return;
+
+    const credits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(credits) || credits <= 0) {
+      window.alert('请输入大于 0 的整数额度');
+      return;
+    }
+
+    setRechargingKeyId(item.id);
+    try {
+      const payload = await rechargePublicApiKeyCredits(item.id, credits);
+      setApiKeys((current) => current.map((key) => (key.id === item.id ? payload.key : key)));
+      onNotice(`已给 API Key ${item.name} 充值 ${payload.rechargedCredits} 额度`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'API Key 充值失败');
+    } finally {
+      setRechargingKeyId('');
     }
   }
 
@@ -1382,6 +1407,14 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                       {deductingKeyId === item.id ? '扣除中...' : '扣额度'}
                     </button>
                     <button
+                      className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40"
+                      disabled={Boolean(item.revokedAt) || rechargingKeyId === item.id}
+                      type="button"
+                      onClick={() => void handleRechargeApiKeyCredits(item)}
+                    >
+                      {rechargingKeyId === item.id ? '充值中...' : '充值'}
+                    </button>
+                    <button
                       className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
                       disabled={Boolean(item.revokedAt)}
                       type="button"
@@ -1429,6 +1462,7 @@ function AdminView({
   onCreateInviteCodesBatch,
   onDeleteInviteCode,
   onDeleteInviteCodesBatch,
+  onRechargeInviteCode,
   onReclaimInviteCode,
   onLoadSection,
   onPreview,
@@ -1454,6 +1488,7 @@ function AdminView({
   onCreateInviteCodesBatch: (credits: number, count: number) => Promise<InviteCodeInfo[]>;
   onDeleteInviteCode: (code: string) => Promise<void>;
   onDeleteInviteCodesBatch: (codes: string[]) => Promise<string[]>;
+  onRechargeInviteCode: (code: string, credits: number) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
@@ -1480,6 +1515,7 @@ function AdminView({
   const [credits, setCredits] = useState(100);
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
+  const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
   const [inviteBatchCount, setInviteBatchCount] = useState(1);
@@ -1788,6 +1824,24 @@ function AdminView({
       setSelectedInviteCodes((current) => current.filter((item) => item !== code));
     } finally {
       setDeletingCode('');
+    }
+  }
+
+  async function handleRechargeInviteCode(code: string) {
+    const rawValue = window.prompt(`请输入要给 ${code} 充值的积分数量`, '100');
+    if (rawValue === null) return;
+
+    const credits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(credits) || credits <= 0) {
+      window.alert('请输入大于 0 的整数积分');
+      return;
+    }
+
+    setRechargingCode(code);
+    try {
+      await onRechargeInviteCode(code, credits);
+    } finally {
+      setRechargingCode('');
     }
   }
 
@@ -2200,6 +2254,14 @@ function AdminView({
                                 >
                                   <Copy size={12} />
                                   {copiedCode === item.code ? '已复制' : '复制'}
+                                </button>
+                                <button
+                                  className="mr-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                  disabled={rechargingCode === item.code}
+                                  type="button"
+                                  onClick={() => void handleRechargeInviteCode(item.code)}
+                                >
+                                  {rechargingCode === item.code ? '充值中...' : '充值'}
                                 </button>
                                 <button
                                   className="mr-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
@@ -3111,6 +3173,21 @@ export default function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码批量删除失败');
       return [];
+    }
+  }
+
+  async function handleRechargeInviteCode(code: string, credits: number) {
+    try {
+      const payload = await rechargeInviteCodeCreditsRequest(code, credits);
+      setAdminOverview((current) => ({
+        ...current,
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已给邀请码 ${code} 充值 ${credits} 积分`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadAdminSection('invites', { page: 1, pageSize: 10 });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '邀请码充值失败');
     }
   }
 
@@ -4278,6 +4355,7 @@ export default function App() {
               onCreateInviteCodesBatch={handleCreateInviteCodesBatch}
               onDeleteInviteCode={handleDeleteInviteCode}
               onDeleteInviteCodesBatch={handleDeleteInviteCodesBatch}
+              onRechargeInviteCode={handleRechargeInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}

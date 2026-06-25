@@ -1908,6 +1908,28 @@ async function deductPublicApiKeyCredits(id: string, credits: number) {
   };
 }
 
+async function rechargePublicApiKeyCredits(id: string, credits: number) {
+  const targetId = normalizeString(id);
+  const rechargedCredits = Math.max(0, Math.floor(credits));
+  if (!targetId || rechargedCredits <= 0) return null;
+
+  const records = await readPublicApiKeyRecords();
+  const index = records.findIndex((record) => record.id === targetId);
+  if (index < 0) return null;
+
+  records[index] = {
+    ...records[index],
+    totalCredits: records[index].totalCredits + rechargedCredits,
+  };
+  await writePublicApiKeyRecords(records);
+
+  const persistedRecords = await readPublicApiKeyRecords();
+  return {
+    record: persistedRecords.find((item) => item.id === targetId) || records[index],
+    rechargedCredits,
+  };
+}
+
 async function deletePublicApiKey(id: string) {
   const targetId = normalizeString(id);
   if (!targetId) return false;
@@ -4099,6 +4121,30 @@ async function start() {
     }
   });
 
+  app.post('/api/admin/api-keys/:id/recharge', requireAuth, requireAdmin, async (req, res) => {
+    const credits = Math.floor(Number(req.body?.credits));
+
+    if (!Number.isFinite(credits) || credits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    try {
+      const payload = await rechargePublicApiKeyCredits(normalizeString(req.params.id), credits);
+      if (!payload) {
+        res.status(404).json({ error: 'API key not found' });
+        return;
+      }
+
+      res.json({
+        key: publicApiKeyRecord(payload.record),
+        rechargedCredits: payload.rechargedCredits,
+      });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Recharge API key credits failed' });
+    }
+  });
+
   app.delete('/api/admin/api-keys/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const deleted = await deletePublicApiKey(normalizeString(req.params.id));
@@ -4759,6 +4805,114 @@ async function start() {
       res.json(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Delete invite code failed';
+      if (message === 'Invite code not found') {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.post('/api/admin/invite-codes/:code/recharge', requireAuth, requireAdmin, async (req, res) => {
+    const code = normalizeString(req.params.code);
+    const requestedCredits = Math.floor(Number(req.body?.credits));
+
+    if (!code) {
+      res.status(400).json({ error: 'Invite code is required' });
+      return;
+    }
+
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: 'Credits must be a positive number' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.reclaimLowBalanceInviteCodes();
+
+        const adminCredits = await db.getAdminCreditSummary();
+        if (requestedCredits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
+
+        const invite = await db.getInviteCode(code);
+        if (!invite) {
+          res.status(404).json({ error: 'Invite code not found' });
+          return;
+        }
+
+        const nextCredits = Math.max(0, Number(invite.credits || 0)) + requestedCredits;
+        const nextIssuedCredits = Math.max(0, Number(invite.issued_credits || invite.credits || 0)) + requestedCredits;
+        const redeemedBy = normalizeString(invite.redeemed_by);
+
+        await db.rechargeInviteCode(
+          code,
+          nextCredits,
+          nextIssuedCredits,
+          lowBalanceSinceForCredits(nextCredits, invite.low_balance_since),
+        );
+
+        if (redeemedBy) {
+          const userCredits = await db.getUserCredits(redeemedBy);
+          await db.setUserTotalCredits(redeemedBy, userCredits.totalCredits + requestedCredits);
+          await db.syncInviteCodeBalanceForUser(redeemedBy);
+        }
+
+        await db.adjustAdminTotalCredits(-requestedCredits);
+        res.json({
+          ok: true,
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        reclaimLowBalanceInviteCodes(db);
+
+        const adminCredits = getAdminCreditSummary(db);
+        if (requestedCredits > adminCredits.remainingCredits) {
+          throw new Error(`Admin credits are not enough. Remaining: ${adminCredits.remainingCredits}`);
+        }
+
+        const invite = getOne<Record<string, unknown>>(
+          db,
+          'SELECT code, credits, issued_credits, redeemed_by, low_balance_since FROM invite_codes WHERE code = ?',
+          [code],
+        );
+
+        if (!invite) {
+          throw new Error('Invite code not found');
+        }
+
+        const nextCredits = Math.max(0, Number(invite.credits || 0)) + requestedCredits;
+        const nextIssuedCredits = Math.max(0, Number(invite.issued_credits || invite.credits || 0)) + requestedCredits;
+        const redeemedBy = normalizeString(invite.redeemed_by);
+
+        db.run(
+          'UPDATE invite_codes SET credits = ?, issued_credits = ?, low_balance_since = ? WHERE code = ?',
+          [nextCredits, nextIssuedCredits, lowBalanceSinceForCredits(nextCredits, invite.low_balance_since), code],
+        );
+
+        if (redeemedBy) {
+          const userCredits = getUserCredits(db, redeemedBy);
+          setUserTotalCredits(db, redeemedBy, userCredits.totalCredits + requestedCredits);
+          syncInviteCodeBalanceForUser(db, redeemedBy);
+        }
+
+        adjustAdminTotalCredits(db, -requestedCredits);
+
+        return {
+          ok: true,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recharge invite code failed';
       if (message === 'Invite code not found') {
         res.status(404).json({ error: message });
         return;

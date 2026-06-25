@@ -582,6 +582,23 @@ export async function updateInviteCodeCredits(
   if (error) throw new Error(`Update invite code failed: ${error.message}`);
 }
 
+export async function rechargeInviteCode(
+  code: string,
+  credits: number,
+  issuedCredits: number,
+  lowBalanceSince: string | null,
+): Promise<void> {
+  const { error } = await getSupabase()
+    .from('invite_codes')
+    .update({
+      credits,
+      issued_credits: issuedCredits,
+      low_balance_since: lowBalanceSince,
+    })
+    .eq('code', code);
+  if (error) throw new Error(`Recharge invite code failed: ${error.message}`);
+}
+
 export async function zeroInviteCode(code: string): Promise<void> {
   const { error } = await getSupabase()
     .from('invite_codes')

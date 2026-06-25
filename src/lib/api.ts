@@ -529,6 +529,17 @@ export async function deductPublicApiKeyCredits(id: string, credits: number) {
   );
 }
 
+export async function rechargePublicApiKeyCredits(id: string, credits: number) {
+  return request<{ key: PublicApiKeyInfo; rechargedCredits: number }>(
+    `/api/admin/api-keys/${encodeURIComponent(id)}/recharge`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
 export async function deletePublicApiKey(id: string) {
   return request<{ ok: boolean }>(
     `/api/admin/api-keys/${encodeURIComponent(id)}`,
@@ -585,6 +596,17 @@ export async function deleteInviteCodesBatch(codes: string[]) {
 export async function reclaimInviteCodeCredits(code: string, credits: number) {
   return request<{ ok: boolean; adminCredits: CreditSummary }>(
     `/api/admin/invite-codes/${encodeURIComponent(code)}/reclaim`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
+export async function rechargeInviteCodeCredits(code: string, credits: number) {
+  return request<{ ok: boolean; adminCredits: CreditSummary }>(
+    `/api/admin/invite-codes/${encodeURIComponent(code)}/recharge`,
     {
       method: 'POST',
       body: JSON.stringify({ credits }),
