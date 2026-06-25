@@ -45,7 +45,7 @@ import {
   fetchPromoCoupon,
   fetchUserHistory,
   fetchUserImages,
-  generateImage,
+  fetchGenerateImageJob,
   getStoredUser,
   login,
   loginWithInvite,
@@ -55,12 +55,14 @@ import {
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
   revokePublicApiKey,
+  startGenerateImageJob,
   type AdminDashboardStats,
   type AdminImageStorageStats,
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
   type GeneratedImagePayload,
+  type GenerationJobInfo,
   type GenerationRecord,
   type ImageCategory,
   type InviteCodeInfo,
@@ -319,6 +321,29 @@ function getGenerationHint(percent: number) {
   if (percent < 62) return '细节正在慢慢长出来，材质、色彩和氛围都在校准。';
   if (percent < 84) return '进入精修阶段了，系统正在检查边缘、纹理和整体一致性。';
   return '最后收尾中，请别刷新页面，好图马上抵达。';
+}
+
+const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getFriendlyJobProgress(job: GenerationJobInfo, fallbackStartedAt: number) {
+  if (job.status === 'succeeded') return 100;
+  const startedAt = job.startedAt ? new Date(job.startedAt).getTime() : fallbackStartedAt;
+  const elapsedMs = Math.max(0, Date.now() - (Number.isFinite(startedAt) ? startedAt : fallbackStartedAt));
+  const elapsedSeconds = elapsedMs / 1000;
+  const timeProgress =
+    elapsedSeconds < 20
+      ? 8 + (elapsedSeconds / 20) * 28
+      : 36 + (1 - Math.exp(-(elapsedSeconds - 20) / 90)) * 58;
+  return Math.max(6, Math.min(96, Math.round(Math.max(job.progress || 0, timeProgress))));
+}
+
+function getBatchVisualProgress(completed: number, total: number, activeJobPercent: number) {
+  if (total <= 0) return 0;
+  return Math.min(99, ((completed + activeJobPercent / 100) / total) * 100);
 }
 
 function getModelCredits(
@@ -3287,6 +3312,65 @@ export default function App() {
     }
   }
 
+  async function waitForGenerationJob(jobId: string, batchIndex: number, total: number, fallbackStartedAt: number) {
+    let pollingFailures = 0;
+
+    while (true) {
+      let job: GenerationJobInfo;
+      try {
+        ({ job } = await fetchGenerateImageJob(jobId));
+        pollingFailures = 0;
+      } catch (error) {
+        pollingFailures += 1;
+        if (pollingFailures >= 5) {
+          throw error;
+        }
+        const fallbackPercent = getFriendlyJobProgress(
+          {
+            id: jobId,
+            status: 'processing',
+            progress: 0,
+            createdAt: new Date(fallbackStartedAt).toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          fallbackStartedAt,
+        );
+        setGenerationProgress((current) =>
+          current
+            ? {
+                ...current,
+                completed: batchIndex,
+                visual: Math.max(current.visual, getBatchVisualProgress(batchIndex, total, fallbackPercent)),
+              }
+            : current,
+        );
+        await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const jobPercent = getFriendlyJobProgress(job, fallbackStartedAt);
+      setGenerationProgress((current) =>
+        current
+          ? {
+              ...current,
+              completed: batchIndex,
+              visual: Math.max(current.visual, getBatchVisualProgress(batchIndex, total, jobPercent)),
+            }
+          : current,
+      );
+
+      if (job.status === 'succeeded') {
+        if (!job.image) throw new Error('生成完成但没有返回图片');
+        return job.image;
+      }
+      if (job.status === 'failed') {
+        throw new Error(job.error || '生成失败');
+      }
+
+      await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
+    }
+  }
+
   async function handleGenerate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -3332,7 +3416,8 @@ export default function App() {
             : current,
         );
 
-        const response = await generateImage({
+        const jobStartedAt = Date.now();
+        const { job } = await startGenerateImageJob({
           prompt,
           model: selectedModel,
           dimensions,
@@ -3341,8 +3426,11 @@ export default function App() {
           optimizeChineseText: isNanoBananaPro ? optimizeChineseText : false,
           reference_images: referenceImages,
         });
+        const image = job.status === 'succeeded' && job.image
+          ? job.image
+          : await waitForGenerationJob(job.id, index, batchCount, jobStartedAt);
 
-        generatedImages.push(toDisplayImage(response.image));
+        generatedImages.push(toDisplayImage(image));
         setGenerationProgress((current) =>
           current
             ? {

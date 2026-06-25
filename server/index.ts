@@ -3756,6 +3756,153 @@ async function start() {
     app.post(path, geminiGenerateContentHandler),
   );
 
+  type AuthenticatedGenerationJob = {
+    id: string;
+    userId: string;
+    username: string;
+    status: 'queued' | 'processing' | 'succeeded' | 'failed';
+    progress: number;
+    requestBody: unknown;
+    authHeader: string;
+    createdAt: string;
+    updatedAt: string;
+    startedAt?: string;
+    completedAt?: string;
+    image?: GeneratedImagePayload;
+    error?: string;
+  };
+
+  const generationJobs = new Map<string, AuthenticatedGenerationJob>();
+  const generationJobTtlMs = 2 * 60 * 60 * 1000;
+  const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
+
+  function publicGenerationJob(job: AuthenticatedGenerationJob) {
+    const elapsedMs = job.startedAt ? Math.max(0, Date.now() - new Date(job.startedAt).getTime()) : 0;
+    const simulatedProgress =
+      job.status === 'processing'
+        ? Math.min(96, Math.round(14 + (1 - Math.exp(-elapsedMs / 85000)) * 82))
+        : job.progress;
+
+    return {
+      id: job.id,
+      status: job.status,
+      progress: job.status === 'succeeded' ? 100 : job.status === 'failed' ? job.progress : Math.max(job.progress, simulatedProgress),
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      image: job.image,
+      error: job.error,
+    };
+  }
+
+  function cleanupGenerationJobs() {
+    const cutoff = Date.now() - generationJobTtlMs;
+    for (const [jobId, job] of generationJobs) {
+      const updatedAt = new Date(job.updatedAt).getTime();
+      if (!Number.isNaN(updatedAt) && updatedAt < cutoff) {
+        generationJobs.delete(jobId);
+      }
+    }
+  }
+
+  async function runGenerationJob(jobId: string) {
+    const job = generationJobs.get(jobId);
+    if (!job) return;
+
+    const updateJob = (patch: Partial<AuthenticatedGenerationJob>) => {
+      const current = generationJobs.get(jobId);
+      if (!current) return null;
+      const next = { ...current, ...patch, updatedAt: nowIso() };
+      generationJobs.set(jobId, next);
+      return next;
+    };
+
+    updateJob({ status: 'processing', progress: 12, startedAt: nowIso() });
+
+    try {
+      const response = await fetch(`${internalApiOrigin}/api/generate`, {
+        method: 'POST',
+        headers: {
+          Authorization: job.authHeader,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(job.requestBody),
+      });
+      updateJob({ progress: 88 });
+
+      const responseText = await response.text().catch(() => '');
+      let payload: { image?: GeneratedImagePayload; error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null = null;
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText);
+        } catch {
+          payload = null;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(getVisionaryErrorMessage(payload || responseText, `Generate failed (${response.status})`));
+      }
+
+      if (!payload?.image) {
+        throw new Error('Generate failed: missing image result');
+      }
+
+      updateJob({
+        status: 'succeeded',
+        progress: 100,
+        image: payload.image,
+        completedAt: nowIso(),
+      });
+    } catch (error) {
+      updateJob({
+        status: 'failed',
+        progress: Math.max(12, generationJobs.get(jobId)?.progress || 12),
+        error: error instanceof Error ? error.message : 'Generate failed',
+        completedAt: nowIso(),
+      });
+    }
+  }
+
+  app.post('/api/generate/jobs', requireAuth, async (req, res) => {
+    const prompt = normalizeString(req.body?.prompt);
+    if (!prompt) {
+      res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+
+    cleanupGenerationJobs();
+    const jobId = `gen_${Date.now()}_${randomHex(6)}`;
+    const authHeader = normalizeString(req.headers.authorization);
+    const job: AuthenticatedGenerationJob = {
+      id: jobId,
+      userId: req.authUser!.userId,
+      username: req.authUser!.username,
+      status: 'queued',
+      progress: 5,
+      requestBody: req.body,
+      authHeader,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    generationJobs.set(jobId, job);
+    void runGenerationJob(jobId);
+    res.status(202).json({ job: publicGenerationJob(job) });
+  });
+
+  app.get('/api/generate/jobs/:id', requireAuth, (req, res) => {
+    cleanupGenerationJobs();
+    const job = generationJobs.get(normalizeString(req.params.id));
+    if (!job || job.userId !== req.authUser!.userId) {
+      res.status(404).json({ error: 'Generation job not found' });
+      return;
+    }
+
+    res.json({ job: publicGenerationJob(job) });
+  });
+
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
     const model = normalizeString(req.body?.model);

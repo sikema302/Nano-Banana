@@ -24,6 +24,20 @@ export interface GeneratedImagePayload {
   createdAt: string;
 }
 
+export type GenerationJobStatus = 'queued' | 'processing' | 'succeeded' | 'failed';
+
+export interface GenerationJobInfo {
+  id: string;
+  status: GenerationJobStatus;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  image?: GeneratedImagePayload;
+  error?: string;
+}
+
 export interface SavedImage {
   id: number;
   prompt: string;
@@ -402,6 +416,41 @@ export async function generateImage(payload: {
     true,
   );
   return { image: normalizeGeneratedImage(result.image) };
+}
+
+export async function startGenerateImageJob(payload: {
+  prompt: string;
+  model: string;
+  dimensions: string;
+  imageSize?: string;
+  quality?: string;
+  optimizeChineseText?: boolean;
+  reference_images: ReferenceUploadInput[];
+}) {
+  const result = await request<{ job: GenerationJobInfo }>(
+    '/api/generate/jobs',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    true,
+  );
+  return {
+    job: {
+      ...result.job,
+      image: result.job.image ? normalizeGeneratedImage(result.job.image) : undefined,
+    },
+  };
+}
+
+export async function fetchGenerateImageJob(jobId: string) {
+  const result = await request<{ job: GenerationJobInfo }>(`/api/generate/jobs/${encodeURIComponent(jobId)}`, {}, true);
+  return {
+    job: {
+      ...result.job,
+      image: result.job.image ? normalizeGeneratedImage(result.job.image) : undefined,
+    },
+  };
 }
 
 export async function fetchUserImages(category?: ImageCategory) {
