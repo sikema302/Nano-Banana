@@ -3009,7 +3009,7 @@ function normalizePublicReferenceImages(value: unknown) {
         normalizeString(record.fileUri)
       );
     })
-    .filter((item: string) => /^https?:\/\//i.test(item));
+    .filter(isReferenceImageInput);
 }
 
 function isReferenceImageInput(value: string) {
@@ -3714,13 +3714,7 @@ async function start() {
         ...extractGeminiReferenceImages(req.body),
       ]),
     );
-    const remoteReferenceImages = rawReferenceImages.filter((item) => /^https?:\/\//i.test(item));
-    const inlineReferenceInputs = toReferenceUploadInputs(rawReferenceImages.filter((item) => /^data:image\//i.test(item)));
-    const temporaryReferenceImages = await persistTemporaryReferenceImages(inlineReferenceInputs);
-    const temporaryReferenceUrls = temporaryReferenceImages
-      .map((item) => toPublicAssetUrl(req, item))
-      .filter((item) => /^https?:\/\//i.test(item));
-    const referenceImages = Array.from(new Set([...remoteReferenceImages, ...temporaryReferenceUrls]));
+    const referenceImages = rawReferenceImages.filter(isReferenceImageInput);
     const dimensions = normalizeString(req.body?.dimensions || req.body?.aspectRatio) || '1:1';
     req.body = {
       ...asPlainObject(req.body),
@@ -3746,11 +3740,7 @@ async function start() {
       return originalJson(body);
     }) as Response['json'];
 
-    try {
-      await publicGenerateHandler(req, res);
-    } finally {
-      await cleanupTemporaryReferenceImages(temporaryReferenceImages);
-    }
+    await publicGenerateHandler(req, res);
   };
 
   [
