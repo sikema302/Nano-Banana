@@ -175,6 +175,25 @@ type PublicApiKeyRecord = {
   revokedAt?: string;
 };
 
+type PublicGenerateInput = {
+  apiKey: string;
+  prompt: string;
+  model: string;
+  dimensions: string;
+  requestedImageSize: string;
+  requestedQuality: string;
+  optimizeChineseText: boolean;
+  referenceImages: string[];
+};
+
+type PublicGenerateResult = {
+  image: GeneratedImagePayload;
+  usage: {
+    creditsUsed: number;
+    remainingCredits: number;
+  };
+};
+
 type SqlDatabase = {
   run: (sql: string, params?: unknown[]) => void;
   exec: (sql: string) => Array<{ columns: string[]; values: unknown[][] }>;
@@ -2973,6 +2992,150 @@ async function cleanupTemporaryReferenceImages(referenceImages: string[]) {
   );
 }
 
+function asPlainObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function normalizePublicReferenceImages(value: unknown) {
+  const rawReferenceImages = Array.isArray(value) ? value : [];
+  return rawReferenceImages
+    .map((item: unknown) => {
+      if (typeof item === 'string') return item;
+      const record = asPlainObject(item);
+      return (
+        normalizeString(record.data) ||
+        normalizeString(record.url) ||
+        normalizeString(record.file_uri) ||
+        normalizeString(record.fileUri)
+      );
+    })
+    .filter((item: string) => /^https?:\/\//i.test(item));
+}
+
+function extractGeminiTextParts(value: unknown): string[] {
+  if (typeof value === 'string') return [];
+  if (Array.isArray(value)) return value.flatMap((item) => extractGeminiTextParts(item));
+
+  const record = asPlainObject(value);
+  const text = normalizeString(record.text);
+  const current = text ? [text] : [];
+  const parts = Array.isArray(record.parts) ? extractGeminiTextParts(record.parts) : [];
+  const contents = Array.isArray(record.contents) ? extractGeminiTextParts(record.contents) : [];
+  const content = record.content ? extractGeminiTextParts(record.content) : [];
+  return [...current, ...parts, ...contents, ...content];
+}
+
+function extractGeminiReferenceImages(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => extractGeminiReferenceImages(item));
+
+  const record = asPlainObject(value);
+  const inlineData = asPlainObject(record.inline_data || record.inlineData);
+  const fileData = asPlainObject(record.file_data || record.fileData);
+  const fileUri = normalizeString(fileData.file_uri || fileData.fileUri);
+  const mimeType = normalizeString(inlineData.mime_type || inlineData.mimeType);
+  const inlineBase64 = normalizeString(inlineData.data);
+  const inlineImage = mimeType.startsWith('image/') && inlineBase64 ? `data:${mimeType};base64,${inlineBase64}` : '';
+  const parts = Array.isArray(record.parts) ? extractGeminiReferenceImages(record.parts) : [];
+  const contents = Array.isArray(record.contents) ? extractGeminiReferenceImages(record.contents) : [];
+  const content = record.content ? extractGeminiReferenceImages(record.content) : [];
+  return [fileUri, inlineImage, ...parts, ...contents, ...content].filter((item) => /^https?:\/\//i.test(item));
+}
+
+function parseGeminiModelAction(value: string) {
+  const normalized = normalizeString(value);
+  const [model, action = 'generateContent'] = normalized.split(':');
+  return {
+    model: model || 'nano-banana-pro',
+    action,
+  };
+}
+
+function mimeTypeFromImagePath(value: string) {
+  const normalized = normalizeString(value).toLowerCase();
+  if (normalized.includes('.jpg') || normalized.includes('.jpeg')) return 'image/jpeg';
+  if (normalized.includes('.webp')) return 'image/webp';
+  if (normalized.includes('.gif')) return 'image/gif';
+  if (normalized.includes('.svg')) return 'image/svg+xml';
+  return 'image/png';
+}
+
+async function readImageAsBase64(req: Request, imagePath: string) {
+  const publicUrl = toPublicAssetUrl(req, imagePath) || imagePath;
+  let buffer: Buffer | null = null;
+  let mimeType = mimeTypeFromImagePath(publicUrl);
+
+  try {
+    const parsed = new URL(publicUrl);
+    const localPath = path.resolve(ROOT_DIR, decodeURIComponent(parsed.pathname).replace(/^\/+/, ''));
+    if (localPath.startsWith(UPLOADS_DIR)) {
+      buffer = await fs.readFile(localPath);
+    }
+  } catch {
+    const localPath = path.resolve(ROOT_DIR, imagePath.replace(/^\/+/, ''));
+    if (localPath.startsWith(UPLOADS_DIR)) {
+      buffer = await fs.readFile(localPath).catch(() => null);
+    }
+  }
+
+  if (!buffer && /^https?:\/\//i.test(publicUrl)) {
+    const response = await fetch(publicUrl);
+    if (response.ok) {
+      const contentType = normalizeString(response.headers.get('content-type')).split(';')[0];
+      if (contentType.startsWith('image/')) mimeType = contentType;
+      buffer = Buffer.from(await response.arrayBuffer());
+    }
+  }
+
+  if (!buffer) return null;
+  return {
+    mimeType,
+    data: buffer.toString('base64'),
+  };
+}
+
+async function toGeminiGenerateContentResponse(req: Request, result: PublicGenerateResult) {
+  const imageUrl = result.image.imagePath;
+  const inlineImage = await readImageAsBase64(req, imageUrl).catch(() => null);
+  const parts: Array<Record<string, unknown>> = [
+    {
+      text: JSON.stringify({
+        imagePath: imageUrl,
+        usage: result.usage,
+      }),
+    },
+  ];
+
+  if (inlineImage) {
+    parts.push({
+      inline_data: {
+        mime_type: inlineImage.mimeType,
+        data: inlineImage.data,
+      },
+      inlineData: {
+        mimeType: inlineImage.mimeType,
+        data: inlineImage.data,
+      },
+    });
+  }
+
+  return {
+    candidates: [
+      {
+        content: {
+          role: 'model',
+          parts,
+        },
+        finishReason: 'STOP',
+        index: 0,
+      },
+    ],
+    pixory: {
+      image: result.image,
+      usage: result.usage,
+    },
+  };
+}
+
 async function start() {
   if (!IS_VERCEL) {
     await ensureRuntimeDirectories();
@@ -3487,6 +3650,57 @@ async function start() {
     }
   };
 
+  const geminiGenerateContentHandler = async (req: Request, res: Response) => {
+    const { model, action } = parseGeminiModelAction(req.params.modelAction);
+    if (action !== 'generateContent') {
+      res.status(404).json({ error: `Unsupported Gemini action: ${action}` });
+      return;
+    }
+
+    const geminiApiKey =
+      normalizeString(req.query.key) ||
+      normalizeString(req.headers['x-goog-api-key']) ||
+      normalizeString(asPlainObject(req.body).api_key);
+    if (geminiApiKey && !req.headers.authorization && !req.headers['x-api-key']) {
+      req.headers.authorization = `Bearer ${geminiApiKey}`;
+    }
+
+    const prompt = normalizeString(req.body?.prompt) || extractGeminiTextParts(req.body).join('\n\n').trim();
+    const referenceImages = Array.from(
+      new Set([
+        ...normalizePublicReferenceImages(req.body?.images),
+        ...normalizePublicReferenceImages(req.body?.reference_images),
+        ...extractGeminiReferenceImages(req.body),
+      ]),
+    );
+    const dimensions = normalizeString(req.body?.dimensions || req.body?.aspectRatio) || '1:1';
+    req.body = {
+      ...asPlainObject(req.body),
+      prompt,
+      model,
+      dimensions,
+      aspectRatio: dimensions,
+      images: referenceImages,
+      reference_images: referenceImages,
+    };
+
+    const originalJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      const payload = asPlainObject(body);
+      const image = asPlainObject(payload.image);
+      if (normalizeString(image.imagePath)) {
+        void toGeminiGenerateContentResponse(req, body as PublicGenerateResult)
+          .then((geminiBody) => originalJson(geminiBody))
+          .catch(() => originalJson(body));
+        return res;
+      }
+
+      return originalJson(body);
+    }) as Response['json'];
+
+    await publicGenerateHandler(req, res);
+  };
+
   [
     '/api/v1/generate',
     '/v1/api/generate',
@@ -3495,6 +3709,10 @@ async function start() {
     '/v1/chat/completions',
     '/v1/api/nano-banana',
   ].forEach((path) => app.post(path, publicGenerateHandler));
+
+  ['/v1beta/models/:modelAction', '/v1/api/nano-banana/v1beta/models/:modelAction'].forEach((path) =>
+    app.post(path, geminiGenerateContentHandler),
+  );
 
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
