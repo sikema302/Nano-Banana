@@ -356,9 +356,9 @@ const SUPABASE_SYNC_TABLES = [
   },
   {
     name: 'generations',
-    select: 'id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at',
+    select: 'id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at',
     insert:
-      'INSERT INTO generations (id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO generations (id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     onConflict: 'id',
   },
   {
@@ -639,6 +639,7 @@ function toGeneration(row: Record<string, unknown>) {
     imageSize: String(row.image_size || ''),
     imageUrl: String(row.image_path || ''),
     creditsUsed: Number(row.credits_used || 0),
+    apiRequestMs: Number(row.api_request_ms || 0),
     referenceImages: parseReferenceImages(row.reference_images),
     inviteCode: row.invite_code ? String(row.invite_code) : '',
     createdAt: String(row.created_at || ''),
@@ -1434,6 +1435,7 @@ function ensureSchema(db: SqlDatabase) {
       image_size TEXT NOT NULL DEFAULT '',
       image_path TEXT NOT NULL,
       credits_used INTEGER NOT NULL,
+      api_request_ms INTEGER NOT NULL DEFAULT 0,
       reference_images TEXT NOT NULL,
       created_at TEXT NOT NULL
     )
@@ -1476,6 +1478,9 @@ function ensureSchema(db: SqlDatabase) {
   );
   if (!generationColumns.has('image_size')) {
     db.run("ALTER TABLE generations ADD COLUMN image_size TEXT NOT NULL DEFAULT ''");
+  }
+  if (!generationColumns.has('api_request_ms')) {
+    db.run('ALTER TABLE generations ADD COLUMN api_request_ms INTEGER NOT NULL DEFAULT 0');
   }
 
   const inviteCodeColumns = new Set(
@@ -3337,6 +3342,7 @@ async function start() {
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const createdAt = nowIso();
+      const apiRequestStartedAt = Date.now();
       const generatedImageSource = await callVisionaryGeneration({
         prompt,
         modelId,
@@ -3346,6 +3352,7 @@ async function start() {
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: Array.from(new Set(referenceImages)),
       });
+      const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
       const imagePath = await persistGeneratedImage(generatedImageSource);
       const username = `api-${reservedKey.name}`.slice(0, 80);
 
@@ -3361,6 +3368,7 @@ async function start() {
           imageSize,
           imagePath,
           creditsUsed,
+          apiRequestMs,
           referenceImages,
           createdAt,
         });
@@ -3379,9 +3387,10 @@ async function start() {
                 image_size,
                 image_path,
                 credits_used,
+                api_request_ms,
                 reference_images,
                 created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
               `api-key:${reservedKey!.id}`,
@@ -3393,6 +3402,7 @@ async function start() {
               imageSize,
               imagePath,
               creditsUsed,
+              apiRequestMs,
               serializeReferenceImages(referenceImages),
               createdAt,
             ],
@@ -3503,7 +3513,9 @@ async function start() {
 
       const createdAt = nowIso();
       let imagePath = '';
+      let apiRequestMs = 0;
       try {
+        const apiRequestStartedAt = Date.now();
         const generatedImageSource = await callVisionaryGeneration({
           prompt,
           modelId,
@@ -3513,6 +3525,7 @@ async function start() {
           optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
           images: uniqueModelReferenceImages,
         });
+        apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
       } finally {
         await cleanupTemporaryReferenceImages(temporaryReferenceImages);
@@ -3563,6 +3576,7 @@ async function start() {
           imageSize,
           imagePath,
           creditsUsed,
+          apiRequestMs,
           referenceImages,
           createdAt,
         });
@@ -3582,9 +3596,10 @@ async function start() {
                 image_size,
                 image_path,
                 credits_used,
+                api_request_ms,
                 reference_images,
                 created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
               req.authUser!.userId,
@@ -3596,6 +3611,7 @@ async function start() {
               imageSize,
               imagePath,
               creditsUsed,
+              apiRequestMs,
               serializeReferenceImages(referenceImages),
               createdAt,
             ],
@@ -3629,6 +3645,7 @@ async function start() {
           image_size: row.image_size,
           image_path: row.image_path,
           credits_used: row.credits_used,
+          api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
         }));
@@ -3641,7 +3658,7 @@ async function start() {
         return runQuery<Record<string, unknown>>(
           db,
           `
-            SELECT id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at
+            SELECT id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at
             FROM generations
             WHERE user_id = ?
             ORDER BY datetime(created_at) DESC, id DESC
@@ -3758,6 +3775,7 @@ async function start() {
           image_size: row.image_size,
           image_path: row.image_path,
           credits_used: row.credits_used,
+          api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
           invite_code: row.invite_code,
@@ -3929,6 +3947,7 @@ async function start() {
               g.image_size,
               g.image_path,
               g.credits_used,
+              g.api_request_ms,
               g.reference_images,
               g.created_at,
               COALESCE((
@@ -4065,6 +4084,7 @@ async function start() {
           image_size: row.image_size,
           image_path: row.image_path,
           credits_used: row.credits_used,
+          api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
           invite_code: row.invite_code,
@@ -4272,6 +4292,7 @@ async function start() {
           image_size: row.image_size,
           image_path: row.image_path,
           credits_used: row.credits_used,
+          api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
           invite_code: row.invite_code,

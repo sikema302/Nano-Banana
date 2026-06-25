@@ -36,6 +36,7 @@ create table if not exists public.generations (
   image_size text not null default '',
   image_path text not null,
   credits_used integer not null,
+  api_request_ms integer not null default 0,
   reference_images text not null,
   created_at text not null
 );

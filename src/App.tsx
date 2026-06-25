@@ -248,6 +248,13 @@ function formatTime(value: string) {
   }).format(date);
 }
 
+function formatApiRequestTime(value?: number) {
+  const milliseconds = Number(value || 0);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return '-';
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  return `${(milliseconds / 1000).toFixed(1)} s`;
+}
+
 function formatDateKey(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -656,6 +663,7 @@ function HistoryView({
                 <th className="px-4 py-2 font-medium">模型</th>
                 <th className="px-4 py-2 font-medium">比例</th>
                 <th className="px-4 py-2 font-medium">积分</th>
+                <th className="px-4 py-2 font-medium">接口耗时</th>
                 <th className="px-4 py-2 font-medium">时间</th>
               </tr>
             </thead>
@@ -674,6 +682,7 @@ function HistoryView({
                     {item.imageSize ? ` / ${item.imageSize}` : ''}
                   </td>
                   <td className="px-4 py-2 text-sky-200">{item.creditsUsed}</td>
+                  <td className="px-4 py-2 text-emerald-200">{formatApiRequestTime(item.apiRequestMs)}</td>
                   <td className="px-4 py-2">{formatTime(item.createdAt)}</td>
                 </tr>
               ))}
@@ -2450,7 +2459,7 @@ function AdminView({
                   {filteredRecords.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1100px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1180px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-24 px-3 py-2 font-medium">图片</th>
@@ -2459,6 +2468,7 @@ function AdminView({
                           <th className="px-3 py-2 font-medium">模型</th>
                           <th className="px-3 py-2 font-medium">比例 / 分辨率</th>
                           <th className="px-3 py-2 font-medium">积分消耗</th>
+                          <th className="px-3 py-2 font-medium">接口耗时</th>
                           <th className="px-3 py-2 font-medium">提示词</th>
                           <th className="px-3 py-2 font-medium">时间</th>
                         </tr>
@@ -2479,6 +2489,7 @@ function AdminView({
                               {item.imageSize ? ` / ${item.imageSize}` : ''}
                             </td>
                             <td className={`px-3 py-3 font-black ${getCreditsTone(item.creditsUsed)}`}>{item.creditsUsed}</td>
+                            <td className="px-3 py-3 font-semibold text-emerald-200">{formatApiRequestTime(item.apiRequestMs)}</td>
                             <td className="max-w-[360px] px-3 py-3 leading-5" title={item.prompt}>{truncatePrompt(item.prompt)}</td>
                             <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
                           </tr>

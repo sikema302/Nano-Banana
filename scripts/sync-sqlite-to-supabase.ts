@@ -124,7 +124,7 @@ async function main() {
       'generations',
       runQuery(
         db,
-        'select id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, reference_images, created_at from generations',
+        'select id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at from generations',
       ),
       'id',
     );

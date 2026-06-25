@@ -47,6 +47,7 @@ export interface GenerationRecord {
   imageSize?: string;
   imageUrl: string;
   creditsUsed: number;
+  apiRequestMs?: number;
   referenceImages: string[];
   inviteCode?: string;
   createdAt: string;

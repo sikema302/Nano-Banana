@@ -36,6 +36,7 @@ type GenerationRow = {
   image_size: string;
   image_path: string;
   credits_used: number;
+  api_request_ms: number;
   reference_images: string;
   created_at: string;
   invite_code?: string;
@@ -77,6 +78,7 @@ const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
 const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhrKpGbUUiHCaQrYCq';
 const IMAGE_RETENTION_DAYS = 7;
+const GENERATION_API_REQUEST_MS_SETTING_PREFIX = 'generation_api_request_ms:';
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
@@ -138,10 +140,19 @@ function toGenerationRow(row: Record<string, unknown>): GenerationRow {
     image_size: String(row.image_size || ''),
     image_path: String(row.image_path || ''),
     credits_used: Number(row.credits_used || 0),
+    api_request_ms: Number(row.api_request_ms || 0),
     reference_images: String(row.reference_images || '[]'),
     created_at: String(row.created_at || ''),
     invite_code: row.invite_code == null ? undefined : String(row.invite_code),
   };
+}
+
+function generationApiRequestMsSettingKey(generationId: string | number) {
+  return `${GENERATION_API_REQUEST_MS_SETTING_PREFIX}${generationId}`;
+}
+
+function isMissingApiRequestMsColumn(error: { message?: string } | null | undefined): boolean {
+  return Boolean(error?.message && error.message.includes('api_request_ms'));
 }
 
 function toImageRow(row: Record<string, unknown>): ImageRow {
@@ -730,12 +741,14 @@ export async function insertGeneration(record: {
   imageSize: string;
   imagePath: string;
   creditsUsed: number;
+  apiRequestMs?: number;
   referenceImages: string[];
   createdAt: string;
 }): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const id = await getNextNumericId('generations');
-    const { error } = await getSupabase().from('generations').insert({
+    const apiRequestMs = Math.max(0, Math.floor(record.apiRequestMs || 0));
+    const insertPayload = {
       id,
       user_id: record.userId,
       username: record.username,
@@ -746,12 +759,30 @@ export async function insertGeneration(record: {
       image_size: record.imageSize,
       image_path: record.imagePath,
       credits_used: record.creditsUsed,
+      api_request_ms: apiRequestMs,
       reference_images: JSON.stringify(record.referenceImages),
       created_at: record.createdAt,
-    });
+    };
+    const { error } = await getSupabase().from('generations').insert(insertPayload);
 
     if (!error) {
       return;
+    }
+
+    if (isMissingApiRequestMsColumn(error)) {
+      const legacyPayload = { ...insertPayload };
+      delete (legacyPayload as Partial<typeof insertPayload>).api_request_ms;
+      const { error: legacyError } = await getSupabase().from('generations').insert(legacyPayload);
+      if (!legacyError) {
+        if (apiRequestMs > 0) {
+          await setSetting(generationApiRequestMsSettingKey(id), String(apiRequestMs));
+        }
+        return;
+      }
+      if (!isPrimaryKeyConflict(legacyError)) {
+        throw new Error(`Insert generation failed: ${legacyError.message}`);
+      }
+      continue;
     }
 
     if (!isPrimaryKeyConflict(error)) {
@@ -769,7 +800,28 @@ export async function getUserGenerations(userId: string): Promise<GenerationRow[
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
-  return (data || []).map((row) => toGenerationRow(row as Record<string, unknown>));
+  return hydrateGenerationApiRequestMs((data || []).map((row) => toGenerationRow(row as Record<string, unknown>)));
+}
+
+async function hydrateGenerationApiRequestMs(records: GenerationRow[]): Promise<GenerationRow[]> {
+  const missingRecords = records.filter((record) => !record.api_request_ms);
+  if (missingRecords.length === 0) return records;
+
+  const keys = missingRecords.map((record) => generationApiRequestMsSettingKey(record.id));
+  const { data, error } = await getSupabase()
+    .from('app_settings')
+    .select('key, value')
+    .in('key', keys);
+  if (error || !data || data.length === 0) return records;
+
+  const valueByKey = new Map(
+    (data as Array<{ key: string; value: string }>).map((item) => [item.key, Number(item.value || 0)]),
+  );
+
+  return records.map((record) => ({
+    ...record,
+    api_request_ms: record.api_request_ms || Math.max(0, Math.floor(valueByKey.get(generationApiRequestMsSettingKey(record.id)) || 0)),
+  }));
 }
 
 export async function getGenerationSummaries(): Promise<
@@ -906,7 +958,9 @@ export async function getGenerationsWithInviteCode(
     .range(from, to);
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
 
-  const records = (data || []).map((row) => toGenerationRow(row as Record<string, unknown>));
+  const records = await hydrateGenerationApiRequestMs(
+    (data || []).map((row) => toGenerationRow(row as Record<string, unknown>)),
+  );
 
   // 为每条记录附加 invite_code
   const userIds = [...new Set(records.map((r) => r.user_id))];
