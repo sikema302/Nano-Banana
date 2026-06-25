@@ -244,11 +244,45 @@ function stringifyApiError(value: unknown): string {
   );
 }
 
+function stripHtml(value: string) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeHttpErrorText(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const titleMatch = trimmed.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const headingMatch = trimmed.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const normalized = stripHtml(titleMatch?.[1] || headingMatch?.[1] || trimmed);
+  const lower = normalized.toLowerCase();
+
+  if (lower.includes('504 gateway time-out') || lower.includes('504 gateway timeout')) {
+    return '图像服务响应超时，请稍后重试。';
+  }
+  if (lower.includes('502 bad gateway')) {
+    return '图像服务网关异常，请稍后重试。';
+  }
+  if (lower.includes('503 service unavailable')) {
+    return '图像服务暂时不可用，请稍后重试。';
+  }
+  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return normalized || '服务接口返回异常，请稍后重试。';
+  }
+
+  return normalized;
+}
+
 function getApiErrorMessage(payload: unknown, responseText: string) {
   const fromPayload = stringifyApiError(payload);
-  if (fromPayload) return fromPayload;
+  if (fromPayload) return normalizeHttpErrorText(fromPayload);
 
-  const trimmedText = responseText.trim();
+  const trimmedText = normalizeHttpErrorText(responseText);
   if (trimmedText) return trimmedText;
 
   return '服务接口返回异常';

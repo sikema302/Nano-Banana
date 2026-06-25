@@ -2714,6 +2714,7 @@ export default function App() {
   const [healthText, setHealthText] = useState('正在检查本地服务...');
   const [healthError, setHealthError] = useState('');
   const [notice, setNotice] = useState('');
+  const [generationError, setGenerationError] = useState('');
   const [wechatCopied, setWechatCopied] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'invite'>('login');
@@ -3310,6 +3311,7 @@ export default function App() {
       startedAt: Date.now(),
     });
     setNotice('');
+    setGenerationError('');
     const generatedImages: DisplayImage[] = [];
 
     try {
@@ -3376,8 +3378,8 @@ export default function App() {
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
       }
-      setNotice(noticeMessage);
-      window.alert(noticeMessage);
+      setNotice('');
+      setGenerationError(noticeMessage);
     } finally {
       setLoading(false);
       setGenerationProgress(null);
@@ -3825,6 +3827,11 @@ export default function App() {
               {loadingUserData ? <p className="mt-1 text-zinc-400">正在同步你的图片数据...</p> : null}
             </div>
 
+            {generationError ? (
+              <div className="app-alert app-alert-error">
+                {generationError}
+              </div>
+            ) : null}
             {notice ? (
               <div className="app-alert">
                 {notice}
@@ -4270,6 +4277,14 @@ export default function App() {
                   </button>
                 ) : null}
               </div>
+
+              {generationError ? (
+                <div className="app-alert app-alert-error">{generationError}</div>
+              ) : null}
+
+              {notice ? (
+                <div className="app-alert">{notice}</div>
+              ) : null}
 
               {healthError ? (
                 <div className="app-alert app-alert-error">{healthError}</div>
