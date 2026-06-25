@@ -3012,16 +3012,40 @@ function normalizePublicReferenceImages(value: unknown) {
     .filter((item: string) => /^https?:\/\//i.test(item));
 }
 
+function isReferenceImageInput(value: string) {
+  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
+}
+
+function normalizeGeminiReferenceImages(value: unknown) {
+  const rawReferenceImages = Array.isArray(value) ? value : [];
+  return rawReferenceImages
+    .map((item: unknown) => {
+      if (typeof item === 'string') return item;
+      const record = asPlainObject(item);
+      return (
+        normalizeString(record.data) ||
+        normalizeString(record.url) ||
+        normalizeString(record.file_uri) ||
+        normalizeString(record.fileUri)
+      );
+    })
+    .filter(isReferenceImageInput);
+}
+
 function extractGeminiTextParts(value: unknown): string[] {
-  if (typeof value === 'string') return [];
+  if (typeof value === 'string') return [value];
   if (Array.isArray(value)) return value.flatMap((item) => extractGeminiTextParts(item));
 
   const record = asPlainObject(value);
-  const text = normalizeString(record.text);
-  const current = text ? [text] : [];
+  const directText =
+    normalizeString(record.text) ||
+    normalizeString(record.prompt) ||
+    normalizeString(record.message) ||
+    (typeof record.content === 'string' ? normalizeString(record.content) : '');
+  const current = directText ? [directText] : [];
   const parts = Array.isArray(record.parts) ? extractGeminiTextParts(record.parts) : [];
   const contents = Array.isArray(record.contents) ? extractGeminiTextParts(record.contents) : [];
-  const content = record.content ? extractGeminiTextParts(record.content) : [];
+  const content = record.content && typeof record.content !== 'string' ? extractGeminiTextParts(record.content) : [];
   return [...current, ...parts, ...contents, ...content];
 }
 
@@ -3038,7 +3062,22 @@ function extractGeminiReferenceImages(value: unknown): string[] {
   const parts = Array.isArray(record.parts) ? extractGeminiReferenceImages(record.parts) : [];
   const contents = Array.isArray(record.contents) ? extractGeminiReferenceImages(record.contents) : [];
   const content = record.content ? extractGeminiReferenceImages(record.content) : [];
-  return [fileUri, inlineImage, ...parts, ...contents, ...content].filter((item) => /^https?:\/\//i.test(item));
+  return [fileUri, inlineImage, ...parts, ...contents, ...content].filter(isReferenceImageInput);
+}
+
+function toReferenceUploadInputs(dataUrls: string[]): ReferenceUploadInput[] {
+  return dataUrls
+    .map((data, index) => {
+      const match = data.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+      const mimeType = match?.[1] || '';
+      if (!mimeType) return null;
+      return {
+        name: `gemini-reference-${index}.${fileExtensionFromMimeType(mimeType)}`,
+        mimeType,
+        data,
+      };
+    })
+    .filter((item): item is ReferenceUploadInput => Boolean(item));
 }
 
 function parseGeminiModelAction(value: string) {
@@ -3665,14 +3704,23 @@ async function start() {
       req.headers.authorization = `Bearer ${geminiApiKey}`;
     }
 
-    const prompt = normalizeString(req.body?.prompt) || extractGeminiTextParts(req.body).join('\n\n').trim();
-    const referenceImages = Array.from(
+    const prompt =
+      normalizeString(req.body?.prompt || req.body?.text || req.body?.message) ||
+      extractGeminiTextParts(req.body).join('\n\n').trim();
+    const rawReferenceImages = Array.from(
       new Set([
-        ...normalizePublicReferenceImages(req.body?.images),
-        ...normalizePublicReferenceImages(req.body?.reference_images),
+        ...normalizeGeminiReferenceImages(req.body?.images),
+        ...normalizeGeminiReferenceImages(req.body?.reference_images),
         ...extractGeminiReferenceImages(req.body),
       ]),
     );
+    const remoteReferenceImages = rawReferenceImages.filter((item) => /^https?:\/\//i.test(item));
+    const inlineReferenceInputs = toReferenceUploadInputs(rawReferenceImages.filter((item) => /^data:image\//i.test(item)));
+    const temporaryReferenceImages = await persistTemporaryReferenceImages(inlineReferenceInputs);
+    const temporaryReferenceUrls = temporaryReferenceImages
+      .map((item) => toPublicAssetUrl(req, item))
+      .filter((item) => /^https?:\/\//i.test(item));
+    const referenceImages = Array.from(new Set([...remoteReferenceImages, ...temporaryReferenceUrls]));
     const dimensions = normalizeString(req.body?.dimensions || req.body?.aspectRatio) || '1:1';
     req.body = {
       ...asPlainObject(req.body),
@@ -3698,7 +3746,11 @@ async function start() {
       return originalJson(body);
     }) as Response['json'];
 
-    await publicGenerateHandler(req, res);
+    try {
+      await publicGenerateHandler(req, res);
+    } finally {
+      await cleanupTemporaryReferenceImages(temporaryReferenceImages);
+    }
   };
 
   [
