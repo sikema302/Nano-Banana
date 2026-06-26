@@ -585,7 +585,7 @@ function isLocalHostname(hostname: string) {
 
 function getConfiguredPublicOrigin() {
   if (APP_URL) return stripTrailingSlash(APP_URL);
-  if (normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN)) return stripTrailingSlash(CANONICAL_WEB_ORIGIN);
+  if (CANONICAL_WEB_ORIGIN) return stripTrailingSlash(CANONICAL_WEB_ORIGIN);
   if (normalizeEnvValue(process.env.CANONICAL_WEB_HOST)) return `https://${normalizeEnvValue(process.env.CANONICAL_WEB_HOST)}`;
   return '';
 }
@@ -3826,6 +3826,8 @@ async function start() {
         headers: {
           Authorization: job.authHeader,
           'Content-Type': 'application/json',
+          'X-Forwarded-Host': CANONICAL_WEB_HOST,
+          'X-Forwarded-Proto': 'https',
         },
         body: JSON.stringify(job.requestBody),
       });
