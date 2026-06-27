@@ -418,7 +418,13 @@ const tokenSecret =
   VISIONARY_BANANA_PRO_API_KEY ||
   'visionary-local-dev-secret';
 let writeQueue = Promise.resolve();
-let imageCleanupPromise: Promise<void> | null = null;
+let imageCleanupPromise: Promise<{
+  cutoffIso: string;
+  deletedGenerations: number;
+  deletedImages: number;
+  deletedReferenceFiles: number;
+  deletedGeneratedFiles: number;
+}> | null = null;
 
 // 鈹€鈹€鈹€ 閫氱敤杈呭姪鍑芥暟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -2550,7 +2556,7 @@ async function purgeExpiredGeneratedFiles(retentionDays = IMAGE_RETENTION_DAYS) 
   return deletedFiles;
 }
 
-async function runImageRetentionCleanup(reason: string) {
+async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RETENTION_DAYS) {
   if (imageCleanupPromise) {
     return imageCleanupPromise;
   }
@@ -2559,27 +2565,46 @@ async function runImageRetentionCleanup(reason: string) {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const result = await db.purgeExpiredImageData(IMAGE_RETENTION_DAYS);
-        const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
-        const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(IMAGE_RETENTION_DAYS);
+        const result = await db.purgeExpiredImageData(retentionDays);
+        const deletedReferenceFiles = await purgeExpiredReferenceFiles(retentionDays);
+        const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
         if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
           console.log(
             `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
           );
         }
-        return;
+        return {
+          ...result,
+          deletedReferenceFiles,
+          deletedGeneratedFiles,
+        };
       }
 
-      const result = await withWriteDb((db) => purgeExpiredImageDataSqlite(db, IMAGE_RETENTION_DAYS));
-      const deletedReferenceFiles = await purgeExpiredReferenceFiles(IMAGE_RETENTION_DAYS);
-      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(IMAGE_RETENTION_DAYS);
+      const result = await withWriteDb((db) => purgeExpiredImageDataSqlite(db, retentionDays));
+      const deletedReferenceFiles = await purgeExpiredReferenceFiles(retentionDays);
+      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
       if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
         console.log(
           `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
         );
       }
+      return {
+        ...result,
+        deletedReferenceFiles,
+        deletedGeneratedFiles,
+      };
     } catch (error) {
       console.error(`[image-cleanup:${reason}] failed`, error);
+      if (reason.startsWith('manual')) {
+        throw error;
+      }
+      return {
+        cutoffIso: subtractDaysIso(retentionDays),
+        deletedGenerations: 0,
+        deletedImages: 0,
+        deletedReferenceFiles: 0,
+        deletedGeneratedFiles: 0,
+      };
     } finally {
       imageCleanupPromise = null;
     }
@@ -4648,6 +4673,23 @@ async function start() {
       res.json(payload);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch admin dashboard failed' });
+    }
+  });
+
+  app.post('/api/admin/image-cleanup', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const retentionDays = 5;
+      const result = await runImageRetentionCleanup('manual-5d', retentionDays);
+      const imageStorage = await getImageStorageStats();
+      res.json({
+        cleanup: {
+          retentionDays,
+          ...result,
+        },
+        imageStorage,
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Image cleanup failed' });
     }
   });
 

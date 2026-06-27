@@ -142,6 +142,15 @@ export interface AdminImageStorageStats {
   retentionDays: number;
 }
 
+export interface AdminImageCleanupResult {
+  retentionDays: number;
+  cutoffIso: string;
+  deletedGenerations: number;
+  deletedImages: number;
+  deletedReferenceFiles: number;
+  deletedGeneratedFiles: number;
+}
+
 export interface AdminRecordsStats {
   todayCreditsUsed: number;
   todayRecordCount: number;
@@ -502,6 +511,19 @@ export async function fetchAdminDashboard() {
     imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
   }>('/api/admin/dashboard', {}, true);
+}
+
+export async function cleanupAdminImages() {
+  return request<{
+    cleanup: AdminImageCleanupResult;
+    imageStorage: AdminImageStorageStats;
+  }>(
+    '/api/admin/image-cleanup',
+    {
+      method: 'POST',
+    },
+    true,
+  );
 }
 
 export async function fetchAdminInviteCodes(params: {

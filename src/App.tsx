@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import {
   clearSession,
+  cleanupAdminImages,
   createPublicApiKey,
   createInviteCode,
   createInviteCodesBatch,
@@ -1489,6 +1490,7 @@ function AdminView({
   onDeleteInviteCodesBatch,
   onRechargeInviteCode,
   onReclaimInviteCode,
+  onCleanupImages,
   onLoadSection,
   onPreview,
   onNotice,
@@ -1515,6 +1517,7 @@ function AdminView({
   onDeleteInviteCodesBatch: (codes: string[]) => Promise<string[]>;
   onRechargeInviteCode: (code: string, credits: number) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
+  onCleanupImages: () => Promise<void>;
   onLoadSection: (
     section: AdminSection,
     params?: {
@@ -1548,6 +1551,7 @@ function AdminView({
   const [generatedInviteCodes, setGeneratedInviteCodes] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
+  const [cleaningImages, setCleaningImages] = useState(false);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
   const [inviteSearchDraft, setInviteSearchDraft] = useState('');
@@ -1888,6 +1892,21 @@ function AdminView({
     }
   }
 
+  async function handleCleanupImages() {
+    if (cleaningImages) return;
+    const confirmed = window.confirm('确认清理 5 天前的本地图片和相关图片记录吗？');
+    if (!confirmed) return;
+
+    setCleaningImages(true);
+    try {
+      await onCleanupImages();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '图片清理失败');
+    } finally {
+      setCleaningImages(false);
+    }
+  }
+
   async function handleBulkDeleteInviteCodes() {
     const availableCodes = selectedInviteCodes.filter((code) => inviteCodes.some((item) => item.code === code));
 
@@ -2060,6 +2079,14 @@ function AdminView({
                     生成图保留在本地，参考图默认不落盘，本地图片按 {imageStorageStats.retentionDays} 天自动清理。
                   </p>
                 </div>
+                <button
+                  className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  disabled={cleaningImages}
+                  onClick={() => void handleCleanupImages()}
+                >
+                  {cleaningImages ? '清理中...' : '清理5天前图片'}
+                </button>
                 <span
                   className={
                     imageStorageStats.referenceStorageEnabled
@@ -3230,6 +3257,19 @@ export default function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码积分回收失败');
     }
+  }
+
+  async function handleCleanupImages() {
+    const payload = await cleanupAdminImages();
+    setAdminOverview((current) => ({
+      ...current,
+      imageStorageStats: payload.imageStorage,
+    }));
+    const cleanup = payload.cleanup;
+    setNotice(
+      `已清理5天前图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
+    );
+    void loadAdminSection('dashboard');
   }
 
   async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -4460,6 +4500,7 @@ export default function App() {
               onDeleteInviteCodesBatch={handleDeleteInviteCodesBatch}
               onRechargeInviteCode={handleRechargeInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
+              onCleanupImages={handleCleanupImages}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
               onNotice={setNotice}
