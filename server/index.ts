@@ -1136,10 +1136,23 @@ function modelNameFromId(modelId: string) {
 }
 
 function normalizeModelId(modelId: string) {
-  if (modelId === 'nano-banana-pro' || modelId === 'nano_banana_pro') return 'Nano_Banana_Pro';
-  if (modelId === 'nano-banana2' || modelId === 'Nano_Banana_2') return 'Nano_Banana_Pro';
-  if (modelId === 'dalle3-mini' || modelId === 'sdxl') return 'Nano_Banana_Pro';
-  return models.some((item) => item.id === modelId) ? modelId : 'gpt-image-2';
+  const normalized = normalizeString(modelId).toLowerCase();
+  const bananaAliases = [
+    'nano-banana-pro',
+    'nano_banana_pro',
+    'nano-banana2',
+    'nano_banana_2',
+    'gemini-3-pro-image-preview',
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash-image-preview',
+    'dalle3-mini',
+    'sdxl',
+  ];
+  if (bananaAliases.some((alias) => normalized === alias || normalized.endsWith(alias))) {
+    return 'Nano_Banana_Pro';
+  }
+
+  return models.find((item) => item.id.toLowerCase() === normalized)?.id || 'gpt-image-2';
 }
 
 function normalizeRatio(value: string, modelId: string) {
@@ -3097,6 +3110,15 @@ function extractGeminiTextParts(value: unknown): string[] {
   return [...current, ...parts, ...contents, ...content];
 }
 
+function stripGeminiTransportParameters(value: string) {
+  return value
+    .replace(
+      /\s*\[\s*(?:(?:分辨率|比例)\s*:\s*[^,\]]+\s*)(?:,\s*(?:分辨率|比例)\s*:\s*[^,\]]+\s*)?\]\s*$/i,
+      '',
+    )
+    .trim();
+}
+
 function extractGeminiReferenceImages(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap((item) => extractGeminiReferenceImages(item));
 
@@ -3618,8 +3640,12 @@ async function start() {
         ? req.body.images
         : [];
     const referenceImages = rawReferenceImages
-      .map((item: unknown) => (typeof item === 'string' ? item : normalizeString((item as { data?: string })?.data)))
-      .filter((item: string) => /^https?:\/\//i.test(item));
+      .map((item: unknown) => {
+        if (typeof item === 'string') return item;
+        const record = asPlainObject(item);
+        return normalizeString(record.data || record.url || record.file_uri || record.fileUri);
+      })
+      .filter(isReferenceImageInput);
 
     if (!apiKey) {
       res.status(401).json({ error: 'X-API-Key is required' });
@@ -3752,9 +3778,13 @@ async function start() {
       req.headers.authorization = `Bearer ${geminiApiKey}`;
     }
 
-    const prompt =
+    const rawPrompt =
       normalizeString(req.body?.prompt || req.body?.text || req.body?.message) ||
       extractGeminiTextParts(req.body).join('\n\n').trim();
+    const prompt = stripGeminiTransportParameters(rawPrompt);
+    const requestBody = asPlainObject(req.body);
+    const generationConfig = asPlainObject(requestBody.generationConfig || requestBody.generation_config);
+    const imageConfig = asPlainObject(generationConfig.imageConfig || generationConfig.image_config);
     const rawReferenceImages = Array.from(
       new Set([
         ...normalizeGeminiReferenceImages(req.body?.images),
@@ -3763,13 +3793,26 @@ async function start() {
       ]),
     );
     const referenceImages = rawReferenceImages.filter(isReferenceImageInput);
-    const dimensions = normalizeString(req.body?.dimensions || req.body?.aspectRatio) || '1:1';
+    const dimensions = normalizeString(
+      requestBody.dimensions ||
+      requestBody.aspectRatio ||
+      requestBody.aspect_ratio ||
+      imageConfig.aspectRatio ||
+      imageConfig.aspect_ratio,
+    ) || '1:1';
+    const imageSize = normalizeString(
+      requestBody.imageSize ||
+      requestBody.image_size ||
+      imageConfig.imageSize ||
+      imageConfig.image_size,
+    );
     req.body = {
-      ...asPlainObject(req.body),
+      ...requestBody,
       prompt,
       model,
       dimensions,
       aspectRatio: dimensions,
+      imageSize,
       images: referenceImages,
       reference_images: referenceImages,
     };
