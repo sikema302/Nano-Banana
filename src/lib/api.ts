@@ -602,6 +602,16 @@ export async function fetchPublicApiKeys() {
   return request<{ keys: PublicApiKeyInfo[] }>('/api/admin/api-keys', {}, true);
 }
 
+export async function fetchPublicApiKeyBalance(apiKey: string) {
+  return request<{ balance: CreditSummary }>(
+    '/api/public/api-key-balance',
+    {
+      method: 'POST',
+      body: JSON.stringify({ apiKey }),
+    },
+  );
+}
+
 export async function createPublicApiKey(payload: { name: string; credits: number }) {
   return request<{ apiKey: string; key: PublicApiKeyInfo }>(
     '/api/admin/api-keys',

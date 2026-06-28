@@ -2030,6 +2030,19 @@ async function reservePublicApiKeyCredits(plainKey: string, credits: number) {
   return nextRecord;
 }
 
+async function getPublicApiKeyBalance(plainKey: string) {
+  const keyHash = hashPublicApiKey(plainKey);
+  const records = await readPublicApiKeyRecords();
+  const record = records.find((item) => item.keyHash === keyHash);
+  if (!record || record.revokedAt) return null;
+
+  return {
+    totalCredits: record.totalCredits,
+    usedCredits: record.usedCredits,
+    remainingCredits: Math.max(0, record.totalCredits - record.usedCredits),
+  };
+}
+
 async function refundPublicApiKeyCredits(keyId: string, credits: number) {
   const records = await readPublicApiKeyRecords();
   await writePublicApiKeyRecords(
@@ -4560,6 +4573,27 @@ async function start() {
       res.json({ keys: keys.map(publicApiKeyRecord) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch API keys failed' });
+    }
+  });
+
+  app.post('/api/public/api-key-balance', async (req, res) => {
+    const apiKey = normalizeString(req.body?.apiKey);
+    if (!apiKey || apiKey.length > 200) {
+      res.status(400).json({ error: '请输入有效的 API Key' });
+      return;
+    }
+
+    try {
+      const balance = await getPublicApiKeyBalance(apiKey);
+      if (!balance) {
+        res.status(401).json({ error: 'API Key 无效或已停用' });
+        return;
+      }
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ balance });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '查询 API Key 额度失败' });
     }
   });
 

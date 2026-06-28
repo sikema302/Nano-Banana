@@ -37,6 +37,7 @@ import {
   fetchAdminOverview,
   fetchAdminRecords,
   fetchAdminUsers,
+  fetchPublicApiKeyBalance,
   fetchPublicApiKeys,
   deleteImage,
   acknowledgePromoCoupon,
@@ -736,6 +737,11 @@ function HistoryView({
 
 function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
   const [copiedText, setCopiedText] = useState('');
+  const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
+  const [balanceApiKey, setBalanceApiKey] = useState('');
+  const [balanceResult, setBalanceResult] = useState<CreditSummary | null>(null);
+  const [balanceError, setBalanceError] = useState('');
+  const [balanceLoading, setBalanceLoading] = useState(false);
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
   const apiKeyPlaceholder = 'px_your_api_key';
   const apiKeyHighlightClassName = 'font-mono text-[1.08em] font-black tracking-[0.04em] text-[#8fd3ff]';
@@ -917,6 +923,42 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     }
   }
 
+  function openBalanceDialog() {
+    setBalanceApiKey('');
+    setBalanceResult(null);
+    setBalanceError('');
+    setBalanceDialogOpen(true);
+  }
+
+  function closeBalanceDialog() {
+    if (balanceLoading) return;
+    setBalanceDialogOpen(false);
+    setBalanceApiKey('');
+    setBalanceResult(null);
+    setBalanceError('');
+  }
+
+  async function handleBalanceQuery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const apiKey = balanceApiKey.trim();
+    if (!apiKey) {
+      setBalanceError('\u8bf7\u8f93\u5165\u5b8c\u6574\u7684 API Key');
+      return;
+    }
+
+    setBalanceLoading(true);
+    setBalanceError('');
+    setBalanceResult(null);
+    try {
+      const payload = await fetchPublicApiKeyBalance(apiKey);
+      setBalanceResult(payload.balance);
+    } catch (error) {
+      setBalanceError(error instanceof Error ? error.message : '\u67e5\u8be2 API Key \u989d\u5ea6\u5931\u8d25');
+    } finally {
+      setBalanceLoading(false);
+    }
+  }
+
   return (
     <section className="custom-scrollbar page-shell h-full overflow-auto py-10 sm:py-14">
       <div className="grid gap-6">
@@ -934,6 +976,16 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
                   {title}
                 </a>
               ))}
+            </div>
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <button
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm font-black text-cyan-100 transition hover:border-cyan-300/35 hover:bg-cyan-300/15"
+                type="button"
+                onClick={openBalanceDialog}
+              >
+                <KeyRound size={16} />
+                {'\u67e5\u8be2 Key \u989d\u5ea6'}
+              </button>
             </div>
           </aside>
 
@@ -1186,6 +1238,86 @@ Content-Type: application/json`)}</pre>
         </div>
 
       </div>
+      {balanceDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <button
+            aria-label="Close API key balance dialog"
+            className="absolute inset-0"
+            type="button"
+            onClick={closeBalanceDialog}
+          />
+          <div className="relative w-full max-w-lg overflow-hidden rounded-[28px] border border-white/10 bg-[#0b0e14] shadow-[0_30px_100px_rgba(0,0,0,0.65)]">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-5">
+              <div>
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-100">
+                  <KeyRound size={19} />
+                </div>
+                <h2 className="text-xl font-black text-white">{'\u67e5\u8be2 API Key \u989d\u5ea6'}</h2>
+                <p className="mt-1 text-sm text-zinc-500">{'Key \u4ec5\u7528\u4e8e\u672c\u6b21\u67e5\u8be2\uff0c\u4e0d\u4f1a\u4fdd\u5b58\u5728\u6d4f\u89c8\u5668\u4e2d\u3002'}</p>
+              </div>
+              <button
+                aria-label="Close"
+                className="rounded-full border border-white/10 p-2 text-zinc-400 transition hover:border-white/20 hover:text-white disabled:opacity-40"
+                disabled={balanceLoading}
+                type="button"
+                onClick={closeBalanceDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form className="p-5" onSubmit={(event) => void handleBalanceQuery(event)}>
+              <label className="text-xs font-bold uppercase tracking-[0.16em] text-zinc-500" htmlFor="api-key-balance-input">
+                API Key
+              </label>
+              <input
+                autoComplete="off"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 font-mono text-sm text-white outline-none transition placeholder:text-zinc-700 focus:border-cyan-300/35"
+                id="api-key-balance-input"
+                placeholder="px_..."
+                spellCheck={false}
+                type="password"
+                value={balanceApiKey}
+                onChange={(event) => {
+                  setBalanceApiKey(event.target.value);
+                  setBalanceError('');
+                  setBalanceResult(null);
+                }}
+              />
+
+              {balanceError ? (
+                <div className="mt-3 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-100">
+                  {balanceError}
+                </div>
+              ) : null}
+
+              {balanceResult ? (
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {[
+                    ['\u603b\u989d\u5ea6', balanceResult.totalCredits, 'text-white'],
+                    ['\u5df2\u4f7f\u7528', balanceResult.usedCredits, 'text-amber-200'],
+                    ['\u5269\u4f59\u989d\u5ea6', balanceResult.remainingCredits, 'text-emerald-200'],
+                  ].map(([label, value, color]) => (
+                    <div key={String(label)} className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-4 text-center">
+                      <div className="text-[11px] font-semibold text-zinc-500">{label}</div>
+                      <div className={`mt-2 text-xl font-black ${color}`}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <button
+                className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60"
+                disabled={balanceLoading}
+                type="submit"
+              >
+                {balanceLoading ? <LoaderCircle size={16} className="animate-spin" /> : <KeyRound size={16} />}
+                {balanceLoading ? '\u67e5\u8be2\u4e2d...' : '\u67e5\u8be2\u989d\u5ea6'}
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
