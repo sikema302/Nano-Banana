@@ -567,6 +567,21 @@ export async function fetchAdminUsers(params: {
   }>(`/api/admin/users${suffix}`, {}, true);
 }
 
+export async function rechargeAdminUserCredits(userId: string, credits: number) {
+  return request<{
+    credits: CreditSummary;
+    adminCredits: CreditSummary;
+    rechargedCredits: number;
+  }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/recharge`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
 export async function fetchAdminRecords(params: {
   page?: number;
   pageSize?: number;

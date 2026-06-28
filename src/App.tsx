@@ -52,6 +52,7 @@ import {
   login,
   loginWithInvite,
   moveImage,
+  rechargeAdminUserCredits,
   rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
   rechargePublicApiKeyCredits,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
@@ -1622,6 +1623,7 @@ function AdminView({
   onDeleteInviteCodesBatch,
   onRechargeInviteCode,
   onReclaimInviteCode,
+  onRechargeUser,
   onCleanupImages,
   onLoadSection,
   onPreview,
@@ -1649,6 +1651,7 @@ function AdminView({
   onDeleteInviteCodesBatch: (codes: string[]) => Promise<string[]>;
   onRechargeInviteCode: (code: string, credits: number) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
+  onRechargeUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onCleanupImages: () => Promise<void>;
   onLoadSection: (
     section: AdminSection,
@@ -1677,6 +1680,7 @@ function AdminView({
   const [deletingCode, setDeletingCode] = useState('');
   const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
+  const [rechargingUserId, setRechargingUserId] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
   const [inviteBatchCount, setInviteBatchCount] = useState(1);
   const [batchCopied, setBatchCopied] = useState(false);
@@ -1718,6 +1722,28 @@ function AdminView({
   const totalInviteCodes = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
   const usedInviteCodes = dashboardStats.usedInviteCodeCount || inviteCodes.filter((item) => Boolean(item.redeemedBy)).length;
   const currentInviteUsageRate = dashboardStats.inviteUsageRate || (totalInviteCodes > 0 ? Math.round((usedInviteCodes / totalInviteCodes) * 100) : 0);
+
+  async function handleRechargeUser(user: AdminUserSummary) {
+    const rawValue = window.prompt(`\u8bf7\u8f93\u5165\u8981\u7ed9 ${user.username} \u5145\u503c\u7684\u79ef\u5206`, '100');
+    if (rawValue === null) return;
+
+    const rechargeCredits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(rechargeCredits) || rechargeCredits <= 0) {
+      window.alert('\u8bf7\u8f93\u5165\u5927\u4e8e 0 \u7684\u6574\u6570\u79ef\u5206');
+      return;
+    }
+    if (rechargeCredits > adminCredits.remainingCredits) {
+      window.alert(`admin \u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff0c\u5f53\u524d\u5269\u4f59 ${adminCredits.remainingCredits}`);
+      return;
+    }
+
+    setRechargingUserId(user.userId);
+    try {
+      await onRechargeUser(user, rechargeCredits);
+    } finally {
+      setRechargingUserId('');
+    }
+  }
 
   const usersById = users.reduce<Record<string, AdminUserSummary>>((accumulator, item) => {
     accumulator[item.userId] = item;
@@ -2547,7 +2573,7 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1040px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1140px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -2568,6 +2594,7 @@ function AdminView({
                               最近生成 {userSortMode === 'recent-desc' ? '↓' : '↑'}
                             </button>
                           </th>
+                          <th className="px-3 py-2 text-right font-medium">{'\u64cd\u4f5c'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
@@ -2605,6 +2632,16 @@ function AdminView({
                                 </div>
                               </td>
                               <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
+                              <td className="px-3 py-3 text-right">
+                                <button
+                                  className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                  disabled={item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId}
+                                  type="button"
+                                  onClick={() => void handleRechargeUser(item)}
+                                >
+                                  {rechargingUserId === item.userId ? '\u5145\u503c\u4e2d...' : '\u5145\u503c'}
+                                </button>
+                              </td>
                             </tr>
                           );
                         })}
@@ -3373,6 +3410,28 @@ export default function App() {
       void loadAdminSection('invites', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码充值失败');
+    }
+  }
+
+  async function handleRechargeUserCredits(user: AdminUserSummary, credits: number) {
+    try {
+      const payload = await rechargeAdminUserCredits(user.userId, credits);
+      setAdminOverview((current) => ({
+        ...current,
+        users: current.users.map((item) => item.userId === user.userId
+          ? {
+              ...item,
+              totalCredits: payload.credits.totalCredits,
+              usedCredits: payload.credits.usedCredits,
+              remainingCredits: payload.credits.remainingCredits,
+            }
+          : item),
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`\u5df2\u7ed9\u7528\u6237 ${user.username} \u5145\u503c ${payload.rechargedCredits} \u79ef\u5206`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '\u7528\u6237\u5145\u503c\u5931\u8d25');
+      throw error;
     }
   }
 
@@ -4632,6 +4691,7 @@ export default function App() {
               onDeleteInviteCodesBatch={handleDeleteInviteCodesBatch}
               onRechargeInviteCode={handleRechargeInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
+              onRechargeUser={handleRechargeUserCredits}
               onCleanupImages={handleCleanupImages}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}

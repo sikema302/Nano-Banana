@@ -4910,6 +4910,87 @@ async function start() {
     }
   });
 
+  app.post('/api/admin/users/:userId/recharge', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    const requestedCredits = Math.floor(Number(req.body?.credits));
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: '充值积分必须是大于 0 的整数' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [adminOwner, adminCredits, creditRows] = await Promise.all([
+          db.getAdminCreditOwner(),
+          db.getAdminCreditSummary(),
+          db.getAllCreditRows(),
+        ]);
+        if (adminOwner?.user_id === userId) {
+          res.status(400).json({ error: '不能给 admin 自己充值' });
+          return;
+        }
+
+        const target = creditRows.find((item) => item.user_id === userId);
+        if (!target) {
+          res.status(404).json({ error: '用户积分账户不存在' });
+          return;
+        }
+        if (adminCredits.remainingCredits < requestedCredits) {
+          res.status(400).json({ error: `admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}` });
+          return;
+        }
+
+        await db.setUserTotalCredits(userId, target.total_credits + requestedCredits);
+        await db.syncInviteCodeBalanceForUser(userId);
+        await db.adjustAdminTotalCredits(-requestedCredits);
+
+        res.json({
+          credits: await db.getUserCredits(userId),
+          adminCredits: await db.getAdminCreditSummary(),
+          rechargedCredits: requestedCredits,
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        const adminOwner = getAdminCreditOwner(db);
+        if (adminOwner?.user_id === userId) throw new Error('不能给 admin 自己充值');
+
+        const target = getOne<Record<string, unknown>>(
+          db,
+          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          [userId],
+        );
+        if (!target) throw new Error('用户积分账户不存在');
+
+        const adminCredits = getAdminCreditSummary(db);
+        if (adminCredits.remainingCredits < requestedCredits) {
+          throw new Error(`admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}`);
+        }
+
+        const currentCredits = toCreditSummary(target);
+        setUserTotalCredits(db, userId, currentCredits.totalCredits + requestedCredits);
+        syncInviteCodeBalanceForUser(db, userId);
+        adjustAdminTotalCredits(db, -requestedCredits);
+        return {
+          credits: getUserCredits(db, userId),
+          adminCredits: getAdminCreditSummary(db),
+          rechargedCredits: requestedCredits,
+        };
+      });
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '用户充值失败';
+      res.status(message.includes('不存在') ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get('/api/admin/records', requireAuth, requireAdmin, async (req, res) => {
     const page = parsePaginationValue(req.query.page, 1, 1, 100000);
     const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);
