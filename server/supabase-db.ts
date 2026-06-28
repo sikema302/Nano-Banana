@@ -42,6 +42,21 @@ type GenerationRow = {
   invite_code?: string;
 };
 
+type GenerationFilterOptions = {
+  search?: string;
+  model?: string;
+  resolution?: string;
+  range?: string;
+};
+
+type GenerationStatRow = {
+  created_at: string;
+  credits_used: number;
+  model_name: string;
+  dimensions: string;
+  image_size: string;
+};
+
 type ImageRow = {
   id: string;
   user_id: string;
@@ -153,6 +168,63 @@ function generationApiRequestMsSettingKey(generationId: string | number) {
 
 function isMissingApiRequestMsColumn(error: { message?: string } | null | undefined): boolean {
   return Boolean(error?.message && error.message.includes('api_request_ms'));
+}
+
+async function getInviteUserIdsForGenerationKeyword(keyword: string): Promise<Set<string>> {
+  const userIds = new Set<string>();
+  if (!keyword) return userIds;
+
+  const safeKeyword = keyword.replace(/[%_,]/g, ' ');
+  const { data } = await getSupabase()
+    .from('invite_codes')
+    .select('redeemed_by')
+    .ilike('code', `%${safeKeyword}%`)
+    .not('redeemed_by', 'is', null)
+    .limit(200);
+
+  for (const row of data || []) {
+    const userId = normalizeSupabaseId((row as { redeemed_by: string | number | null }).redeemed_by);
+    if (userId) userIds.add(userId);
+  }
+
+  return userIds;
+}
+
+function applyGenerationFilters(query: any, options: GenerationFilterOptions, inviteKeywordUserIds = new Set<string>()) {
+  const keyword = String(options.search || '').trim();
+  let next = query.neq('username', 'demo');
+
+  if (options.model && options.model !== 'all') {
+    next = next.eq('model_name', options.model);
+  }
+
+  if (options.resolution && options.resolution !== 'all') {
+    const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
+    if (dimensions) next = next.eq('dimensions', dimensions);
+    if (imageSize) next = next.eq('image_size', imageSize);
+  }
+
+  if (options.range && options.range !== 'all') {
+    const hours = options.range === '24h' ? 24 : options.range === '7d' ? 24 * 7 : options.range === '30d' ? 24 * 30 : 0;
+    if (hours > 0) {
+      next = next.gte('created_at', new Date(Date.now() - hours * 60 * 60 * 1000).toISOString());
+    }
+  }
+
+  if (keyword) {
+    const safeKeyword = keyword.replace(/[(),]/g, ' ');
+    const orParts = [
+      `username.ilike.%${safeKeyword}%`,
+      `user_id.ilike.%${safeKeyword}%`,
+      `prompt.ilike.%${safeKeyword}%`,
+    ];
+    if (inviteKeywordUserIds.size > 0) {
+      orParts.push(`user_id.in.(${[...inviteKeywordUserIds].join(',')})`);
+    }
+    next = next.or(orParts.join(','));
+  }
+
+  return next;
 }
 
 function toImageRow(row: Record<string, unknown>): ImageRow {
@@ -900,77 +972,21 @@ export async function getGenerationSummaries(): Promise<
 export async function getGenerationsWithInviteCode(
   page: number,
   pageSize: number,
-  options: {
-    search?: string;
-    model?: string;
-    resolution?: string;
-    range?: string;
-  } = {},
+  options: GenerationFilterOptions = {},
 ): Promise<{ records: GenerationRow[]; total: number }> {
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
   const keyword = String(options.search || '').trim();
-  const userIdsForInviteKeyword = new Set<string>();
+  const userIdsForInviteKeyword = keyword ? await getInviteUserIdsForGenerationKeyword(keyword) : new Set<string>();
 
-  if (keyword) {
-    const safeKeyword = keyword.replace(/[%_,]/g, ' ');
-    const { data: inviteMatches } = await getSupabase()
-      .from('invite_codes')
-      .select('redeemed_by')
-      .ilike('code', `%${safeKeyword}%`)
-      .not('redeemed_by', 'is', null)
-      .limit(200);
-
-    for (const row of inviteMatches || []) {
-      const userId = normalizeSupabaseId((row as { redeemed_by: string | number | null }).redeemed_by);
-      if (userId) userIdsForInviteKeyword.add(userId);
-    }
-  }
-
-  const applyFilters = (query: any) => {
-    let next = query.neq('username', 'demo');
-
-    if (options.model && options.model !== 'all') {
-      next = next.eq('model_name', options.model);
-    }
-
-    if (options.resolution && options.resolution !== 'all') {
-      const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
-      if (dimensions) next = next.eq('dimensions', dimensions);
-      if (imageSize) next = next.eq('image_size', imageSize);
-    }
-
-    if (options.range && options.range !== 'all') {
-      const hours = options.range === '24h' ? 24 : options.range === '7d' ? 24 * 7 : options.range === '30d' ? 24 * 30 : 0;
-      if (hours > 0) {
-        next = next.gte('created_at', new Date(Date.now() - hours * 60 * 60 * 1000).toISOString());
-      }
-    }
-
-    if (keyword) {
-      const safeKeyword = keyword.replace(/[(),]/g, ' ');
-      const orParts = [
-        `username.ilike.%${safeKeyword}%`,
-        `user_id.ilike.%${safeKeyword}%`,
-        `prompt.ilike.%${safeKeyword}%`,
-      ];
-      if (userIdsForInviteKeyword.size > 0) {
-        orParts.push(`user_id.in.(${[...userIdsForInviteKeyword].join(',')})`);
-      }
-      next = next.or(orParts.join(','));
-    }
-
-    return next;
-  };
-
-  const { count, error: countError } = await applyFilters(getSupabase()
+  const { count, error: countError } = await applyGenerationFilters(getSupabase()
     .from('generations')
-    .select('*', { count: 'exact', head: true }));
+    .select('id', { count: 'exact', head: true }), options, userIdsForInviteKeyword);
   const total = countError ? 0 : count || 0;
 
-  const { data, error } = await applyFilters(getSupabase()
+  const { data, error } = await applyGenerationFilters(getSupabase()
     .from('generations')
-    .select('*'))
+    .select('*'), options, userIdsForInviteKeyword)
     .order('created_at', { ascending: false })
     .range(from, to);
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
@@ -1005,6 +1021,184 @@ export async function getGenerationsWithInviteCode(
   }
 
   return { records, total };
+}
+
+export async function getAdminDashboardCounts(): Promise<{
+  userCount: number;
+  recordCount: number;
+  inviteCodeCount: number;
+  usedInviteCodeCount: number;
+  lowCreditUserCount: number;
+  recentRecords: Array<{ created_at: string; credits_used: number }>;
+}> {
+  const [
+    usersResult,
+    recordsResult,
+    invitesResult,
+    usedInvitesResult,
+    creditRowsResult,
+    recentRowsResult,
+  ] = await Promise.all([
+    getSupabase().from('users').select('id', { count: 'exact', head: true }).neq('username', 'demo'),
+    getSupabase().from('generations').select('id', { count: 'exact', head: true }).neq('username', 'demo'),
+    getSupabase().from('invite_codes').select('code', { count: 'exact', head: true }),
+    getSupabase()
+      .from('invite_codes')
+      .select('code', { count: 'exact', head: true })
+      .not('redeemed_by', 'is', null)
+      .neq('redeemed_by', ''),
+    getSupabase().from('user_credits').select('total_credits, used_credits').neq('username', 'demo'),
+    getSupabase()
+      .from('generations')
+      .select('created_at, credits_used')
+      .neq('username', 'demo')
+      .gte('created_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(10000),
+  ]);
+
+  const lowCreditUserCount = (creditRowsResult.data || []).filter((row) => {
+    const totalCredits = Number((row as UserCreditsRow).total_credits || 0);
+    const usedCredits = Number((row as UserCreditsRow).used_credits || 0);
+    return Math.max(0, totalCredits - usedCredits) <= 50;
+  }).length;
+
+  return {
+    userCount: usersResult.count || 0,
+    recordCount: recordsResult.count || 0,
+    inviteCodeCount: invitesResult.count || 0,
+    usedInviteCodeCount: usedInvitesResult.count || 0,
+    lowCreditUserCount,
+    recentRecords: (recentRowsResult.data || []).map((row) => ({
+      created_at: String((row as { created_at: string }).created_at || ''),
+      credits_used: Number((row as { credits_used: number }).credits_used || 0),
+    })),
+  };
+}
+
+export async function getGenerationStatsRows(
+  options: GenerationFilterOptions = {},
+): Promise<{ rows: GenerationStatRow[]; total: number }> {
+  const keyword = String(options.search || '').trim();
+  const userIdsForInviteKeyword = keyword ? await getInviteUserIdsForGenerationKeyword(keyword) : new Set<string>();
+
+  const { count, error: countError } = await applyGenerationFilters(getSupabase()
+    .from('generations')
+    .select('id', { count: 'exact', head: true }), options, userIdsForInviteKeyword);
+  const total = countError ? 0 : count || 0;
+
+  const { data, error } = await applyGenerationFilters(getSupabase()
+    .from('generations')
+    .select('created_at, credits_used, model_name, dimensions, image_size'), options, userIdsForInviteKeyword)
+    .order('created_at', { ascending: false })
+    .range(0, 9999);
+  if (error) throw new Error(`Fetch generation stats failed: ${error.message}`);
+
+  return {
+    rows: (data || []).map((row) => ({
+      created_at: String((row as { created_at: string }).created_at || ''),
+      credits_used: Number((row as { credits_used: number }).credits_used || 0),
+      model_name: String((row as { model_name: string }).model_name || ''),
+      dimensions: String((row as { dimensions: string }).dimensions || ''),
+      image_size: String((row as { image_size: string }).image_size || ''),
+    })),
+    total,
+  };
+}
+
+export async function getGenerationFilterOptions(): Promise<{
+  modelOptions: string[];
+  resolutionOptions: string[];
+}> {
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('model_name, dimensions, image_size')
+    .neq('username', 'demo')
+    .order('created_at', { ascending: false })
+    .range(0, 9999);
+  if (error) return { modelOptions: [], resolutionOptions: [] };
+
+  const modelOptions = new Set<string>();
+  const resolutionOptions = new Set<string>();
+
+  for (const row of data || []) {
+    const modelName = String((row as { model_name: string }).model_name || '');
+    const dimensions = String((row as { dimensions: string }).dimensions || '');
+    const imageSize = String((row as { image_size: string }).image_size || '');
+    if (modelName) modelOptions.add(modelName);
+    if (dimensions) resolutionOptions.add(imageSize ? `${dimensions} / ${imageSize}` : dimensions);
+  }
+
+  return {
+    modelOptions: [...modelOptions].sort(),
+    resolutionOptions: [...resolutionOptions].sort(),
+  };
+}
+
+export async function getInviteCodeRedeemSummaries(userIds: string[]): Promise<Array<{
+  user_id: string;
+  username: string;
+  credits_used: number;
+}>> {
+  const uniqueIds = [...new Set(userIds.map(normalizeSupabaseId).filter(Boolean))];
+  if (uniqueIds.length === 0) return [];
+
+  const [usersResult, creditRowsResult, generationRowsResult] = await Promise.all([
+    getSupabase().from('users').select('id, username').in('id', uniqueIds),
+    getSupabase().from('user_credits').select('user_id, username').in('user_id', uniqueIds),
+    getSupabase()
+      .from('generations')
+      .select('user_id, credits_used')
+      .in('user_id', uniqueIds)
+      .neq('username', 'demo')
+      .range(0, 9999),
+  ]);
+
+  const usernameById = new Map<string, string>();
+  for (const row of usersResult.data || []) {
+    const userId = normalizeSupabaseId((row as { id: string | number }).id);
+    if (userId) usernameById.set(userId, String((row as { username: string }).username || ''));
+  }
+  for (const row of creditRowsResult.data || []) {
+    const userId = normalizeSupabaseId((row as UserCreditsRow).user_id);
+    if (userId && !usernameById.has(userId)) {
+      usernameById.set(userId, String((row as UserCreditsRow).username || ''));
+    }
+  }
+
+  const creditsById = new Map<string, number>();
+  for (const row of generationRowsResult.data || []) {
+    const userId = normalizeSupabaseId((row as { user_id: string | number }).user_id);
+    if (!userId) continue;
+    creditsById.set(userId, (creditsById.get(userId) || 0) + Number((row as { credits_used: number }).credits_used || 0));
+  }
+
+  return uniqueIds.map((userId) => ({
+    user_id: userId,
+    username: usernameById.get(userId) || '',
+    credits_used: creditsById.get(userId) || 0,
+  }));
+}
+
+export async function getRecentGenerationUsageRows(hours: number): Promise<Array<{
+  user_id: string;
+  created_at: string;
+  credits_used: number;
+}>> {
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('user_id, created_at, credits_used')
+    .neq('username', 'demo')
+    .gte('created_at', new Date(Date.now() - hours * 60 * 60 * 1000).toISOString())
+    .order('created_at', { ascending: false })
+    .range(0, 9999);
+  if (error) return [];
+
+  return (data || []).map((row) => ({
+    user_id: normalizeSupabaseId((row as { user_id: string | number }).user_id),
+    created_at: String((row as { created_at: string }).created_at || ''),
+    credits_used: Number((row as { credits_used: number }).credits_used || 0),
+  }));
 }
 
 // ─── 图片操作 ───────────────────────────────────────────────────────

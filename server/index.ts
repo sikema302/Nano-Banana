@@ -929,6 +929,29 @@ function summarizeRecordStats(records: ReturnType<typeof toGeneration>[]) {
   };
 }
 
+function summarizeRecordStatRows(records: Array<{ createdAt: string; creditsUsed: number; modelName: string }>) {
+  const todayKey = formatDateKeyInTimeZone(new Date());
+  const todayRecords = records.filter((item) => formatDateKeyInTimeZone(item.createdAt) === todayKey);
+  const modelUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
+    accumulator[item.modelName] = (accumulator[item.modelName] || 0) + 1;
+    return accumulator;
+  }, {});
+  const hourUsageCounter = records.reduce<Record<string, number>>((accumulator, item) => {
+    const hour = formatHourKeyInTimeZone(item.createdAt);
+    if (!hour) return accumulator;
+    accumulator[hour] = (accumulator[hour] || 0) + 1;
+    return accumulator;
+  }, {});
+
+  return {
+    todayCreditsUsed: todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0),
+    todayRecordCount: todayRecords.length,
+    totalCreditsUsed: records.reduce((sum, item) => sum + item.creditsUsed, 0),
+    mostUsedModel: Object.entries(modelUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '',
+    mostActiveHour: Object.entries(hourUsageCounter).sort((left, right) => right[1] - left[1])[0]?.[0] || '',
+  };
+}
+
 async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
   const db = await getSupabaseDb();
   const [generationSummaries, registeredUsers, creditRows, inviteRows] = await Promise.all([
@@ -4599,41 +4622,27 @@ async function start() {
 
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [users, adminCredits, recordPage, invitePage, usedInvitePage] = await Promise.all([
-          getSupabaseAdminUsers(),
+        const [adminCredits, dashboardCounts] = await Promise.all([
           db.getAdminCreditSummary(),
-          db.getGenerationsWithInviteCode(1, 100000),
-          db.listInviteCodes(1, 1),
-          db.listInviteCodes(1, 1, { status: 'used' }),
+          db.getAdminDashboardCounts(),
         ]);
-        const records = recordPage.records.map((row) => toGeneration({
-          id: row.id,
-          user_id: row.user_id,
-          username: row.username,
-          prompt: row.prompt,
-          model_id: row.model_id,
-          model_name: row.model_name,
-          dimensions: row.dimensions,
-          image_size: row.image_size,
-          image_path: row.image_path,
-          credits_used: row.credits_used,
-          api_request_ms: row.api_request_ms,
-          reference_images: row.reference_images,
-          created_at: row.created_at,
-          invite_code: row.invite_code,
-        }));
-        const recordStats = summarizeRecordStats(records);
+        const todayKey = formatDateKeyInTimeZone(new Date());
+        const todayRecords = dashboardCounts.recentRecords.filter(
+          (item) => formatDateKeyInTimeZone(item.created_at) === todayKey,
+        );
 
         res.json({
           stats: {
-            todayRecordCount: recordStats.todayRecordCount,
-            todayCreditsUsed: recordStats.todayCreditsUsed,
-            inviteUsageRate: invitePage.total > 0 ? Math.round((usedInvitePage.total / invitePage.total) * 100) : 0,
-            lowCreditUserCount: users.filter((item) => item.remainingCredits <= 50).length,
-            userCount: users.length,
-            inviteCodeCount: invitePage.total,
-            recordCount: recordPage.total,
-            usedInviteCodeCount: usedInvitePage.total,
+            todayRecordCount: todayRecords.length,
+            todayCreditsUsed: todayRecords.reduce((sum, item) => sum + Number(item.credits_used || 0), 0),
+            inviteUsageRate: dashboardCounts.inviteCodeCount > 0
+              ? Math.round((dashboardCounts.usedInviteCodeCount / dashboardCounts.inviteCodeCount) * 100)
+              : 0,
+            lowCreditUserCount: dashboardCounts.lowCreditUserCount,
+            userCount: dashboardCounts.userCount,
+            inviteCodeCount: dashboardCounts.inviteCodeCount,
+            recordCount: dashboardCounts.recordCount,
+            usedInviteCodeCount: dashboardCounts.usedInviteCodeCount,
           },
           imageStorage,
           adminCredits,
@@ -4703,12 +4712,23 @@ async function start() {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [{ codes, total }, adminCredits, users] = await Promise.all([
+        const [{ codes, total }, adminCredits] = await Promise.all([
           db.listInviteCodes(page, pageSize, { status, sort, search }),
           db.getAdminCreditSummary(),
-          getSupabaseAdminUsers(),
         ]);
-        const usersById = new Map(users.map((item) => [item.userId, item]));
+        const redeemedUserIds = [
+          ...new Set(codes.map((item) => normalizeString(item.redeemed_by)).filter(Boolean)),
+        ];
+        const redeemedUsers = await db.getInviteCodeRedeemSummaries(redeemedUserIds);
+        const usersById = new Map(
+          redeemedUsers.map((item) => [
+            item.user_id,
+            {
+              username: item.username,
+              creditsUsed: Number(item.credits_used || 0),
+            },
+          ]),
+        );
         const inviteCodes = codes.map((row) => {
           const redeemedBy = normalizeString(row.redeemed_by);
           const redeemedUser = redeemedBy ? usersById.get(redeemedBy) : null;
@@ -4768,11 +4788,11 @@ async function start() {
         const [users, matchedInvites, trendRecords] = await Promise.all([
           getSupabaseAdminUsers(),
           search ? db.listInviteCodes(1, 200, { search }) : Promise.resolve({ codes: [], total: 0 }),
-          db.getGenerationsWithInviteCode(1, 100000, { range: '7d' }),
+          db.getRecentGenerationUsageRows(24 * 7),
         ]);
         const matchedInviteUserIds = new Set(matchedInvites.codes.map((item) => normalizeString(item.redeemed_by)).filter(Boolean));
         const trendByUserId = new Map<string, number[]>();
-        for (const record of trendRecords.records) {
+        for (const record of trendRecords) {
           const buckets = trendByUserId.get(record.user_id) || Array.from({ length: 7 }, () => 0);
           const diff = Math.floor((Date.now() - new Date(record.created_at).getTime()) / (24 * 60 * 60 * 1000));
           if (diff >= 0 && diff < 7) {
@@ -4826,10 +4846,10 @@ async function start() {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [pagePayload, statsPayload, allPayload] = await Promise.all([
+        const [pagePayload, statsPayload, optionsPayload] = await Promise.all([
           db.getGenerationsWithInviteCode(page, pageSize, options),
-          db.getGenerationsWithInviteCode(1, 100000, options),
-          db.getGenerationsWithInviteCode(1, 100000),
+          db.getGenerationStatsRows(options),
+          db.getGenerationFilterOptions(),
         ]);
         const toRecord = (row: (typeof pagePayload.records)[number]) => toGeneration({
           id: row.id,
@@ -4848,17 +4868,18 @@ async function start() {
           invite_code: row.invite_code,
         });
         const records = pagePayload.records.map(toRecord);
-        const statRecords = statsPayload.records.map(toRecord);
-        const allRecords = allPayload.records.map(toRecord);
+        const statRecords = statsPayload.rows.map((row) => ({
+          createdAt: row.created_at,
+          creditsUsed: Number(row.credits_used || 0),
+          modelName: row.model_name,
+        }));
 
         res.json({
           records: records.map((item) => toPublicGeneration(req, item)),
           recordsPage: toPagination(page, pageSize, pagePayload.total),
-          stats: summarizeRecordStats(statRecords),
-          modelOptions: Array.from(new Set(allRecords.map((item) => item.modelName))).sort(),
-          resolutionOptions: Array.from(
-            new Set(allRecords.map((item) => (item.imageSize ? `${item.dimensions} / ${item.imageSize}` : item.dimensions))),
-          ).sort(),
+          stats: summarizeRecordStatRows(statRecords),
+          modelOptions: optionsPayload.modelOptions,
+          resolutionOptions: optionsPayload.resolutionOptions,
         });
         return;
       }
