@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -238,6 +239,7 @@ const PROMO_COUPON_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
+dns.setDefaultResultOrder('ipv4first');
 
 const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 'pixory.top';
 const CANONICAL_WEB_ORIGIN =
@@ -2764,6 +2766,48 @@ function getVisionaryErrorMessage(payload: unknown, fallback: string) {
   return fallback;
 }
 
+function getNetworkErrorCode(error: unknown) {
+  if (!error || typeof error !== 'object') return '';
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause && typeof cause === 'object') {
+    return normalizeString((cause as { code?: unknown }).code);
+  }
+  return normalizeString((error as { code?: unknown }).code);
+}
+
+function isRetryableConnectError(error: unknown) {
+  return [
+    'UND_ERR_CONNECT_TIMEOUT',
+    'EAI_AGAIN',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'ECONNREFUSED',
+  ].includes(getNetworkErrorCode(error));
+}
+
+async function fetchVisionaryWithConnectRetry(url: string, init: RequestInit) {
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableConnectError(error) || attempt >= maxAttempts) break;
+      console.warn(
+        `[visionary] connect failed (${getNetworkErrorCode(error)}), retry ${attempt + 1}/${maxAttempts}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, attempt * 600));
+    }
+  }
+
+  if (isRetryableConnectError(lastError)) {
+    throw new Error('图像服务连接超时，已自动重试，请稍后再试');
+  }
+  throw lastError;
+}
+
 async function callVisionaryGeneration({
   prompt,
   modelId,
@@ -2817,7 +2861,7 @@ async function callVisionaryGeneration({
           },
         };
 
-  const response = await fetch(`${VISIONARY_API_BASE_URL}${requestConfig.endpointPath}`, {
+  const response = await fetchVisionaryWithConnectRetry(`${VISIONARY_API_BASE_URL}${requestConfig.endpointPath}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
