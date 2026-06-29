@@ -1303,8 +1303,9 @@ export async function getSetting(key: string, fallback: string): Promise<string>
     .from('app_settings')
     .select('value')
     .eq('key', key)
-    .single();
-  if (error || !data) {
+    .maybeSingle();
+  if (error) throw new Error(`Get setting failed: ${error.message}`);
+  if (!data) {
     // 设置默认值
     const { error: insertError } = await getSupabase().from('app_settings').insert({
       key,
@@ -1312,12 +1313,15 @@ export async function getSetting(key: string, fallback: string): Promise<string>
       updated_at: nowIso(),
     });
     if (insertError) {
-      // 可能已存在，尝试更新
-      const { error: upsertError } = await getSupabase()
+      // Another request may have created the row between the read and insert.
+      const { data: existing, error: retryError } = await getSupabase()
         .from('app_settings')
-        .update({ value: fallback, updated_at: nowIso() })
-        .eq('key', key);
-      if (upsertError) throw new Error(`Set setting failed: ${upsertError.message}`);
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+      if (retryError) throw new Error(`Get setting failed: ${retryError.message}`);
+      if (existing) return String((existing as { value: string }).value);
+      throw new Error(`Initialize setting failed: ${insertError.message}`);
     }
     return fallback;
   }

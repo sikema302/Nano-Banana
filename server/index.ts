@@ -259,6 +259,7 @@ const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
 const PUBLIC_API_KEYS_SETTING_KEY = 'public_api_keys_v1';
+const PUBLIC_API_KEYS_BACKUP_SETTING_KEY = 'public_api_keys_v1_backup';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
 const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
@@ -1904,7 +1905,23 @@ async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
   });
 }
 
-async function createPublicApiKey(name: string, totalCredits: number, createdBy: string) {
+async function backupPublicApiKeyRecords(records: PublicApiKeyRecord[]) {
+  if (records.length === 0) return;
+  const payload = JSON.stringify({ backedUpAt: nowIso(), records });
+
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.setSetting(PUBLIC_API_KEYS_BACKUP_SETTING_KEY, payload);
+    return;
+  }
+
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    setSetting(db, PUBLIC_API_KEYS_BACKUP_SETTING_KEY, payload);
+  });
+}
+
+async function createPublicApiKeyUnlocked(name: string, totalCredits: number, createdBy: string) {
   const plainKey = generatePublicApiKey();
   const record: PublicApiKeyRecord = {
     id: randomHex(8),
@@ -1918,11 +1935,12 @@ async function createPublicApiKey(name: string, totalCredits: number, createdBy:
     createdBy,
   };
   const records = await readPublicApiKeyRecords();
+  await backupPublicApiKeyRecords(records);
   await writePublicApiKeyRecords([record, ...records]);
   return { plainKey, record };
 }
 
-async function revokePublicApiKey(id: string) {
+async function revokePublicApiKeyUnlocked(id: string) {
   const targetId = normalizeString(id);
   if (!targetId) return null;
 
@@ -1936,13 +1954,14 @@ async function revokePublicApiKey(id: string) {
   });
 
   if (!found) return null;
+  await backupPublicApiKeyRecords(records);
   await writePublicApiKeyRecords(nextRecords);
 
   const persistedRecords = await readPublicApiKeyRecords();
   return persistedRecords.find((record) => record.id === targetId) || nextRecords.find((record) => record.id === targetId) || null;
 }
 
-async function deductPublicApiKeyCredits(id: string, credits: number) {
+async function deductPublicApiKeyCreditsUnlocked(id: string, credits: number) {
   const targetId = normalizeString(id);
   const requestedCredits = Math.max(0, Math.floor(credits));
   if (!targetId || requestedCredits <= 0) return null;
@@ -1962,6 +1981,7 @@ async function deductPublicApiKeyCredits(id: string, credits: number) {
     ...record,
     usedCredits: record.usedCredits + deductedCredits,
   };
+  await backupPublicApiKeyRecords(records.map((item, itemIndex) => itemIndex === index ? record : item));
   await writePublicApiKeyRecords(records);
 
   const persistedRecords = await readPublicApiKeyRecords();
@@ -1971,7 +1991,7 @@ async function deductPublicApiKeyCredits(id: string, credits: number) {
   };
 }
 
-async function rechargePublicApiKeyCredits(id: string, credits: number) {
+async function rechargePublicApiKeyCreditsUnlocked(id: string, credits: number) {
   const targetId = normalizeString(id);
   const rechargedCredits = Math.max(0, Math.floor(credits));
   if (!targetId || rechargedCredits <= 0) return null;
@@ -1980,10 +2000,12 @@ async function rechargePublicApiKeyCredits(id: string, credits: number) {
   const index = records.findIndex((record) => record.id === targetId);
   if (index < 0) return null;
 
+  const previousRecords = records.map((item) => ({ ...item }));
   records[index] = {
     ...records[index],
     totalCredits: records[index].totalCredits + rechargedCredits,
   };
+  await backupPublicApiKeyRecords(previousRecords);
   await writePublicApiKeyRecords(records);
 
   const persistedRecords = await readPublicApiKeyRecords();
@@ -1993,7 +2015,7 @@ async function rechargePublicApiKeyCredits(id: string, credits: number) {
   };
 }
 
-async function deletePublicApiKey(id: string) {
+async function deletePublicApiKeyUnlocked(id: string) {
   const targetId = normalizeString(id);
   if (!targetId) return false;
 
@@ -2001,11 +2023,12 @@ async function deletePublicApiKey(id: string) {
   const nextRecords = records.filter((record) => record.id !== targetId);
   if (nextRecords.length === records.length) return false;
 
+  await backupPublicApiKeyRecords(records);
   await writePublicApiKeyRecords(nextRecords);
   return true;
 }
 
-async function reservePublicApiKeyCredits(plainKey: string, credits: number) {
+async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: number) {
   const keyHash = hashPublicApiKey(plainKey);
   const records = await readPublicApiKeyRecords();
   const index = records.findIndex((record) => record.keyHash === keyHash);
@@ -2045,13 +2068,49 @@ async function getPublicApiKeyBalance(plainKey: string) {
   };
 }
 
-async function refundPublicApiKeyCredits(keyId: string, credits: number) {
+async function refundPublicApiKeyCreditsUnlocked(keyId: string, credits: number) {
   const records = await readPublicApiKeyRecords();
   await writePublicApiKeyRecords(
     records.map((record) =>
       record.id === keyId ? { ...record, usedCredits: Math.max(0, record.usedCredits - credits) } : record,
     ),
   );
+}
+
+let publicApiKeyMutationQueue: Promise<unknown> = Promise.resolve();
+
+function withPublicApiKeyMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = publicApiKeyMutationQueue.then(operation, operation);
+  publicApiKeyMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function createPublicApiKey(name: string, totalCredits: number, createdBy: string) {
+  return withPublicApiKeyMutationLock(() => createPublicApiKeyUnlocked(name, totalCredits, createdBy));
+}
+
+function revokePublicApiKey(id: string) {
+  return withPublicApiKeyMutationLock(() => revokePublicApiKeyUnlocked(id));
+}
+
+function deductPublicApiKeyCredits(id: string, credits: number) {
+  return withPublicApiKeyMutationLock(() => deductPublicApiKeyCreditsUnlocked(id, credits));
+}
+
+function rechargePublicApiKeyCredits(id: string, credits: number) {
+  return withPublicApiKeyMutationLock(() => rechargePublicApiKeyCreditsUnlocked(id, credits));
+}
+
+function deletePublicApiKey(id: string) {
+  return withPublicApiKeyMutationLock(() => deletePublicApiKeyUnlocked(id));
+}
+
+function reservePublicApiKeyCredits(plainKey: string, credits: number) {
+  return withPublicApiKeyMutationLock(() => reservePublicApiKeyCreditsUnlocked(plainKey, credits));
+}
+
+function refundPublicApiKeyCredits(keyId: string, credits: number) {
+  return withPublicApiKeyMutationLock(() => refundPublicApiKeyCreditsUnlocked(keyId, credits));
 }
 
 function getAdminApiCreditMapSqlite(db: SqlDatabase) {
