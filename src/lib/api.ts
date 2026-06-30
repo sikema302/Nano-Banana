@@ -1,3 +1,5 @@
+import type { GptImagePricing } from './model-pricing';
+
 export type ImageCategory = 'favorite' | 'backup' | 'discarded';
 
 export interface UserInfo {
@@ -130,6 +132,17 @@ export interface AdminDashboardStats {
   inviteCodeCount: number;
   recordCount: number;
   usedInviteCodeCount: number;
+}
+
+export interface VisionaryDocSyncStatus {
+  lastAttemptAt: string;
+  lastCheckedAt: string;
+  nextCheckAt: string;
+  documentChangedAt: string;
+  pricingChangedAt: string;
+  reviewRequired: boolean;
+  lastError: string;
+  pricing: GptImagePricing;
 }
 
 export interface AdminImageStorageStats {
@@ -404,7 +417,7 @@ export async function loginWithInvite(payload: { code: string }) {
 }
 
 export async function fetchModels() {
-  return request<{ models: ModelInfo[] }>('/api/models', {}, true);
+  return request<{ models: ModelInfo[]; gptImagePricing: GptImagePricing }>('/api/models', {}, true);
 }
 
 export async function generateImage(payload: {
@@ -510,6 +523,7 @@ export async function fetchAdminDashboard() {
     stats: AdminDashboardStats;
     imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
+    visionaryDocSync: VisionaryDocSyncStatus;
   }>('/api/admin/dashboard', {}, true);
 }
 

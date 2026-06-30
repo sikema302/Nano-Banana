@@ -76,8 +76,13 @@ import {
   type ReferenceUploadInput,
   type SavedImage,
   type UserInfo,
+  type VisionaryDocSyncStatus,
 } from './lib/api';
-import { getGptImageCredits } from './lib/model-pricing';
+import {
+  DEFAULT_GPT_IMAGE_PRICING,
+  getGptImageCredits,
+  type GptImagePricing,
+} from './lib/model-pricing';
 
 interface UploadPreview {
   id: string;
@@ -142,6 +147,7 @@ interface AdminOverviewState {
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
   recordResolutionOptions: string[];
+  visionaryDocSync: VisionaryDocSyncStatus | null;
 }
 
 const emptyPage: PaginationInfo = {
@@ -362,11 +368,16 @@ function getModelCredits(
     imageSize?: ImageSizeOption;
     quality?: GptQualityOption;
     optimizeChineseText?: boolean;
+    pricing?: GptImagePricing;
   },
 ) {
   if (!model) return 0;
   if (model.id === 'gpt-image-2') {
-    return getGptImageCredits(options?.imageSize || 'STANDARD', options?.quality || 'auto');
+    return getGptImageCredits(
+      options?.imageSize || 'STANDARD',
+      options?.quality || 'auto',
+      options?.pricing,
+    );
   }
   if (model.id === 'Nano_Banana_Pro') {
     const baseCredits = typeof model.creditsCost === 'number' ? model.creditsCost : 24;
@@ -742,7 +753,13 @@ function HistoryView({
   );
 }
 
-function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
+function ApiDocsView({
+  onNotice,
+  gptImagePricing,
+}: {
+  onNotice: (message: string) => void;
+  gptImagePricing: GptImagePricing;
+}) {
   const [copiedText, setCopiedText] = useState('');
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
   const [balanceApiKey, setBalanceApiKey] = useState('');
@@ -794,13 +811,13 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     ['replyType', 'string', '否', '当前推荐传 json；字段会保留兼容，不影响返回结构。'],
   ];
   const modelRows = [
-    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: 'STANDARD 20 / 2K 28（高 46）/ 4K 34（高 48）', note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
   ];
   const gptPixelGroups = [
     {
       label: '\u6807\u51c6 / 1K',
-      cost: '\u6210\u529f\u6263 20 \u70b9',
+      cost: `\u6210\u529f\u6263 ${gptImagePricing.standard} \u70b9`,
       rows: [
         ['1024x1024', '1:1'],
         ['1280x720', '16:9'],
@@ -814,7 +831,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     },
     {
       label: '2K',
-      cost: '\u6210\u529f\u6263 28 \u70b9\uff0c\u9ad8\u8d28\u91cf 46 \u70b9',
+      cost: `\u6210\u529f\u6263 ${gptImagePricing.twoK} \u70b9\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.twoKHigh} \u70b9`,
       rows: [
         ['2048x2048', '1:1'],
         ['2048x1152', '16:9'],
@@ -828,7 +845,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     },
     {
       label: '4K',
-      cost: '\u6210\u529f\u6263 34 \u70b9\uff0c\u9ad8\u8d28\u91cf 48 \u70b9',
+      cost: `\u6210\u529f\u6263 ${gptImagePricing.fourK} \u70b9\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.fourKHigh} \u70b9`,
       rows: [
         ['2880x2880', '1:1'],
         ['3840x2160', '16:9'],
@@ -845,9 +862,9 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     {
       model: 'gpt-image-2',
       rows: [
-        ['\u6807\u51c6 / 1K', '20 \u70b9 / \u5f20'],
-        ['2K', '28 \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf 46 \u70b9'],
-        ['4K', '34 \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf 48 \u70b9'],
+        ['\u6807\u51c6 / 1K', `${gptImagePricing.standard} \u70b9 / \u5f20`],
+        ['2K', `${gptImagePricing.twoK} \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.twoKHigh} \u70b9`],
+        ['4K', `${gptImagePricing.fourK} \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.fourKHigh} \u70b9`],
       ],
     },
     {
@@ -1618,6 +1635,7 @@ function AdminView({
   inviteCodesPage,
   adminCredits,
   dashboardStats,
+  visionaryDocSync,
   imageStorageStats,
   recordsStats,
   recordModelOptions,
@@ -1643,6 +1661,7 @@ function AdminView({
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
+  visionaryDocSync: VisionaryDocSyncStatus | null;
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
@@ -2234,6 +2253,34 @@ function AdminView({
                   <p className="mt-2 text-2xl font-black text-amber-200">{dashboardLowCreditUserCount}</p>
                 </div>
               </div>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-white">Visionary 文档同步</h2>
+                  <p className="mt-1 text-xs text-zinc-500">每 3 天自动校验计费配置和 API 文档变化。</p>
+                </div>
+                <span className={`rounded-full border px-3 py-1 text-xs font-bold ${visionaryDocSync?.lastError || visionaryDocSync?.reviewRequired ? 'border-amber-400/30 bg-amber-500/10 text-amber-100' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'}`}>
+                  {visionaryDocSync?.lastError ? '同步失败' : visionaryDocSync?.reviewRequired ? '文档变化待确认' : '同步正常'}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">上次检查</p>
+                  <p className="mt-2 text-sm font-black text-white">{visionaryDocSync?.lastCheckedAt ? new Date(visionaryDocSync.lastCheckedAt).toLocaleString('zh-CN') : '等待首次检查'}</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">下次检查</p>
+                  <p className="mt-2 text-sm font-black text-white">{visionaryDocSync?.nextCheckAt ? new Date(visionaryDocSync.nextCheckAt).toLocaleString('zh-CN') : '--'}</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">当前 Image2 计费</p>
+                  <p className="mt-2 text-sm font-black text-sky-200">
+                    {visionaryDocSync ? `2K ${visionaryDocSync.pricing.twoK}/${visionaryDocSync.pricing.twoKHigh} · 4K ${visionaryDocSync.pricing.fourK}/${visionaryDocSync.pricing.fourKHigh}` : '--'}
+                  </p>
+                </div>
+              </div>
+              {visionaryDocSync?.lastError ? <p className="mt-3 text-xs text-amber-200">{visionaryDocSync.lastError}</p> : null}
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2898,6 +2945,7 @@ function AdminView({
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
+  const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
@@ -2927,6 +2975,7 @@ export default function App() {
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
     recordResolutionOptions: [],
+    visionaryDocSync: null,
   });
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
     if (typeof window === 'undefined') return 'create';
@@ -2957,7 +3006,12 @@ export default function App() {
   const isNanoBananaPro = selectedModel === 'Nano_Banana_Pro';
   const showGptQuality = selectedModel === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K');
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
-  const selectedModelCredits = getModelCredits(selectedModelInfo, { imageSize, quality: gptQuality, optimizeChineseText });
+  const selectedModelCredits = getModelCredits(selectedModelInfo, {
+    imageSize,
+    quality: gptQuality,
+    optimizeChineseText,
+    pricing: gptImagePricing,
+  });
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
@@ -2994,6 +3048,25 @@ export default function App() {
     if (!user) return;
 
     void loadPrivateData();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const refreshPricing = () => {
+      void fetchModels()
+        .then((payload) => {
+          setModels([...payload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
+          setGptImagePricing(payload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(refreshPricing, 15 * 60 * 1000);
+    window.addEventListener('focus', refreshPricing);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshPricing);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -3118,6 +3191,7 @@ export default function App() {
       ]);
 
       setModels([...modelPayload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
+      setGptImagePricing(modelPayload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
       setSelectedModel((current) => {
         const exists = modelPayload.models.some((item) => item.id === current);
         if (exists) return current;
@@ -3255,6 +3329,7 @@ export default function App() {
           dashboardStats: payload.stats,
           imageStorageStats: payload.imageStorage,
           adminCredits: payload.adminCredits,
+          visionaryDocSync: payload.visionaryDocSync,
         }));
         return;
       }
@@ -3958,6 +4033,7 @@ export default function App() {
       recordsStats: emptyRecordsStats,
       recordModelOptions: [],
       recordResolutionOptions: [],
+      visionaryDocSync: null,
     });
     setActiveTab('create');
     setCurrentImage(null);
@@ -4692,7 +4768,7 @@ export default function App() {
           ) : activeTab === 'history' ? (
             <HistoryView records={historyRecords} onPreview={setPreviewImage} />
           ) : activeTab === 'apiDocs' ? (
-            <ApiDocsView onNotice={setNotice} />
+            <ApiDocsView onNotice={setNotice} gptImagePricing={gptImagePricing} />
           ) : (
             <AdminView
               users={adminOverview.users}
@@ -4703,6 +4779,7 @@ export default function App() {
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
               dashboardStats={adminOverview.dashboardStats}
+              visionaryDocSync={adminOverview.visionaryDocSync}
               imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
               recordModelOptions={adminOverview.recordModelOptions}

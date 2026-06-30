@@ -20,6 +20,11 @@ import {
   isValidImageBuffer,
 } from './generated-image-download.js';
 import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
+import {
+  getActiveGptImagePricing,
+  getVisionaryDocSyncStatus,
+  startVisionaryDocSyncScheduler,
+} from './visionary-doc-sync.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -1066,7 +1071,7 @@ function toPublicUser(user: AuthUser): PublicUser {
 
 function getModelCredits(modelId: string, imageSize = '', quality = '') {
   if (modelId === 'gpt-image-2') {
-    return getGptImageCredits(imageSize, quality);
+    return getGptImageCredits(imageSize, quality, getActiveGptImagePricing());
   }
   if (modelId === 'Nano_Banana_Pro') return 24;
   return 1;
@@ -3389,6 +3394,34 @@ async function start() {
     throw new Error('SQLite persistence is not supported in the Vercel serverless runtime.');
   }
 
+  const visionaryDocSyncStore = {
+    get: async (key: string, fallback: string) => {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        return db.getSetting(key, fallback);
+      }
+      return withWriteDb((db) => {
+        ensureSchema(db);
+        return getSetting(db, key, fallback);
+      });
+    },
+    set: async (key: string, value: string) => {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.setSetting(key, value);
+        return;
+      }
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        setSetting(db, key, value);
+      });
+    },
+  };
+  await startVisionaryDocSyncScheduler(visionaryDocSyncStore, {
+    baseUrl: VISIONARY_API_BASE_URL,
+    intervalHours: Number(process.env.VISIONARY_DOC_SYNC_INTERVAL_HOURS || 72),
+  });
+
   if (USE_SUPABASE && !IS_VERCEL) {
     startBusinessDataBackupScheduler();
   }
@@ -3742,7 +3775,7 @@ async function start() {
   });
 
   app.get('/api/models', requireAuth, (_req, res) => {
-    res.json({ models });
+    res.json({ models, gptImagePricing: getActiveGptImagePricing() });
   });
 
   // 鈹€鈹€鈹€ 鍥剧墖鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -4833,6 +4866,7 @@ async function start() {
           },
           imageStorage,
           adminCredits,
+          visionaryDocSync: getVisionaryDocSyncStatus(),
         });
         return;
       }
@@ -4863,6 +4897,7 @@ async function start() {
           },
           imageStorage,
           adminCredits: getAdminCreditSummary(db),
+          visionaryDocSync: getVisionaryDocSyncStatus(),
         };
       });
 

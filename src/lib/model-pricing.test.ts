@@ -17,3 +17,12 @@ test('defaults missing high-resolution quality to auto instead of high', () => {
   assert.equal(normalizeGptImageQuality('', '4K'), 'auto');
   assert.equal(getGptImageCredits('4K', ''), 34);
 });
+
+test('supports a synchronized pricing matrix', () => {
+  const pricing = { standard: 21, twoK: 30, twoKHigh: 50, fourK: 40, fourKHigh: 60 };
+  assert.equal(getGptImageCredits('STANDARD', 'auto', pricing), 21);
+  assert.equal(getGptImageCredits('2K', 'low', pricing), 30);
+  assert.equal(getGptImageCredits('2K', 'high', pricing), 50);
+  assert.equal(getGptImageCredits('4K', 'medium', pricing), 40);
+  assert.equal(getGptImageCredits('4K', 'high', pricing), 60);
+});
