@@ -14,6 +14,11 @@ import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
+import {
+  downloadGeneratedImage,
+  generatedImageDownloadError,
+  isValidImageBuffer,
+} from './generated-image-download.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -3085,9 +3090,14 @@ async function persistGeneratedImage(source: string) {
       throw new Error('Generated image data is invalid');
     }
 
+    const buffer = Buffer.from(base64, 'base64');
+    if (!isValidImageBuffer(buffer, mimeType)) {
+      throw new Error(generatedImageDownloadError(buffer, '图像服务返回的结果不是有效图片'));
+    }
+
     const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
     const target = path.join(GENERATED_DIR, fileName);
-    await fs.writeFile(target, Buffer.from(base64, 'base64'));
+    await fs.writeFile(target, buffer);
     return `/uploads/generated/${fileName}`;
   }
 
@@ -3095,16 +3105,10 @@ async function persistGeneratedImage(source: string) {
     return normalizedSource;
   }
 
-  const response = await fetch(normalizedSource);
-  if (!response.ok) {
-    throw new Error(`Download generated image failed (${response.status})`);
-  }
-
-  const contentType = normalizeString(response.headers.get('content-type') || '').toLowerCase();
+  const { buffer, contentType } = await downloadGeneratedImage(normalizedSource);
   const extension = contentType.startsWith('image/')
     ? fileExtensionFromMimeType(contentType.split(';')[0])
     : fileExtensionFromUrl(normalizedSource);
-  const buffer = Buffer.from(await response.arrayBuffer());
   const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
   const target = path.join(GENERATED_DIR, fileName);
   await fs.writeFile(target, buffer);
