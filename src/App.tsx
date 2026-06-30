@@ -77,6 +77,7 @@ import {
   type SavedImage,
   type UserInfo,
 } from './lib/api';
+import { getGptImageCredits } from './lib/model-pricing';
 
 interface UploadPreview {
   id: string;
@@ -353,14 +354,13 @@ function getModelCredits(
   model: Pick<ModelInfo, 'id' | 'creditsCost'> | null,
   options?: {
     imageSize?: ImageSizeOption;
+    quality?: GptQualityOption;
     optimizeChineseText?: boolean;
   },
 ) {
   if (!model) return 0;
   if (model.id === 'gpt-image-2') {
-    if (options?.imageSize === '4K') return 36;
-    if (options?.imageSize === '2K') return 28;
-    return 20;
+    return getGptImageCredits(options?.imageSize || 'STANDARD', options?.quality || 'auto');
   }
   if (model.id === 'Nano_Banana_Pro') {
     const baseCredits = typeof model.creditsCost === 'number' ? model.creditsCost : 24;
@@ -783,12 +783,12 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     ['images', 'string[]', '否', '参考图 URL 数组，最多 9 张。也兼容旧字段 reference_images。'],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。也兼容旧字段 dimensions。'],
     ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 Plus 默认 STANDARD。'],
-    ['quality', 'string', '否', 'GPT-image-2 Plus 可传 low、medium、high；不传会自动匹配。'],
+    ['quality', 'string', '否', 'GPT-image-2 Plus 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
     ['replyType', 'string', '否', '当前推荐传 json；字段会保留兼容，不影响返回结构。'],
   ];
   const modelRows = [
-    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: 'STANDARD 20 / 2K 28 / 4K 36', note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: 'STANDARD 20 / 2K 28（高 46）/ 4K 34（高 48）', note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
   ];
   const gptPixelGroups = [
@@ -808,7 +808,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     },
     {
       label: '2K',
-      cost: '\u6210\u529f\u6263 28 \u70b9',
+      cost: '\u6210\u529f\u6263 28 \u70b9\uff0c\u9ad8\u8d28\u91cf 46 \u70b9',
       rows: [
         ['2048x2048', '1:1'],
         ['2048x1152', '16:9'],
@@ -822,7 +822,7 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
     },
     {
       label: '4K',
-      cost: '\u6210\u529f\u6263 36 \u70b9',
+      cost: '\u6210\u529f\u6263 34 \u70b9\uff0c\u9ad8\u8d28\u91cf 48 \u70b9',
       rows: [
         ['2880x2880', '1:1'],
         ['3840x2160', '16:9'],
@@ -840,8 +840,8 @@ function ApiDocsView({ onNotice }: { onNotice: (message: string) => void }) {
       model: 'gpt-image-2',
       rows: [
         ['\u6807\u51c6 / 1K', '20 \u70b9 / \u5f20'],
-        ['2K', '28 \u70b9 / \u5f20'],
-        ['4K', '36 \u70b9 / \u5f20'],
+        ['2K', '28 \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf 46 \u70b9'],
+        ['4K', '34 \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf 48 \u70b9'],
       ],
     },
     {
@@ -2951,7 +2951,7 @@ export default function App() {
   const isNanoBananaPro = selectedModel === 'Nano_Banana_Pro';
   const showGptQuality = selectedModel === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K');
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
-  const selectedModelCredits = getModelCredits(selectedModelInfo, { imageSize, optimizeChineseText });
+  const selectedModelCredits = getModelCredits(selectedModelInfo, { imageSize, quality: gptQuality, optimizeChineseText });
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =

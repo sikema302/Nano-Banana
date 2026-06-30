@@ -19,6 +19,7 @@ import {
   generatedImageDownloadError,
   isValidImageBuffer,
 } from './generated-image-download.js';
+import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -1063,11 +1064,9 @@ function toPublicUser(user: AuthUser): PublicUser {
   };
 }
 
-function getModelCredits(modelId: string, imageSize = '') {
+function getModelCredits(modelId: string, imageSize = '', quality = '') {
   if (modelId === 'gpt-image-2') {
-    if (imageSize === '4K') return 36;
-    if (imageSize === '2K') return 28;
-    return 20;
+    return getGptImageCredits(imageSize, quality);
   }
   if (modelId === 'Nano_Banana_Pro') return 24;
   return 1;
@@ -1083,11 +1082,7 @@ function normalizeImageSize(value: string, modelId: string) {
 }
 
 function normalizeGptQuality(value: string, imageSize: string) {
-  if (imageSize !== '2K' && imageSize !== '4K') return 'auto';
-  if (value === 'low' || value === 'medium' || value === 'high') return value;
-  if (imageSize === '4K') return 'high';
-  if (imageSize === '2K') return 'medium';
-  return 'auto';
+  return normalizeGptImageQuality(value, imageSize);
 }
 
 function getVisionaryApiKey(modelId: string, imageSize: string) {
@@ -3791,7 +3786,8 @@ async function start() {
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
       const imageSize = normalizeImageSize(requestedImageSize, modelId);
-      creditsUsed = getModelCredits(modelId, imageSize) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+      creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const createdAt = nowIso();
@@ -3801,7 +3797,7 @@ async function start() {
         modelId,
         ratio,
         imageSize,
-        quality: modelId === 'gpt-image-2' ? requestedQuality : '',
+        quality,
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: Array.from(new Set(referenceImages)),
       });
@@ -4143,7 +4139,8 @@ async function start() {
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
       let imageSize = normalizeImageSize(requestedImageSize, modelId);
-      let creditsUsed = getModelCredits(modelId, imageSize) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+      let creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
 
       // Credits check
       if (creditsUsed > 0) {
@@ -4198,7 +4195,7 @@ async function start() {
           modelId,
           ratio,
           imageSize,
-          quality: modelId === 'gpt-image-2' ? requestedQuality : '',
+          quality,
           optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
           images: uniqueModelReferenceImages,
         });
