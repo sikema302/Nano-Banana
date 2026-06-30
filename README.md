@@ -59,6 +59,19 @@ IMAGE_RETENTION_DAYS=7
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ```
 
+### Business data backups
+
+When Supabase persistence is enabled, the server creates encrypted business-data backups on startup when needed and every 24 hours. Backups include users, credits, invite codes, text-only generation metadata, API keys, and app settings. The `images` table, generation image/reference fields, and all uploaded/generated image files are intentionally excluded.
+
+```bash
+npm run backup:data
+npm run verify:backup -- data/business-backups/<backup-file>
+npm run restore:data -- --file data/business-backups/<backup-file>       # dry run
+npm run restore:data -- --file data/business-backups/<backup-file> --confirm
+```
+
+Backups are stored in `data/business-backups` and the newest 30 files are retained by default. Set `BACKUP_ENCRYPTION_KEY` to a stable private value when possible; otherwise the server derives encryption from `JWT_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`.
+
 Notes:
 
 - `SUPABASE_SERVICE_ROLE_KEY` is server-only.

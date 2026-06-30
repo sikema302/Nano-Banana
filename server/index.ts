@@ -13,6 +13,8 @@ import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 
+import { startBusinessDataBackupScheduler } from './business-backup.js';
+
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const IS_VERCEL = Boolean(process.env.VERCEL);
@@ -3386,6 +3388,10 @@ async function start() {
     await ensureRuntimeSchema();
   } else if (IS_VERCEL) {
     throw new Error('SQLite persistence is not supported in the Vercel serverless runtime.');
+  }
+
+  if (USE_SUPABASE && !IS_VERCEL) {
+    startBusinessDataBackupScheduler();
   }
 
   await runImageRetentionCleanup('startup');
