@@ -4512,7 +4512,7 @@ export default function App() {
                                 <span
                                   id="gpt-high-quality-tip"
                                   role="tooltip"
-                                  className="pointer-events-none absolute bottom-full right-0 z-[90] mb-3 hidden w-[236px] rounded-xl border border-white/15 bg-[#090909]/98 px-4 py-3 text-left text-[14px] font-black leading-[1.55] text-white shadow-[0_18px_46px_rgba(0,0,0,0.72)] group-hover:block group-focus:block"
+                                  className="pointer-events-none absolute -right-3 bottom-full z-[90] mb-3 hidden w-[188px] rounded-xl border border-white/15 bg-[#090909]/98 py-3 pl-9 pr-3 text-left text-[10px] font-black leading-[1.5] text-white shadow-[0_18px_46px_rgba(0,0,0,0.72)] group-hover:block group-focus:block"
                                 >
                                   {gptHighQualityTips.map((tip) => (
                                     <span className="block" key={tip}>{tip}</span>
