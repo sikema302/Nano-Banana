@@ -208,6 +208,12 @@ const gptQualityOptions: Array<{ value: GptQualityOption; label: string }> = [
   { value: 'high', label: '\u9ad8' },
 ];
 
+const gptHighQualityTips = [
+  '\u66f4\u9ad8\u8d28\u91cfPRO\u6a21\u578b\uff01',
+  '\u4e2d\u6587\u4e71\u7801\u7387\u6781\u4f4e\uff01',
+  '\u8fdd\u89c4\u63d0\u793a\u8bcd\u9650\u5236\u66f4\u4e25\u683c\uff01',
+];
+
 const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
   { value: '2K', label: '2K', hint: '\u7a33\u5b9a\u9ad8\u6e05\u8f93\u51fa' },
   { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
@@ -4482,25 +4488,42 @@ export default function App() {
                 {showGptQuality ? (
                   <section className="space-y-2">
                     <div className="text-[12px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-3 gap-2 overflow-visible">
                       {gptQualityOptions.map((item) => {
                         const active = gptQuality === item.value;
+                        const isHighQuality = item.value === 'high';
 
                         return (
                           <button
                             key={item.value}
-                          className={
-                            active
-                                ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
-                                : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
-                          }
-                          type="button"
-                          onClick={() => setGptQuality(item.value)}
-                        >
-                          <span className="block whitespace-nowrap leading-none">{item.label}</span>
-                        </button>
-                      );
-                    })}
+                            className={`group relative h-12 min-h-0 overflow-visible whitespace-nowrap px-3 py-0 text-[15px] font-black ${
+                              active ? 'btn-primary' : 'btn-secondary text-zinc-400'
+                            }`}
+                            type="button"
+                            aria-describedby={isHighQuality ? 'gpt-high-quality-tip' : undefined}
+                            onClick={() => setGptQuality(item.value)}
+                          >
+                            <span className="block whitespace-nowrap leading-none">{item.label}</span>
+                            {isHighQuality ? (
+                              <>
+                                <span className="pointer-events-none absolute -right-2 -top-2 z-20 rounded-full border border-orange-400/80 bg-[linear-gradient(180deg,#b94f16_0%,#8f2f0c_100%)] px-2 py-0.5 text-[11px] font-black leading-5 text-orange-100 shadow-[0_4px_14px_rgba(194,65,12,0.38)]">
+                                  {'\u9ad8\u8d28'}
+                                </span>
+                                <span
+                                  id="gpt-high-quality-tip"
+                                  role="tooltip"
+                                  className="pointer-events-none absolute bottom-full right-0 z-[90] mb-3 hidden w-[236px] rounded-xl border border-white/15 bg-[#090909]/98 px-4 py-3 text-left text-[14px] font-black leading-[1.55] text-white shadow-[0_18px_46px_rgba(0,0,0,0.72)] group-hover:block group-focus:block"
+                                >
+                                  {gptHighQualityTips.map((tip) => (
+                                    <span className="block" key={tip}>{tip}</span>
+                                  ))}
+                                  <span className="absolute -bottom-1.5 right-7 h-3 w-3 rotate-45 border-b border-r border-white/15 bg-[#090909]" />
+                                </span>
+                              </>
+                            ) : null}
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
                 ) : null}
