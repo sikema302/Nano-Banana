@@ -11,7 +11,7 @@ export type GptImagePricing = {
 export const DEFAULT_GPT_IMAGE_PRICING: GptImagePricing = {
   standard: 20,
   twoK: 28,
-  twoKHigh: 46,
+  twoKHigh: 48,
   fourK: 34,
   fourKHigh: 48,
 };

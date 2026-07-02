@@ -23,7 +23,7 @@ test('parses the complete Visionary GPT Image pricing matrix', () => {
   assert.deepEqual(parseVisionaryGptImagePricing({ data: pricingRows() }), {
     standard: 20,
     twoK: 28,
-    twoKHigh: 46,
+    twoKHigh: 48,
     fourK: 34,
     fourKHigh: 48,
   });
