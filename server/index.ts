@@ -3989,6 +3989,78 @@ async function start() {
     await publicGenerateHandler(req, res);
   };
 
+  const comfyuiGeminiHandler = async (req: Request, res: Response) => {
+    const { action } = parseGeminiModelAction(req.params.modelAction);
+    if (action !== 'generateContent') {
+      res.status(404).json({ error: `Unsupported Gemini action: ${action}` });
+      return;
+    }
+
+    const geminiApiKey =
+      normalizeString(req.query.key) ||
+      normalizeString(req.headers['x-goog-api-key']) ||
+      normalizeString(asPlainObject(req.body).api_key);
+    if (geminiApiKey && !req.headers.authorization && !req.headers['x-api-key']) {
+      req.headers.authorization = `Bearer ${geminiApiKey}`;
+    }
+
+    const rawPrompt =
+      normalizeString(req.body?.prompt || req.body?.text || req.body?.message) ||
+      extractGeminiTextParts(req.body).join('\n\n').trim();
+    const prompt = stripGeminiTransportParameters(rawPrompt);
+    const requestBody = asPlainObject(req.body);
+    const generationConfig = asPlainObject(requestBody.generationConfig || requestBody.generation_config);
+    const imageConfig = asPlainObject(generationConfig.imageConfig || generationConfig.image_config);
+    const rawReferenceImages = Array.from(
+      new Set([
+        ...normalizeGeminiReferenceImages(req.body?.images),
+        ...normalizeGeminiReferenceImages(req.body?.reference_images),
+        ...extractGeminiReferenceImages(req.body),
+      ]),
+    );
+    const referenceImages = rawReferenceImages.filter(isReferenceImageInput);
+    const dimensions = normalizeString(
+      requestBody.dimensions ||
+      requestBody.aspectRatio ||
+      requestBody.aspect_ratio ||
+      imageConfig.aspectRatio ||
+      imageConfig.aspect_ratio,
+    ) || '1:1';
+    const imageSize = normalizeString(
+      requestBody.imageSize ||
+      requestBody.image_size ||
+      imageConfig.imageSize ||
+      imageConfig.image_size,
+    );
+
+    // Force model to Nano_Banana_Pro for ComfyUI plugin compatibility
+    req.body = {
+      ...requestBody,
+      prompt,
+      model: 'Nano_Banana_Pro',
+      dimensions,
+      aspectRatio: dimensions,
+      imageSize,
+      images: referenceImages,
+      reference_images: referenceImages,
+    };
+
+    const originalJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      const payload = asPlainObject(body);
+      const image = asPlainObject(payload.image);
+      if (normalizeString(image.imagePath)) {
+        void toGeminiGenerateContentResponse(req, body as PublicGenerateResult)
+          .then((geminiBody) => originalJson(geminiBody))
+          .catch(() => originalJson(body));
+        return res;
+      }
+      return originalJson(body);
+    }) as Response['json'];
+
+    await publicGenerateHandler(req, res);
+  };
+
   [
     '/api/v1/generate',
     '/v1/api/generate',
@@ -3997,6 +4069,9 @@ async function start() {
     '/v1/chat/completions',
     '/v1/api/nano-banana',
   ].forEach((path) => app.post(path, publicGenerateHandler));
+
+  // Register ComfyUI Gemini handler first (takes precedence for plugin requests)
+  app.post('/v1beta/models/:modelAction', comfyuiGeminiHandler);
 
   ['/v1beta/models/:modelAction', '/v1/api/nano-banana/v1beta/models/:modelAction'].forEach((path) =>
     app.post(path, geminiGenerateContentHandler),
