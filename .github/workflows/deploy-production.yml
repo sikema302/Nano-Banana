@@ -63,6 +63,12 @@ jobs:
           project='/var/www/nano-banana'
           backups="$project/.deploy-backups"
           timestamp="$(date +%Y%m%d-%H%M%S)"
+          ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
+          if ! grep -qx 'Port 2223' "$ssh_ports" 2>/dev/null; then
+            printf 'Port 2222\nPort 2223\n' > "$ssh_ports"
+            sshd -t
+            systemctl reload ssh
+          fi
           mkdir -p "$backups"
           tar -czf "$backups/$timestamp-pre-deploy.tar.gz" \
             --exclude='./node_modules' \
