@@ -1,0 +1,101 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SERVER_HOST: 154.9.24.91
+      SSH_PORT: "2223"
+      SERVER_USER: root
+      PROJECT_PATH: /var/www/nano-banana
+      APP_NAME: nano-banana
+      SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify and build
+        run: |
+          npm run lint
+          npm run test:server
+          npm run build
+
+      - name: Package release
+        run: |
+          mkdir -p .deploy-package
+          git archive HEAD | tar -x -C .deploy-package
+          cp -a dist .deploy-package/dist
+          tar -czf release.tar.gz -C .deploy-package .
+
+      - name: Install SSH client
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Upload release
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -p "$SSH_PORT" \
+            "$SERVER_USER@$SERVER_HOST" "mkdir -p '$PROJECT_PATH'"
+          sshpass -e scp -P "$SSH_PORT" -o StrictHostKeyChecking=no \
+            release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
+
+      - name: Back up and restart
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          project='/var/www/nano-banana'
+          backups="$project/.deploy-backups"
+          timestamp="$(date +%Y%m%d-%H%M%S)"
+          mkdir -p "$backups"
+          tar -czf "$backups/$timestamp-pre-deploy.tar.gz" \
+            --exclude='./node_modules' \
+            --exclude='./.git' \
+            --exclude='./.runtime' \
+            --exclude='./.deploy-backups' \
+            --exclude='./uploads' \
+            --exclude='./.uploads' \
+            -C "$project" .
+          cd "$project"
+          rm -rf dist server src scripts supabase api .github
+          tar -xzf /tmp/nano-banana-release.tar.gz -C "$project"
+          rm -f /tmp/nano-banana-release.tar.gz
+          if [ ! -x node_modules/.bin/tsx ]; then
+            npm ci
+          fi
+          if pm2 describe nano-banana >/dev/null 2>&1; then
+            pm2 restart nano-banana --update-env
+          else
+            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx
+          fi
+          pm2 save >/dev/null
+          for attempt in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:3001/api/health; then
+              echo
+              echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
+              exit 0
+            fi
+            sleep 2
+          done
+          pm2 logs nano-banana --lines 80 --nostream
+          exit 1
+          REMOTE
+
+      - name: Verify public health
+        run: curl -fsS --retry 5 --retry-delay 3 https://pixory.top/api/health
