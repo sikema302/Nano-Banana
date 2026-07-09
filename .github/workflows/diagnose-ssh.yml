@@ -43,3 +43,10 @@ jobs:
             | grep -E '45\.192\.201\.21|DROP|REJECT' \
             | tail -n 80 || true
           REMOTE
+
+      - name: Capture local-source SSH packets
+        run: |
+          sshpass -e ssh -p 2223 -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            root@154.9.24.91 \
+            "if command -v tcpdump >/dev/null 2>&1; then timeout 35 tcpdump -nn -i any 'host 45.192.201.21 and tcp port 2223' -c 20; else echo TCPDUMP_NOT_INSTALLED; fi" \
+            || true
