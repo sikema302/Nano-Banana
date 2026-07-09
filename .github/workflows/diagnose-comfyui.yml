@@ -1,0 +1,34 @@
+name: Diagnose ComfyUI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+
+    steps:
+      - name: Install SSH client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Read recent API logs
+        run: |
+          sshpass -e ssh -p 2223 -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            root@154.9.24.91 'bash -s' <<'REMOTE'
+          set -u
+          echo '== nginx v1beta access =='
+          find /www/wwwlogs /var/log/nginx -maxdepth 2 -type f 2>/dev/null \
+            | while read -r file; do
+                grep -H '/v1beta/models/' "$file" 2>/dev/null | tail -n 80 || true
+              done
+          echo '== nginx recent errors =='
+          find /www/wwwlogs /var/log/nginx -maxdepth 2 -type f 2>/dev/null \
+            | while read -r file; do
+                grep -H -E 'upstream|v1beta|too large|timed out' "$file" 2>/dev/null | tail -n 50 || true
+              done
+          echo '== application recent errors =='
+          tail -n 250 /root/.pm2/logs/nano-banana-error.log 2>/dev/null || true
+          REMOTE
