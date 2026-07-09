@@ -10,6 +10,7 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const BACKUP_MAGIC = Buffer.from('PXBK1');
 const DEFAULT_PAGE_SIZE = 1_000;
+const RUNTIME_APP_SETTING_KEYS = new Set(['public_async_generation_tasks_v1']);
 
 export const BUSINESS_BACKUP_TABLES = [
   'users',
@@ -135,6 +136,9 @@ async function buildPayload(): Promise<BusinessBackupPayload> {
     entries.push([table, await fetchAllRows(client, table)] as const);
   }
   const tables = Object.fromEntries(entries) as BusinessBackupPayload['tables'];
+  tables.app_settings = tables.app_settings.filter(
+    (row) => !RUNTIME_APP_SETTING_KEYS.has(String(row.key || '')),
+  );
   const manifest = Object.fromEntries(
     BUSINESS_BACKUP_TABLES.map((table) => [table, { rows: tables[table].length, sha256: hashRows(tables[table]) }]),
   ) as BusinessBackupPayload['manifest'];

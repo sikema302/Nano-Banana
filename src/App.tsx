@@ -783,19 +783,32 @@ function ApiDocsView({
     2,
   );
   const successExample = `{
-  "image": {
-    "prompt": "...",
-    "modelName": "Nano Banana Pro",
-    "dimensions": "1:1",
-    "imageSize": "2K",
-    "imagePath": "https://pixory.top/uploads/generated/xxx.png",
-    "referenceImages": ["https://example.com/reference-1.png"],
-    "createdAt": "2026-06-15T00:00:00.000Z"
-  },
+  "id": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "taskId": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "object": "image.generation.task",
+  "status": "queued",
+  "generationStatus": "pending",
+  "results": [],
+  "progress": 0,
+  "retryAfterSeconds": 3,
   "usage": {
     "creditsUsed": 32,
     "remainingCredits": 968
   }
+}`;
+  const completedExample = `{
+  "id": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "taskId": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "object": "image.generation.task",
+  "status": "succeeded",
+  "generationStatus": "succeeded",
+  "results": [
+    {
+      "url": "https://pixory.top/uploads/generated/xxx.png"
+    }
+  ],
+  "progress": 100,
+  "retryAfterSeconds": 0
 }`;
   const errorExample = `{
   "error": "API Key 额度不足，需要 32，剩余 12"
@@ -882,8 +895,8 @@ function ApiDocsView({
       title: 'gpt-image-2 接口',
       subtitle: '适合通用高质量生图。通过同一个 PIXORY 入口调用，model 固定传 gpt-image-2。',
       model: 'gpt-image-2',
-      endpointPath: '/v1/api/generate',
-      compatiblePaths: ['/api/v1/generate', '/v1/api/generate', '/v1/images/generations', '/openapi/v1/images/generations', '/v1/chat/completions'],
+      endpointPath: '/v1/async/images/generations',
+      compatiblePaths: ['/v1/async/images/generations', '/openapi/v1/async/images/generations', '/api/v1/async/generate'],
       request: JSON.stringify(
         {
           model: 'gpt-image-2',
@@ -904,8 +917,8 @@ function ApiDocsView({
       title: 'nano-banana 接口',
       subtitle: '适合参考图重绘、融合、商品图改版和中文场景增强。model 可传 nano-banana-pro。',
       model: 'nano-banana-pro',
-      endpointPath: '/v1/api/nano-banana',
-      compatiblePaths: ['/api/v1/generate', '/v1/api/nano-banana'],
+      endpointPath: '/v1/async/images/generations',
+      compatiblePaths: ['/v1/async/images/generations', '/openapi/v1/async/images/generations', '/api/v1/async/generate'],
       request: requestExample,
       bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
     },
@@ -1031,8 +1044,25 @@ const response = await fetch('${baseUrl}${section.endpointPath}', {
 });
 
 const result = await response.json();
-if (!response.ok) throw new Error(result.error || 'Generate failed');
-console.log(result.image.imagePath);`;
+if (!response.ok) throw new Error(result.error || 'Submit task failed');
+
+let task = result;
+while (task.status === 'queued' || task.status === 'running') {
+  await new Promise((resolve) =>
+    setTimeout(resolve, (task.retryAfterSeconds || 5) * 1000)
+  );
+  const query = await fetch(
+    '${baseUrl}/v1/async/images/generations/' + task.id,
+    { headers: { Authorization: 'Bearer ' + PIXORY_API_KEY } }
+  );
+  task = await query.json();
+  if (!query.ok) throw new Error(task.error || 'Query task failed');
+}
+
+if (task.status !== 'succeeded') {
+  throw new Error(task.error || 'Generate failed');
+}
+console.log(task.results[0].url);`;
               const sectionModels = modelRows.filter((item) =>
                 section.id === 'gpt-image-2' ? item.model === 'gpt-image-2' : item.model === 'nano-banana-pro',
               );
@@ -1043,7 +1073,7 @@ console.log(result.image.imagePath);`;
                     <div className="border-b border-white/10 px-5 py-5">
                       <div className="mb-4 flex flex-wrap items-center gap-2">
                         <span className="rounded-md bg-orange-500/15 px-2.5 py-1 text-xs font-black text-orange-300">POST</span>
-                        <span className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-black text-emerald-200">同步返回结果</span>
+                        <span className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-black text-emerald-200">异步提交，轮询结果</span>
                       </div>
                       <h1 className="text-[1.7rem] font-black text-white">{section.title}</h1>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">{section.subtitle}</p>
@@ -1051,7 +1081,7 @@ console.log(result.image.imagePath);`;
                     <div className="p-4">
                       <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">
                         <span className="flex-none rounded-md bg-orange-500/15 px-2.5 py-1 text-xs font-black text-orange-300">POST</span>
-                        <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}</code>
+                        <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}{section.endpointPath}</code>
                       </div>
                       <div className="mt-3 rounded-xl border border-white/10 bg-black/15 p-3">
                         <div className="text-xs font-bold text-zinc-500">兼容路径</div>
@@ -1059,6 +1089,17 @@ console.log(result.image.imagePath);`;
                           {section.compatiblePaths.map((path) => (
                             <code key={path} className="break-all rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs font-black text-zinc-100">{path}</code>
                           ))}
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">
+                          <span className="flex-none rounded-md bg-sky-500/15 px-2.5 py-1 text-xs font-black text-sky-200">GET</span>
+                          <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}/v1/async/images/generations/:id</code>
+                        </div>
+                        <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">
+                          <span className="flex-none rounded-md bg-violet-500/15 px-2.5 py-1 text-xs font-black text-violet-200">POST</span>
+                          <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}/v1/async/images/generations/status</code>
+                          <span className="text-xs text-zinc-500">批量查询</span>
                         </div>
                       </div>
                     </div>
@@ -1081,7 +1122,7 @@ console.log(result.image.imagePath);`;
                         <KeyRound size={18} className="mt-0.5 text-sky-200" />
                         <div>
                           <h3 className="text-base font-black text-white">按 Key 扣额度</h3>
-                          <p className="mt-1 text-sm leading-6 text-zinc-400">生成成功后按模型扣减额度，失败会自动退回预扣额度；额度不足会直接拒绝。</p>
+                          <p className="mt-1 text-sm leading-6 text-zinc-400">提交时预扣模型额度，任务失败会自动退回；额度不足会直接拒绝。</p>
                         </div>
                       </div>
                     </article>
@@ -1198,11 +1239,15 @@ Content-Type: application/json`)}</pre>
                     </div>
                     <div className="grid gap-4 p-5 xl:grid-cols-2">
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-200">200</span>生成成功</div>
+                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-orange-500/15 px-2 py-0.5 text-xs text-orange-200">202</span>任务已提交</div>
                         <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{successExample}</pre>
                       </div>
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-red-500/15 px-2 py-0.5 text-xs text-red-200">400 / 401 / 402 / 500</span>生成失败</div>
+                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-200">200</span>查询成功结果</div>
+                        <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{completedExample}</pre>
+                      </div>
+                      <div className="space-y-3 xl:col-span-2">
+                        <div className="flex items-center gap-2 text-sm font-black text-white"><span className="rounded-md bg-red-500/15 px-2 py-0.5 text-xs text-red-200">400 / 401 / 402 / 404 / 502</span>请求失败</div>
                         <pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-xs leading-6 text-zinc-200">{errorExample}</pre>
                       </div>
                     </div>

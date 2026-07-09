@@ -154,12 +154,12 @@ npm run db:sync:supabase
 
 ## Public API (Async)
 
-Async endpoints return a `taskId` immediately and process generation in the background. Use the status endpoint to poll for results.
+Pixory submits generation to Visionary's async API and immediately returns Pixory's own task ID. Tasks are bound to the API key that created them, survive server restarts through the configured database, and persist the completed image locally before returning it. Failed tasks automatically refund reserved credits.
 
 ### Submit async task
 
 ```http
-POST /api/v1/async/generate
+POST /v1/async/images/generations
 Content-Type: application/json
 X-API-Key: your_public_api_key
 ```
@@ -181,10 +181,14 @@ X-API-Key: your_public_api_key
 
 ```json
 {
-  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "id": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "taskId": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "object": "image.generation.task",
   "status": "queued",
+  "generationStatus": "pending",
+  "results": [],
+  "progress": 0,
   "retryAfterSeconds": 3,
-  "message": "Task accepted. Use GET /api/v1/async/status/:taskId to query result.",
   "usage": {
     "creditsUsed": 48,
     "remainingCredits": 952
@@ -195,7 +199,7 @@ X-API-Key: your_public_api_key
 ### Query async status
 
 ```http
-GET /api/v1/async/status/:taskId?model=gpt-image-2&imageSize=2K
+GET /v1/async/images/generations/:id
 X-API-Key: your_public_api_key
 ```
 
@@ -203,8 +207,11 @@ X-API-Key: your_public_api_key
 
 ```json
 {
-  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "id": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "taskId": "pxgen_1783562400000_a1b2c3d4e5f6",
   "status": "queued",
+  "generationStatus": "pending",
+  "results": [],
   "progress": 0,
   "retryAfterSeconds": 3
 }
@@ -214,18 +221,26 @@ X-API-Key: your_public_api_key
 
 ```json
 {
-  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "id": "pxgen_1783562400000_a1b2c3d4e5f6",
+  "taskId": "pxgen_1783562400000_a1b2c3d4e5f6",
   "status": "succeeded",
+  "generationStatus": "succeeded",
   "progress": 100,
   "retryAfterSeconds": 0,
-  "imageUrl": "https://visionary.beer/api/generations/..."
+  "results": [
+    {
+      "url": "https://your-domain.com/uploads/generated/..."
+    }
+  ]
 }
 ```
+
+Batch polling is available at `POST /v1/async/images/generations/status` with body `{ "ids": ["pxgen_..."] }`. Compatible paths under `/openapi/v1/async/...` are also supported; the older `/api/v1/async/generate` and `/api/v1/async/status/:taskId` aliases remain available.
 
 ### Polling example (JavaScript)
 
 ```javascript
-const submit = await fetch('https://your-domain.com/api/v1/async/generate', {
+const submit = await fetch('https://your-domain.com/v1/async/images/generations', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -240,19 +255,18 @@ const submit = await fetch('https://your-domain.com/api/v1/async/generate', {
   }),
 });
 
-const { taskId, retryAfterSeconds } = await submit.json();
+let result = await submit.json();
 
-let result;
-while (true) {
-  await new Promise((r) => setTimeout(r, retryAfterSeconds * 1000));
-  const query = await fetch(`https://your-domain.com/api/v1/async/status/${taskId}?model=gpt-image-2&imageSize=2K`, {
+while (result.status === 'queued' || result.status === 'running') {
+  await new Promise((r) => setTimeout(r, (result.retryAfterSeconds || 5) * 1000));
+  const query = await fetch(`https://your-domain.com/v1/async/images/generations/${result.id}`, {
     headers: { 'X-API-Key': 'your_public_api_key' },
   });
   result = await query.json();
-  if (result.status === 'succeeded' || result.status === 'failed') break;
 }
 
-console.log(result.imageUrl); // final image URL
+if (result.status !== 'succeeded') throw new Error(result.error || 'Generation failed');
+console.log(result.results[0].url);
 ```
 
 ---

@@ -12,7 +12,7 @@ function pricingRows(overrides: Record<string, number> = {}) {
       quality,
       credits:
         overrides[`${imageSize}:${quality}`] ??
-        (imageSize === '2K' ? (quality === 'high' ? 46 : 28) : quality === 'high' ? 48 : 34),
+        (imageSize === '2K' ? (quality === 'high' ? 48 : 28) : quality === 'high' ? 48 : 34),
       priority: 100,
       isEnabled: true,
     })),

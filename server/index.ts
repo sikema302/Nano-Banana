@@ -172,6 +172,29 @@ type VisionaryAsyncBatchResponse = {
   retryAfterSeconds?: number;
 };
 
+type PublicAsyncGenerationTask = {
+  id: string;
+  upstreamId: string;
+  apiKeyId: string;
+  apiKeyHash: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  generationStatus: string;
+  progress: number;
+  retryAfterSeconds: number;
+  creditsUsed: number;
+  refunded: boolean;
+  prompt: string;
+  modelId: string;
+  modelName: string;
+  dimensions: string;
+  imageSize: string;
+  referenceImages: string[];
+  createdAt: string;
+  updatedAt: string;
+  imagePath?: string;
+  error?: string;
+};
+
 type PaginationResult = {
   page: number;
   pageSize: number;
@@ -298,6 +321,7 @@ const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
 const PUBLIC_API_KEYS_SETTING_KEY = 'public_api_keys_v1';
 const PUBLIC_API_KEYS_BACKUP_SETTING_KEY = 'public_api_keys_v1_backup';
+const PUBLIC_ASYNC_TASKS_SETTING_KEY = 'public_async_generation_tasks_v1';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
 const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
@@ -2100,6 +2124,92 @@ async function getPublicApiKeyBalance(plainKey: string) {
   };
 }
 
+function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): PublicAsyncGenerationTask | null {
+  const id = normalizeString(value.id);
+  const upstreamId = normalizeString(value.upstreamId);
+  const apiKeyId = normalizeString(value.apiKeyId);
+  const apiKeyHash = normalizeString(value.apiKeyHash);
+  if (!id || !upstreamId || !apiKeyId || !apiKeyHash) return null;
+
+  const rawStatus = normalizeString(value.status).toLowerCase();
+  const status: PublicAsyncGenerationTask['status'] =
+    rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'running' ? rawStatus : 'queued';
+  return {
+    id,
+    upstreamId,
+    apiKeyId,
+    apiKeyHash,
+    status,
+    generationStatus: normalizeString(value.generationStatus) || (status === 'queued' ? 'pending' : status),
+    progress: Math.max(0, Math.min(100, Number(value.progress || 0))),
+    retryAfterSeconds: Math.max(0, Number(value.retryAfterSeconds ?? 3)),
+    creditsUsed: Math.max(0, Math.floor(Number(value.creditsUsed || 0))),
+    refunded: Boolean(value.refunded),
+    prompt: normalizeString(value.prompt),
+    modelId: normalizeString(value.modelId),
+    modelName: normalizeString(value.modelName),
+    dimensions: normalizeString(value.dimensions) || '1:1',
+    imageSize: normalizeString(value.imageSize),
+    referenceImages: Array.isArray(value.referenceImages)
+      ? value.referenceImages.map(normalizeString).filter(Boolean)
+      : [],
+    createdAt: normalizeString(value.createdAt) || nowIso(),
+    updatedAt: normalizeString(value.updatedAt) || nowIso(),
+    imagePath: normalizeString(value.imagePath) || undefined,
+    error: normalizeString(value.error) || undefined,
+  };
+}
+
+function normalizePublicAsyncTasks(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => normalizePublicAsyncTask(item as Partial<PublicAsyncGenerationTask>))
+    .filter((item): item is PublicAsyncGenerationTask => Boolean(item));
+}
+
+async function readPublicAsyncTasks(): Promise<PublicAsyncGenerationTask[]> {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    const raw = await db.getSetting(PUBLIC_ASYNC_TASKS_SETTING_KEY, '[]');
+    return normalizePublicAsyncTasks(parseJsonSetting(raw, []));
+  }
+
+  return withReadDb((db) => {
+    ensureSchema(db);
+    return normalizePublicAsyncTasks(parseJsonSetting(getSetting(db, PUBLIC_ASYNC_TASKS_SETTING_KEY, '[]'), []));
+  });
+}
+
+async function writePublicAsyncTasks(tasks: PublicAsyncGenerationTask[]) {
+  const retentionCutoff = Date.now() - 7 * 24 * 60 * 60 * 1_000;
+  const retained = tasks
+    .filter((task) => {
+      const updatedAt = new Date(task.updatedAt).getTime();
+      return task.status === 'queued' || task.status === 'running' || !Number.isFinite(updatedAt) || updatedAt >= retentionCutoff;
+    })
+    .slice(-2_000);
+  const serialized = JSON.stringify(retained);
+
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.setSetting(PUBLIC_ASYNC_TASKS_SETTING_KEY, serialized);
+    return;
+  }
+
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    setSetting(db, PUBLIC_ASYNC_TASKS_SETTING_KEY, serialized);
+  });
+}
+
+let publicAsyncTaskMutationQueue: Promise<unknown> = Promise.resolve();
+
+function withPublicAsyncTaskMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = publicAsyncTaskMutationQueue.then(operation, operation);
+  publicAsyncTaskMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 async function refundPublicApiKeyCreditsUnlocked(keyId: string, credits: number) {
   const records = await readPublicApiKeyRecords();
   await writePublicApiKeyRecords(
@@ -2916,84 +3026,26 @@ async function callVisionaryGeneration({
   optimizeChineseText: boolean;
   images: string[];
 }) {
-  const apiKey = getVisionaryApiKey(modelId, imageSize);
-  if (!apiKey) {
-    throw new Error(`${getVisionaryApiKeyLabel(modelId, imageSize)} is not configured`);
-  }
-
-  const aspectRatio = ratio || '1:1';
-  const visionaryAspectRatio =
-    modelId === 'gpt-image-2' ? getGptImageAspectRatio(aspectRatio, imageSize) : aspectRatio;
-  const requestConfig =
-    modelId === 'gpt-image-2'
-      ? {
-          endpointPath: '/v1/api/generate',
-          body: {
-            prompt,
-            model: 'gpt-image-2',
-            images,
-            aspectRatio: visionaryAspectRatio,
-            imageSize: imageSize === 'STANDARD' ? undefined : imageSize,
-            quality: normalizeGptQuality(quality, imageSize),
-            replyType: 'json',
-          },
-        }
-      : {
-          endpointPath: '/v1/api/nano-banana',
-          body: {
-            prompt,
-            model: 'nano-banana-pro',
-            images,
-            aspectRatio: visionaryAspectRatio,
-            imageSize: imageSize || '2K',
-            // Keep local billing at +8 for AI enhancement, but use the standard upstream route.
-            optimizeChineseText: false,
-            replyType: 'json',
-          },
-        };
-
-  const response = await fetchVisionaryWithConnectRetry(`${VISIONARY_API_BASE_URL}${requestConfig.endpointPath}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Idempotency-Key': `req_${Date.now()}_${randomHex(8)}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestConfig.body),
+  const task = await callVisionaryAsyncGeneration({
+    prompt,
+    modelId,
+    ratio,
+    imageSize,
+    quality,
+    optimizeChineseText,
+    images,
   });
+  const taskId = normalizeString(task.id || task.taskId);
+  if (!taskId) throw new Error('Visionary async API returned no task id');
 
-  const responseText = await response.text().catch(() => '');
-  let payload: VisionaryGenerationResponse | null = null;
-  if (responseText) {
-    try {
-      payload = JSON.parse(responseText) as VisionaryGenerationResponse;
-    } catch {
-      payload = null;
-    }
-  }
-  if (!response.ok) {
-    throw new Error(getVisionaryErrorMessage(payload || responseText, `Visionary API request failed (${response.status})`));
-  }
-
-  const responseStatus = normalizeString(payload?.status).toLowerCase();
-  const upstreamError = getVisionaryErrorMessage(payload, '');
-  if (upstreamError && (responseStatus === 'failed' || responseStatus === 'error' || Boolean(payload?.error))) {
-    throw new Error(upstreamError);
-  }
-  if (responseStatus === 'failed' || responseStatus === 'error' || responseStatus === 'rejected') {
-    throw new Error(upstreamError || `Visionary API returned status: ${responseStatus}`);
-  }
-
+  const payload = task.status === 'succeeded'
+    ? task
+    : await pollVisionaryAsyncUntilComplete(taskId, modelId, imageSize);
   const imageUrl =
-    payload?.results?.find((item) => item.url || item.content)?.url ||
-    payload?.results?.[0]?.content ||
-    payload?.output?.find((item) => item.url || item.content)?.url ||
-    payload?.output?.[0]?.content ||
-    payload?.data?.find((item) => item.url || item.b64_json)?.url ||
-    payload?.data?.[0]?.b64_json ||
-    payload?.url;
+    payload.results?.find((item) => item.url || item.content)?.url ||
+    payload.results?.[0]?.content;
   if (!imageUrl) {
-    throw new Error(`Visionary API returned no image URL${payload?.id ? `, response id: ${payload.id}` : ''}`);
+    throw new Error(`Visionary async API returned no image URL, task id: ${taskId}`);
   }
 
   return imageUrl;
@@ -3075,11 +3127,12 @@ async function callVisionaryAsyncGeneration({
     );
   }
 
-  if (!payload?.id) {
+  const taskId = normalizeString(payload?.id || payload?.taskId);
+  if (!payload || !taskId) {
     throw new Error('Visionary async API returned no task id');
   }
 
-  return payload;
+  return { ...payload, id: taskId };
 }
 
 async function queryVisionaryAsyncStatus(taskId: string, modelId: string, imageSize: string) {
@@ -3134,7 +3187,9 @@ async function pollVisionaryAsyncUntilComplete(
       return status;
     }
     if (status.status === 'failed') {
-      throw new Error(status.error || `Async generation failed: ${status.generationStatus || 'unknown'}`);
+      throw new Error(
+        getVisionaryErrorMessage(status, `Async generation failed: ${status.generationStatus || 'unknown'}`),
+      );
     }
 
     const delayMs = (status.retryAfterSeconds || 5) * 1000;
@@ -4249,7 +4304,139 @@ async function start() {
 
   // 鈹€鈹€鈹€ 寮傛鐢熸垚鎺ュ彛 鈹€鈹€鈹€
 
-  app.post('/api/v1/async/generate', async (req, res) => {
+  function publicAsyncTaskPayload(req: Request, task: PublicAsyncGenerationTask) {
+    const imageUrl = task.imagePath ? toPublicAssetUrl(req, task.imagePath) : '';
+    return {
+      id: task.id,
+      taskId: task.id,
+      object: 'image.generation.task',
+      status: task.status,
+      generationStatus: task.generationStatus,
+      results: imageUrl ? [{ url: imageUrl }] : [],
+      progress: task.status === 'succeeded' ? 100 : task.progress,
+      retryAfterSeconds: task.status === 'succeeded' || task.status === 'failed' ? 0 : task.retryAfterSeconds,
+      ...(task.error ? { error: task.error } : {}),
+    };
+  }
+
+  async function persistPublicAsyncGeneration(task: PublicAsyncGenerationTask, imagePath: string) {
+    const apiRequestMs = Math.max(0, Date.now() - new Date(task.createdAt).getTime());
+    const username = `api-${task.apiKeyId}`.slice(0, 80);
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      await db.insertGeneration({
+        userId: `api-key:${task.apiKeyId}`,
+        username,
+        prompt: task.prompt,
+        modelId: task.modelId,
+        modelName: task.modelName,
+        dimensions: task.dimensions,
+        imageSize: task.imageSize,
+        imagePath,
+        creditsUsed: task.creditsUsed,
+        apiRequestMs,
+        referenceImages: task.referenceImages,
+        createdAt: task.createdAt,
+      });
+      return;
+    }
+
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      db.run(
+        `INSERT INTO generations (
+          user_id, username, prompt, model_id, model_name, dimensions, image_size,
+          image_path, credits_used, api_request_ms, reference_images, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          `api-key:${task.apiKeyId}`,
+          username,
+          task.prompt,
+          task.modelId,
+          task.modelName,
+          task.dimensions,
+          task.imageSize,
+          imagePath,
+          task.creditsUsed,
+          apiRequestMs,
+          serializeReferenceImages(task.referenceImages),
+          task.createdAt,
+        ],
+      );
+    });
+  }
+
+  async function refreshPublicAsyncTask(taskId: string, apiKeyHash: string) {
+    return withPublicAsyncTaskMutationLock(async () => {
+      const tasks = await readPublicAsyncTasks();
+      const index = tasks.findIndex((item) => item.id === taskId && item.apiKeyHash === apiKeyHash);
+      if (index < 0) return null;
+
+      const task = tasks[index];
+      if ((task.status === 'succeeded' && task.imagePath) || (task.status === 'failed' && task.refunded)) return task;
+
+      const upstream = await queryVisionaryAsyncStatus(task.upstreamId, task.modelId, task.imageSize);
+      const upstreamStatus = normalizeString(upstream.status).toLowerCase();
+      const nextStatus: PublicAsyncGenerationTask['status'] =
+        upstreamStatus === 'succeeded' || upstreamStatus === 'failed' || upstreamStatus === 'running'
+          ? upstreamStatus
+          : 'queued';
+      let nextTask: PublicAsyncGenerationTask = {
+        ...task,
+        status: nextStatus,
+        generationStatus: normalizeString(upstream.generationStatus) || (nextStatus === 'queued' ? 'pending' : nextStatus),
+        progress: Math.max(0, Math.min(100, Number(upstream.progress || 0))),
+        retryAfterSeconds: Math.max(0, Number(upstream.retryAfterSeconds ?? 5)),
+        updatedAt: nowIso(),
+      };
+
+      if (nextStatus === 'succeeded') {
+        const imageSource =
+          upstream.results?.find((item) => item.url || item.content)?.url ||
+          upstream.results?.[0]?.content;
+        if (!imageSource) throw new Error('Visionary async task succeeded without an image URL');
+        const imagePath = await persistGeneratedImage(imageSource);
+        await persistPublicAsyncGeneration(task, imagePath);
+        nextTask = {
+          ...nextTask,
+          imagePath,
+          progress: 100,
+          retryAfterSeconds: 0,
+        };
+      } else if (nextStatus === 'failed') {
+        const error = getVisionaryErrorMessage(upstream, 'Image generation failed');
+        if (!task.refunded && task.creditsUsed > 0) {
+          await refundPublicApiKeyCredits(task.apiKeyId, task.creditsUsed);
+        }
+        nextTask = {
+          ...nextTask,
+          error,
+          refunded: true,
+          retryAfterSeconds: 0,
+        };
+      }
+
+      tasks[index] = nextTask;
+      await writePublicAsyncTasks(tasks);
+      return nextTask;
+    });
+  }
+
+  async function monitorPublicAsyncTask(taskId: string, apiKeyHash: string) {
+    for (let poll = 0; poll < 120; poll += 1) {
+      try {
+        const task = await refreshPublicAsyncTask(taskId, apiKeyHash);
+        if (!task || task.status === 'succeeded' || task.status === 'failed') return;
+        await new Promise((resolve) => setTimeout(resolve, Math.max(1, task.retryAfterSeconds) * 1_000));
+      } catch (error) {
+        console.warn(`[public-async] task ${taskId} poll ${poll + 1} failed:`, error);
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
+    }
+    console.warn(`[public-async] task ${taskId} exceeded the background polling window`);
+  }
+
+  const publicAsyncGenerateHandler = async (req: Request, res: Response) => {
     const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
     const prompt = normalizeString(req.body?.prompt);
     const model = normalizeString(req.body?.model);
@@ -4268,7 +4455,7 @@ async function start() {
         const record = asPlainObject(item);
         return normalizeString(record.data || record.url || record.file_uri || record.fileUri);
       })
-      .filter(isReferenceImageInput);
+      .filter(Boolean);
 
     if (!apiKey) {
       res.status(401).json({ error: 'X-API-Key is required' });
@@ -4276,6 +4463,10 @@ async function start() {
     }
     if (!prompt) {
       res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+    if (referenceImages.some((item: string) => !/^https:\/\//i.test(item))) {
+      res.status(400).json({ error: 'Async generation only supports HTTPS reference image URLs' });
       return;
     }
 
@@ -4300,12 +4491,40 @@ async function start() {
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: Array.from(new Set(referenceImages)),
       });
+      const publicTask: PublicAsyncGenerationTask = {
+        id: `pxgen_${Date.now()}_${randomHex(8)}`,
+        upstreamId: task.id,
+        apiKeyId: reservedKey.id,
+        apiKeyHash: reservedKey.keyHash,
+        status: task.status === 'queued' ? 'queued' : 'running',
+        generationStatus: task.status === 'succeeded' || task.status === 'failed'
+          ? 'pending'
+          : normalizeString(task.generationStatus) || 'pending',
+        progress: Math.max(0, Math.min(100, Number(task.progress || 0))),
+        retryAfterSeconds: Math.max(1, Number(task.retryAfterSeconds || 3)),
+        creditsUsed,
+        refunded: false,
+        prompt,
+        modelId,
+        modelName,
+        dimensions: ratio,
+        imageSize,
+        referenceImages: Array.from(new Set(referenceImages)),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      await withPublicAsyncTaskMutationLock(async () => {
+        const tasks = await readPublicAsyncTasks();
+        tasks.push(publicTask);
+        await writePublicAsyncTasks(tasks);
+      });
+      void monitorPublicAsyncTask(publicTask.id, publicTask.apiKeyHash).catch((error) => {
+        console.error(`[public-async] task ${publicTask.id} monitor failed:`, error);
+      });
 
       res.status(202).json({
-        taskId: task.id,
-        status: task.status,
-        retryAfterSeconds: task.retryAfterSeconds || 3,
-        message: 'Task accepted. Use GET /api/v1/async/status/:taskId to query result.',
+        ...publicAsyncTaskPayload(req, publicTask),
+        message: `Task accepted. Use GET /v1/async/images/generations/${publicTask.id} to query the result.`,
         usage: {
           creditsUsed,
           remainingCredits: Math.max(0, reservedKey.totalCredits - reservedKey.usedCredits),
@@ -4316,17 +4535,15 @@ async function start() {
         await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
       }
       console.error('[async-generate]', error);
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Async generation failed',
-      });
+      const message = error instanceof Error ? error.message : 'Async generation failed';
+      const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
+      res.status(status).json({ error: message });
     }
-  });
+  };
 
-  app.get('/api/v1/async/status/:taskId', async (req, res) => {
+  const publicAsyncStatusHandler = async (req: Request, res: Response) => {
     const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
-    const taskId = normalizeString(req.params.taskId);
-    const model = normalizeString(req.query.model);
-    const imageSize = normalizeString(req.query.imageSize) || '2K';
+    const taskId = normalizeString(req.params.taskId || req.params.id);
 
     if (!apiKey) {
       res.status(401).json({ error: 'X-API-Key is required' });
@@ -4338,31 +4555,101 @@ async function start() {
     }
 
     try {
-      const modelId = normalizeModelId(model);
-      const status = await queryVisionaryAsyncStatus(taskId, modelId, imageSize);
-
-      const result: Record<string, unknown> = {
-        taskId: status.id,
-        status: status.status,
-        progress: status.progress || 0,
-        retryAfterSeconds: status.retryAfterSeconds || 5,
-      };
-
-      if (status.status === 'succeeded' && status.results?.[0]?.url) {
-        result.imageUrl = status.results[0].url;
+      const balance = await getPublicApiKeyBalance(apiKey);
+      if (!balance) {
+        res.status(401).json({ error: 'API Key is invalid or revoked' });
+        return;
       }
-      if (status.error) {
-        result.error = status.error;
+      const task = await refreshPublicAsyncTask(taskId, hashPublicApiKey(apiKey));
+      if (!task) {
+        res.status(404).json({ error: 'Generation task not found' });
+        return;
       }
-
-      res.json(result);
+      res.json(publicAsyncTaskPayload(req, task));
     } catch (error) {
       console.error('[async-status]', error);
-      res.status(500).json({
+      res.status(502).json({
         error: error instanceof Error ? error.message : 'Query failed',
       });
     }
-  });
+  };
+
+  const publicAsyncBatchStatusHandler = async (req: Request, res: Response) => {
+    const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+    const ids = Array.isArray(req.body?.ids)
+      ? Array.from(
+          new Set<string>(
+            req.body.ids
+              .map((value: unknown) => normalizeString(value))
+              .filter((value: string): value is string => Boolean(value)),
+          ),
+        ).slice(0, 100)
+      : [];
+    if (!apiKey) {
+      res.status(401).json({ error: 'X-API-Key is required' });
+      return;
+    }
+    if (ids.length === 0) {
+      res.status(400).json({ error: 'ids must be a non-empty array' });
+      return;
+    }
+    if (!(await getPublicApiKeyBalance(apiKey))) {
+      res.status(401).json({ error: 'API Key is invalid or revoked' });
+      return;
+    }
+
+    const apiKeyHash = hashPublicApiKey(apiKey);
+    const data = [];
+    for (const id of ids) {
+      try {
+        const task = await refreshPublicAsyncTask(id, apiKeyHash);
+        data.push(task
+          ? { requestedId: id, ...publicAsyncTaskPayload(req, task) }
+          : { requestedId: id, status: 'failed', error: 'Generation task not found', results: [], retryAfterSeconds: 0 });
+      } catch (error) {
+        data.push({
+          requestedId: id,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Query failed',
+          results: [],
+          retryAfterSeconds: 0,
+        });
+      }
+    }
+    res.json({
+      object: 'list',
+      data,
+      count: data.length,
+      requestedCount: ids.length,
+      retryAfterSeconds: data.reduce((max, item) => Math.max(max, Number(item.retryAfterSeconds || 0)), 0),
+    });
+  };
+
+  ['/api/v1/async/generate', '/v1/async/images/generations', '/openapi/v1/async/images/generations']
+    .forEach((path) => app.post(path, publicAsyncGenerateHandler));
+  [
+    '/api/v1/async/status/:taskId',
+    '/v1/async/images/generations/:id',
+    '/openapi/v1/async/images/generations/:id',
+  ].forEach((path) => app.get(path, publicAsyncStatusHandler));
+  ['/v1/async/images/generations/status', '/openapi/v1/async/images/generations/status']
+    .forEach((path) => app.post(path, publicAsyncBatchStatusHandler));
+  void readPublicAsyncTasks()
+    .then((tasks) => {
+      for (const task of tasks) {
+        if (
+          task.status === 'queued' ||
+          task.status === 'running' ||
+          (task.status === 'succeeded' && !task.imagePath) ||
+          (task.status === 'failed' && !task.refunded)
+        ) {
+          void monitorPublicAsyncTask(task.id, task.apiKeyHash).catch((error) => {
+            console.error(`[public-async] resumed task ${task.id} monitor failed:`, error);
+          });
+        }
+      }
+    })
+    .catch((error) => console.error('[public-async] failed to resume persisted tasks:', error));
 
   type AuthenticatedGenerationJob = {
     id: string;
