@@ -596,6 +596,34 @@ export async function rechargeAdminUserCredits(userId: string, credits: number) 
   );
 }
 
+export async function deductAdminUserCredits(userId: string, credits: number) {
+  return request<{
+    credits: CreditSummary;
+    adminCredits: CreditSummary;
+    deductedCredits: number;
+  }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/deduct`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ credits }),
+    },
+    true,
+  );
+}
+
+export async function deleteAdminUser(userId: string) {
+  return request<{
+    ok: true;
+    returnedCredits: number;
+    deletedInviteCodes: string[];
+    adminCredits: CreditSummary;
+  }>(
+    `/api/admin/users/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+    true,
+  );
+}
+
 export async function fetchAdminRecords(params: {
   page?: number;
   pageSize?: number;

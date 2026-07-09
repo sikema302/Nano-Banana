@@ -5785,6 +5785,168 @@ async function start() {
     }
   });
 
+  app.post('/api/admin/users/:userId/deduct', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    const requestedCredits = Math.floor(Number(req.body?.credits));
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+    if (!Number.isFinite(requestedCredits) || requestedCredits <= 0) {
+      res.status(400).json({ error: '扣除积分必须是大于 0 的整数' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [adminOwner, creditRows] = await Promise.all([
+          db.getAdminCreditOwner(),
+          db.getAllCreditRows(),
+        ]);
+        if (adminOwner?.user_id === userId) {
+          res.status(400).json({ error: '不能扣除 admin 自己的积分' });
+          return;
+        }
+
+        const target = creditRows.find((item) => item.user_id === userId);
+        if (!target) {
+          res.status(404).json({ error: '用户积分账户不存在' });
+          return;
+        }
+        const remainingCredits = Math.max(0, Number(target.total_credits || 0) - Number(target.used_credits || 0));
+        if (requestedCredits > remainingCredits) {
+          res.status(400).json({ error: `扣除积分不能超过用户剩余积分 ${remainingCredits}` });
+          return;
+        }
+
+        await db.setUserTotalCredits(userId, Number(target.total_credits || 0) - requestedCredits);
+        await db.syncInviteCodeBalanceForUser(userId);
+        await db.adjustAdminTotalCredits(requestedCredits);
+        res.json({
+          credits: await db.getUserCredits(userId),
+          adminCredits: await db.getAdminCreditSummary(),
+          deductedCredits: requestedCredits,
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        const adminOwner = getAdminCreditOwner(db);
+        if (adminOwner?.user_id === userId) throw new Error('不能扣除 admin 自己的积分');
+        const target = getOne<Record<string, unknown>>(
+          db,
+          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          [userId],
+        );
+        if (!target) throw new Error('用户积分账户不存在');
+
+        const currentCredits = toCreditSummary(target);
+        if (requestedCredits > currentCredits.remainingCredits) {
+          throw new Error(`扣除积分不能超过用户剩余积分 ${currentCredits.remainingCredits}`);
+        }
+        setUserTotalCredits(db, userId, currentCredits.totalCredits - requestedCredits);
+        syncInviteCodeBalanceForUser(db, userId);
+        adjustAdminTotalCredits(db, requestedCredits);
+        return {
+          credits: getUserCredits(db, userId),
+          adminCredits: getAdminCreditSummary(db),
+          deductedCredits: requestedCredits,
+        };
+      });
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '用户积分扣除失败';
+      res.status(message.includes('不存在') ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.delete('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const [adminOwner, creditRows, invites] = await Promise.all([
+          db.getAdminCreditOwner(),
+          db.getAllCreditRows(),
+          db.getInviteCodesRedeemedByUser(userId),
+        ]);
+        if (adminOwner?.user_id === userId) {
+          res.status(400).json({ error: '不能删除 admin 用户' });
+          return;
+        }
+
+        const target = creditRows.find((item) => item.user_id === userId);
+        if (!target) {
+          res.status(404).json({ error: '用户不存在' });
+          return;
+        }
+        const returnedCredits = Math.max(
+          0,
+          Number(target.total_credits || 0) - Number(target.used_credits || 0),
+        );
+        const deletedInviteCodes = invites.map((invite) => String(invite.code));
+
+        await db.deleteUserAccountData(userId);
+        if (returnedCredits > 0) {
+          await db.adjustAdminTotalCredits(returnedCredits);
+        }
+        res.json({
+          ok: true,
+          returnedCredits,
+          deletedInviteCodes,
+          adminCredits: await db.getAdminCreditSummary(),
+        });
+        return;
+      }
+
+      const payload = await withWriteDb((db) => {
+        ensureSchema(db);
+        const adminOwner = getAdminCreditOwner(db);
+        if (adminOwner?.user_id === userId) throw new Error('不能删除 admin 用户');
+        const target = getOne<Record<string, unknown>>(
+          db,
+          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          [userId],
+        );
+        if (!target) throw new Error('用户不存在');
+
+        const credits = toCreditSummary(target);
+        const deletedInviteCodes = runQuery<Record<string, unknown>>(
+          db,
+          'SELECT code FROM invite_codes WHERE redeemed_by = ?',
+          [userId],
+        ).map((item) => String(item.code));
+
+        db.run('DELETE FROM images WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM generations WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM invite_codes WHERE redeemed_by = ?', [userId]);
+        db.run('DELETE FROM user_credits WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM users WHERE CAST(id AS TEXT) = ?', [userId]);
+        db.run('DELETE FROM user_migrations WHERE supabase_user_id = ?', [userId]);
+        if (credits.remainingCredits > 0) {
+          adjustAdminTotalCredits(db, credits.remainingCredits);
+        }
+        return {
+          ok: true,
+          returnedCredits: credits.remainingCredits,
+          deletedInviteCodes,
+          adminCredits: getAdminCreditSummary(db),
+        };
+      });
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '删除用户失败';
+      res.status(message.includes('不存在') ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get('/api/admin/records', requireAuth, requireAdmin, async (req, res) => {
     const page = parsePaginationValue(req.query.page, 1, 1, 100000);
     const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);

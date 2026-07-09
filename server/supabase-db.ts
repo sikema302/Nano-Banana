@@ -399,6 +399,32 @@ export async function updateUserPassword(username: string, passwordHash: string)
   if (error) throw new Error(`Update password failed: ${error.message}`);
 }
 
+export async function getInviteCodesRedeemedByUser(userId: string): Promise<InviteCodeRow[]> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .eq('redeemed_by', userId);
+  if (error) throw new Error(`Query user invite codes failed: ${error.message}`);
+  return (data || []) as unknown as InviteCodeRow[];
+}
+
+export async function deleteUserAccountData(userId: string): Promise<void> {
+  const supabase = getSupabase();
+  for (const table of ['images', 'generations'] as const) {
+    const { error } = await supabase.from(table).delete().eq('user_id', userId);
+    if (error) throw new Error(`Delete user ${table} failed: ${error.message}`);
+  }
+
+  const { error: inviteError } = await supabase.from('invite_codes').delete().eq('redeemed_by', userId);
+  if (inviteError) throw new Error(`Delete user invite codes failed: ${inviteError.message}`);
+
+  const { error: creditError } = await supabase.from('user_credits').delete().eq('user_id', userId);
+  if (creditError) throw new Error(`Delete user credits failed: ${creditError.message}`);
+
+  const { error: userError } = await supabase.from('users').delete().eq('id', userId);
+  if (userError) throw new Error(`Delete user failed: ${userError.message}`);
+}
+
 // ─── 积分操作 ───────────────────────────────────────────────────────
 
 export async function getUserCredits(userId: string): Promise<CreditSummary> {

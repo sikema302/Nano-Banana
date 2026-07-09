@@ -28,10 +28,12 @@ import {
   createPublicApiKey,
   createInviteCode,
   createInviteCodesBatch,
+  deleteAdminUser,
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   deleteInviteCodesBatch,
   deductPublicApiKeyCredits,
+  deductAdminUserCredits,
   fetchAdminDashboard,
   fetchAdminInviteCodes,
   fetchAdminOverview,
@@ -1693,6 +1695,8 @@ function AdminView({
   onRechargeInviteCode,
   onReclaimInviteCode,
   onRechargeUser,
+  onDeductUser,
+  onDeleteUser,
   onCleanupImages,
   onLoadSection,
   onPreview,
@@ -1722,6 +1726,8 @@ function AdminView({
   onRechargeInviteCode: (code: string, credits: number) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
   onRechargeUser: (user: AdminUserSummary, credits: number) => Promise<void>;
+  onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
+  onDeleteUser: (user: AdminUserSummary) => Promise<void>;
   onCleanupImages: () => Promise<void>;
   onLoadSection: (
     section: AdminSection,
@@ -1751,6 +1757,8 @@ function AdminView({
   const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
   const [rechargingUserId, setRechargingUserId] = useState('');
+  const [deductingUserId, setDeductingUserId] = useState('');
+  const [deletingUserId, setDeletingUserId] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
   const [inviteBatchCount, setInviteBatchCount] = useState(1);
   const [batchCopied, setBatchCopied] = useState(false);
@@ -1812,6 +1820,42 @@ function AdminView({
       await onRechargeUser(user, rechargeCredits);
     } finally {
       setRechargingUserId('');
+    }
+  }
+
+  async function handleDeductUser(user: AdminUserSummary) {
+    const rawValue = window.prompt(`请输入要从 ${user.username} 扣除的积分`, '100');
+    if (rawValue === null) return;
+
+    const deductCredits = Math.floor(Number(rawValue));
+    if (!Number.isFinite(deductCredits) || deductCredits <= 0) {
+      window.alert('请输入大于 0 的整数积分');
+      return;
+    }
+    if (deductCredits > user.remainingCredits) {
+      window.alert(`扣除积分不能超过用户剩余积分 ${user.remainingCredits}`);
+      return;
+    }
+
+    setDeductingUserId(user.userId);
+    try {
+      await onDeductUser(user, deductCredits);
+    } finally {
+      setDeductingUserId('');
+    }
+  }
+
+  async function handleDeleteUser(user: AdminUserSummary) {
+    const confirmed = window.confirm(
+      `确定删除用户 ${user.username}？\n\n将同时删除该用户兑换的邀请码、积分账户、生成记录和收藏图片，剩余积分会退回 admin。此操作不可撤销。`,
+    );
+    if (!confirmed) return;
+
+    setDeletingUserId(user.userId);
+    try {
+      await onDeleteUser(user);
+    } finally {
+      setDeletingUserId('');
     }
   }
 
@@ -2671,7 +2715,7 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1140px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1260px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -2692,7 +2736,7 @@ function AdminView({
                               最近生成 {userSortMode === 'recent-desc' ? '↓' : '↑'}
                             </button>
                           </th>
-                          <th className="px-3 py-2 text-right font-medium">{'\u64cd\u4f5c'}</th>
+                          <th className="sticky right-0 z-20 w-[230px] border-l border-white/8 bg-[#0a0a0a] px-3 py-2 text-right font-medium shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">{'\u64cd\u4f5c'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
@@ -2730,15 +2774,34 @@ function AdminView({
                                 </div>
                               </td>
                               <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
-                              <td className="px-3 py-3 text-right">
-                                <button
-                                  className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                  disabled={item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId}
-                                  type="button"
-                                  onClick={() => void handleRechargeUser(item)}
-                                >
-                                  {rechargingUserId === item.userId ? '\u5145\u503c\u4e2d...' : '\u5145\u503c'}
-                                </button>
+                              <td className="sticky right-0 z-[5] w-[230px] border-l border-white/8 bg-[#0d0d15] px-3 py-3 text-right shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    type="button"
+                                    onClick={() => void handleRechargeUser(item)}
+                                  >
+                                    {rechargingUserId === item.userId ? '充值中...' : '充值'}
+                                  </button>
+                                  <button
+                                    className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={item.username.toLowerCase() === 'admin' || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    type="button"
+                                    onClick={() => void handleDeductUser(item)}
+                                  >
+                                    {deductingUserId === item.userId ? '扣除中...' : '扣积分'}
+                                  </button>
+                                  <button
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={item.username.toLowerCase() === 'admin' || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    type="button"
+                                    onClick={() => void handleDeleteUser(item)}
+                                  >
+                                    <Trash2 size={12} />
+                                    {deletingUserId === item.userId ? '删除中...' : '删除'}
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -3557,6 +3620,55 @@ export default function App() {
       setNotice(`\u5df2\u7ed9\u7528\u6237 ${user.username} \u5145\u503c ${payload.rechargedCredits} \u79ef\u5206`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '\u7528\u6237\u5145\u503c\u5931\u8d25');
+      throw error;
+    }
+  }
+
+  async function handleDeductUserCredits(user: AdminUserSummary, credits: number) {
+    try {
+      const payload = await deductAdminUserCredits(user.userId, credits);
+      setAdminOverview((current) => ({
+        ...current,
+        users: current.users.map((item) => item.userId === user.userId
+          ? {
+              ...item,
+              totalCredits: payload.credits.totalCredits,
+              usedCredits: payload.credits.usedCredits,
+              remainingCredits: payload.credits.remainingCredits,
+            }
+          : item),
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(`已从用户 ${user.username} 扣除 ${payload.deductedCredits} 积分，并退回 admin 总池`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '用户积分扣除失败');
+      throw error;
+    }
+  }
+
+  async function handleDeleteAdminUser(user: AdminUserSummary) {
+    try {
+      const payload = await deleteAdminUser(user.userId);
+      setAdminOverview((current) => ({
+        ...current,
+        users: current.users.filter((item) => item.userId !== user.userId),
+        usersPage: {
+          ...current.usersPage,
+          total: Math.max(0, current.usersPage.total - 1),
+        },
+        inviteCodes: current.inviteCodes.filter((item) => !payload.deletedInviteCodes.includes(item.code)),
+        inviteCodesPage: {
+          ...current.inviteCodesPage,
+          total: Math.max(0, current.inviteCodesPage.total - payload.deletedInviteCodes.length),
+        },
+        adminCredits: payload.adminCredits,
+      }));
+      setNotice(
+        `已删除用户 ${user.username}，同步删除 ${payload.deletedInviteCodes.length} 个邀请码，退回 ${payload.returnedCredits} 积分`,
+      );
+      void loadAdminSection('users', { page: 1, pageSize: 10 });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '删除用户失败');
       throw error;
     }
   }
@@ -4837,6 +4949,8 @@ export default function App() {
               onRechargeInviteCode={handleRechargeInviteCode}
               onReclaimInviteCode={handleReclaimInviteCode}
               onRechargeUser={handleRechargeUserCredits}
+              onDeductUser={handleDeductUserCredits}
+              onDeleteUser={handleDeleteAdminUser}
               onCleanupImages={handleCleanupImages}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
