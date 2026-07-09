@@ -128,13 +128,139 @@ npm run db:sync:supabase
 
 ## API overview
 
+### Authentication
+
 - `POST /api/auth/register`
 - `POST /api/auth/login`
-- `GET /api/models`
-- `POST /api/generate`
+
+### Image Generation (Authenticated)
+
+- `GET /api/models` — List available models and pricing
+- `POST /api/generate` — Generate image (sync, requires login)
+
+### User Assets
+
 - `GET /api/user/images`
 - `POST /api/user/images/move`
 - `DELETE /api/user/images/:id`
 - `GET /api/user/history`
+
+### Admin
+
 - `GET /api/admin/overview`
 - `GET /api/health`
+
+---
+
+## Public API (Async)
+
+Async endpoints return a `taskId` immediately and process generation in the background. Use the status endpoint to poll for results.
+
+### Submit async task
+
+```http
+POST /api/v1/async/generate
+Content-Type: application/json
+X-API-Key: your_public_api_key
+```
+
+**Body:**
+
+```json
+{
+  "prompt": "a cute cat wearing a space suit",
+  "model": "gpt-image-2",
+  "aspectRatio": "1:1",
+  "imageSize": "2K",
+  "quality": "high",
+  "images": []
+}
+```
+
+**Response (202 Accepted):**
+
+```json
+{
+  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "status": "queued",
+  "retryAfterSeconds": 3,
+  "message": "Task accepted. Use GET /api/v1/async/status/:taskId to query result.",
+  "usage": {
+    "creditsUsed": 48,
+    "remainingCredits": 952
+  }
+}
+```
+
+### Query async status
+
+```http
+GET /api/v1/async/status/:taskId?model=gpt-image-2&imageSize=2K
+X-API-Key: your_public_api_key
+```
+
+**Response (queued):**
+
+```json
+{
+  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "status": "queued",
+  "progress": 0,
+  "retryAfterSeconds": 3
+}
+```
+
+**Response (succeeded):**
+
+```json
+{
+  "taskId": "16-5f3cf761-a4bb-486a-8016-77f490998f80",
+  "status": "succeeded",
+  "progress": 100,
+  "retryAfterSeconds": 0,
+  "imageUrl": "https://visionary.beer/api/generations/..."
+}
+```
+
+### Polling example (JavaScript)
+
+```javascript
+const submit = await fetch('https://your-domain.com/api/v1/async/generate', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'your_public_api_key',
+  },
+  body: JSON.stringify({
+    prompt: 'a cute cat wearing a space suit',
+    model: 'gpt-image-2',
+    aspectRatio: '1:1',
+    imageSize: '2K',
+    quality: 'high',
+  }),
+});
+
+const { taskId, retryAfterSeconds } = await submit.json();
+
+let result;
+while (true) {
+  await new Promise((r) => setTimeout(r, retryAfterSeconds * 1000));
+  const query = await fetch(`https://your-domain.com/api/v1/async/status/${taskId}?model=gpt-image-2&imageSize=2K`, {
+    headers: { 'X-API-Key': 'your_public_api_key' },
+  });
+  result = await query.json();
+  if (result.status === 'succeeded' || result.status === 'failed') break;
+}
+
+console.log(result.imageUrl); // final image URL
+```
+
+---
+
+## Legacy Public API (Sync)
+
+The following sync endpoints are still supported for backward compatibility, but may encounter timeouts for long generations. New integrations should use the async endpoints above.
+
+- `POST /v1/api/generate` — GPT Image 2 (sync)
+- `POST /v1/api/nano-banana` — Nano Banana Pro (sync)
+- `POST /v1beta/models/:modelAction` — Gemini-compatible format (sync)
