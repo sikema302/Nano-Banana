@@ -235,7 +235,7 @@ X-API-Key: your_public_api_key
 }
 ```
 
-Batch polling is available at `POST /v1/async/images/generations/status` with body `{ "ids": ["pxgen_..."] }`. Compatible paths under `/openapi/v1/async/...` are also supported; the older `/api/v1/async/generate` and `/api/v1/async/status/:taskId` aliases remain available.
+Batch polling is available at `POST /v1/async/images/generations/status` with body `{ "ids": ["pxgen_..."] }`.
 
 ### Polling example (JavaScript)
 
@@ -271,10 +271,12 @@ console.log(result.results[0].url);
 
 ---
 
-## Legacy Public API (Sync)
+## Removed Legacy Public API
 
-The following sync endpoints are still supported for backward compatibility, but may encounter timeouts for long generations. New integrations should use the async endpoints above.
+Legacy sync and compatibility image endpoints are no longer supported. Existing clients must migrate to:
 
-- `POST /v1/api/generate` — GPT Image 2 (sync)
-- `POST /v1/api/nano-banana` — Nano Banana Pro (sync)
-- `POST /v1beta/models/:modelAction` — Gemini-compatible format (sync)
+- `POST /v1/async/images/generations`
+- `GET /v1/async/images/generations/:id`
+- `POST /v1/async/images/generations/status`
+
+Removed endpoints return `410 Gone` with migration guidance.

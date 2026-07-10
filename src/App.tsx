@@ -779,7 +779,6 @@ function ApiDocsView({
       aspectRatio: '1:1',
       imageSize: '2K',
       optimizeChineseText: true,
-      replyType: 'json',
     },
     null,
     2,
@@ -816,14 +815,13 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、Nano_Banana_Pro；也兼容 nano-banana-pro 写法。'],
+    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
-    ['images', 'string[]', '否', '参考图 URL 数组，最多 9 张。也兼容旧字段 reference_images。'],
-    ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。也兼容旧字段 dimensions。'],
+    ['images', 'string[]', '否', 'HTTPS 参考图 URL 数组，最多 9 张。'],
+    ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
     ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 Plus 默认 STANDARD。'],
     ['quality', 'string', '否', 'GPT-image-2 Plus 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
-    ['replyType', 'string', '否', '当前推荐传 json；字段会保留兼容，不影响返回结构。'],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
@@ -898,7 +896,6 @@ function ApiDocsView({
       subtitle: '适合通用高质量生图。通过同一个 PIXORY 入口调用，model 固定传 gpt-image-2。',
       model: 'gpt-image-2',
       endpointPath: '/v1/async/images/generations',
-      compatiblePaths: ['/v1/async/images/generations', '/openapi/v1/async/images/generations', '/api/v1/async/generate'],
       request: JSON.stringify(
         {
           model: 'gpt-image-2',
@@ -906,12 +903,11 @@ function ApiDocsView({
           images: [],
           aspectRatio: '2048x2048',
           quality: 'low',
-          replyType: 'json',
         },
         null,
         2,
       ),
-      bullets: ['支持 1:1、16:9、9:16 等比例，也兼容常见像素值。', 'STANDARD / 2K / 4K 会按 imageSize 或像素值自动计费。'],
+      bullets: ['支持 1:1、16:9、9:16 等比例和常见像素值。', 'STANDARD / 2K / 4K 会按 imageSize 或像素值自动计费。'],
     },
     {
       id: 'nano-banana',
@@ -920,7 +916,6 @@ function ApiDocsView({
       subtitle: '适合参考图重绘、融合、商品图改版和中文场景增强。model 可传 nano-banana-pro。',
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
-      compatiblePaths: ['/v1/async/images/generations', '/openapi/v1/async/images/generations', '/api/v1/async/generate'],
       request: requestExample,
       bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
     },
@@ -1084,14 +1079,6 @@ console.log(task.results[0].url);`;
                       <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">
                         <span className="flex-none rounded-md bg-orange-500/15 px-2.5 py-1 text-xs font-black text-orange-300">POST</span>
                         <code className="min-w-0 flex-1 break-all text-sm font-black text-sky-100">{baseUrl}{section.endpointPath}</code>
-                      </div>
-                      <div className="mt-3 rounded-xl border border-white/10 bg-black/15 p-3">
-                        <div className="text-xs font-bold text-zinc-500">兼容路径</div>
-                        <div className="mt-2 grid gap-2">
-                          {section.compatiblePaths.map((path) => (
-                            <code key={path} className="break-all rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs font-black text-zinc-100">{path}</code>
-                          ))}
-                        </div>
                       </div>
                       <div className="mt-3 grid gap-2">
                         <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-3 md:flex-row md:items-center">

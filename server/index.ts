@@ -2961,10 +2961,66 @@ function stringifyApiErrorValue(value: unknown): string {
   );
 }
 
+function sanitizeExternalErrorMessage(value: string, fallback = '图像服务返回异常，请稍后重试') {
+  const normalized = normalizeString(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const raw = normalizeString(value);
+  const lower = `${raw} ${normalized}`.toLowerCase();
+
+  if (lower.includes('504 gateway time-out') || lower.includes('504 gateway timeout')) {
+    return '图像服务响应超时，请稍后重试';
+  }
+  if (lower.includes('502 bad gateway')) {
+    return '图像服务网关异常，请稍后重试';
+  }
+  if (lower.includes('503 service unavailable')) {
+    return '图像服务暂时不可用，请稍后重试';
+  }
+  if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
+    return normalized && normalized.length <= 180 ? normalized : fallback;
+  }
+
+  return normalized ? normalized.slice(0, 300) : fallback;
+}
+
 function getVisionaryErrorMessage(payload: unknown, fallback: string) {
   const message = stringifyApiErrorValue(payload);
-  if (message) return message;
-  return fallback;
+  if (message) return sanitizeExternalErrorMessage(message, fallback);
+  return sanitizeExternalErrorMessage(fallback, '图像服务返回异常，请稍后重试');
+}
+
+async function parseVisionaryJsonResponse<T>(response: globalThis.Response, fallback: string): Promise<T> {
+  const responseText = await response.text().catch(() => '');
+  let payload: T | null = null;
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText) as T;
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(getVisionaryErrorMessage(payload || responseText, `${fallback} (${response.status})`));
+  }
+
+  if (!payload) {
+    throw new Error(`${fallback}: 图像服务返回了非 JSON 响应，请稍后重试`);
+  }
+
+  return payload;
+}
+
+function getPublicApiErrorStatus(message: string) {
+  if (/invalid|无效|停用|revoked/i.test(message)) return 401;
+  if (/额度不足|余额不足|credits?.*(not enough|insufficient)|insufficient/i.test(message)) return 402;
+  return 500;
 }
 
 function getNetworkErrorCode(error: unknown) {
@@ -3111,24 +3167,13 @@ async function callVisionaryAsyncGeneration({
     },
   );
 
-  const responseText = await response.text().catch(() => '');
-  let payload: VisionaryAsyncTaskResponse | null = null;
-  if (responseText) {
-    try {
-      payload = JSON.parse(responseText) as VisionaryAsyncTaskResponse;
-    } catch {
-      payload = null;
-    }
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      getVisionaryErrorMessage(payload || responseText, `Visionary async submit failed (${response.status})`),
-    );
-  }
+  const payload = await parseVisionaryJsonResponse<VisionaryAsyncTaskResponse>(
+    response,
+    '提交图像生成任务失败',
+  );
 
   const taskId = normalizeString(payload?.id || payload?.taskId);
-  if (!payload || !taskId) {
+  if (!taskId) {
     throw new Error('Visionary async API returned no task id');
   }
 
@@ -3152,23 +3197,10 @@ async function queryVisionaryAsyncStatus(taskId: string, modelId: string, imageS
     },
   );
 
-  const responseText = await response.text().catch(() => '');
-  let payload: VisionaryAsyncTaskResponse | null = null;
-  if (responseText) {
-    try {
-      payload = JSON.parse(responseText) as VisionaryAsyncTaskResponse;
-    } catch {
-      payload = null;
-    }
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      getVisionaryErrorMessage(payload || responseText, `Visionary async query failed (${response.status})`),
-    );
-  }
-
-  return payload;
+  return parseVisionaryJsonResponse<VisionaryAsyncTaskResponse>(
+    response,
+    '查询图像生成任务失败',
+  );
 }
 
 async function pollVisionaryAsyncUntilComplete(
@@ -4286,6 +4318,14 @@ async function start() {
     await publicGenerateHandler(req, res);
   };
 
+  const legacyPublicImageApiRemovedHandler = (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Legacy sync image generation endpoints are no longer supported. Use POST /v1/async/images/generations, then poll GET /v1/async/images/generations/:id.',
+      endpoint: '/v1/async/images/generations',
+      statusEndpoint: '/v1/async/images/generations/:id',
+    });
+  };
+
   [
     '/api/v1/generate',
     '/v1/api/generate',
@@ -4293,14 +4333,9 @@ async function start() {
     '/openapi/v1/images/generations',
     '/v1/chat/completions',
     '/v1/api/nano-banana',
-  ].forEach((path) => app.post(path, publicGenerateHandler));
-
-  // Register ComfyUI Gemini handler first (takes precedence for plugin requests)
-  app.post('/v1beta/models/:modelAction', comfyuiGeminiHandler);
-
-  ['/v1beta/models/:modelAction', '/v1/api/nano-banana/v1beta/models/:modelAction'].forEach((path) =>
-    app.post(path, geminiGenerateContentHandler),
-  );
+    '/v1beta/models/:modelAction',
+    '/v1/api/nano-banana/v1beta/models/:modelAction',
+  ].forEach((path) => app.post(path, legacyPublicImageApiRemovedHandler));
 
   // 鈹€鈹€鈹€ 寮傛鐢熸垚鎺ュ彛 鈹€鈹€鈹€
 
@@ -4315,7 +4350,7 @@ async function start() {
       results: imageUrl ? [{ url: imageUrl }] : [],
       progress: task.status === 'succeeded' ? 100 : task.progress,
       retryAfterSeconds: task.status === 'succeeded' || task.status === 'failed' ? 0 : task.retryAfterSeconds,
-      ...(task.error ? { error: task.error } : {}),
+      ...(task.error ? { error: sanitizeExternalErrorMessage(task.error, '图像生成失败') } : {}),
     };
   }
 
@@ -4366,60 +4401,103 @@ async function start() {
     });
   }
 
-  async function refreshPublicAsyncTask(taskId: string, apiKeyHash: string) {
+  async function readPublicAsyncTask(taskId: string, apiKeyHash: string) {
+    const tasks = await readPublicAsyncTasks();
+    return tasks.find((item) => item.id === taskId && item.apiKeyHash === apiKeyHash) || null;
+  }
+
+  async function updatePublicAsyncTask(
+    taskId: string,
+    apiKeyHash: string,
+    updater: (task: PublicAsyncGenerationTask) => Promise<PublicAsyncGenerationTask> | PublicAsyncGenerationTask,
+  ) {
     return withPublicAsyncTaskMutationLock(async () => {
       const tasks = await readPublicAsyncTasks();
       const index = tasks.findIndex((item) => item.id === taskId && item.apiKeyHash === apiKeyHash);
       if (index < 0) return null;
 
       const task = tasks[index];
-      if ((task.status === 'succeeded' && task.imagePath) || (task.status === 'failed' && task.refunded)) return task;
-
-      const upstream = await queryVisionaryAsyncStatus(task.upstreamId, task.modelId, task.imageSize);
-      const upstreamStatus = normalizeString(upstream.status).toLowerCase();
-      const nextStatus: PublicAsyncGenerationTask['status'] =
-        upstreamStatus === 'succeeded' || upstreamStatus === 'failed' || upstreamStatus === 'running'
-          ? upstreamStatus
-          : 'queued';
-      let nextTask: PublicAsyncGenerationTask = {
-        ...task,
-        status: nextStatus,
-        generationStatus: normalizeString(upstream.generationStatus) || (nextStatus === 'queued' ? 'pending' : nextStatus),
-        progress: Math.max(0, Math.min(100, Number(upstream.progress || 0))),
-        retryAfterSeconds: Math.max(0, Number(upstream.retryAfterSeconds ?? 5)),
-        updatedAt: nowIso(),
-      };
-
-      if (nextStatus === 'succeeded') {
-        const imageSource =
-          upstream.results?.find((item) => item.url || item.content)?.url ||
-          upstream.results?.[0]?.content;
-        if (!imageSource) throw new Error('Visionary async task succeeded without an image URL');
-        const imagePath = await persistGeneratedImage(imageSource);
-        await persistPublicAsyncGeneration(task, imagePath);
-        nextTask = {
-          ...nextTask,
-          imagePath,
-          progress: 100,
-          retryAfterSeconds: 0,
-        };
-      } else if (nextStatus === 'failed') {
-        const error = getVisionaryErrorMessage(upstream, 'Image generation failed');
-        if (!task.refunded && task.creditsUsed > 0) {
-          await refundPublicApiKeyCredits(task.apiKeyId, task.creditsUsed);
-        }
-        nextTask = {
-          ...nextTask,
-          error,
-          refunded: true,
-          retryAfterSeconds: 0,
-        };
-      }
-
+      const nextTask = await updater(task);
       tasks[index] = nextTask;
       await writePublicAsyncTasks(tasks);
       return nextTask;
     });
+  }
+
+  async function refreshPublicAsyncTask(taskId: string, apiKeyHash: string) {
+    const task = await readPublicAsyncTask(taskId, apiKeyHash);
+    if (!task) return null;
+    if ((task.status === 'succeeded' && task.imagePath) || (task.status === 'failed' && task.refunded)) return task;
+
+    const upstream = await queryVisionaryAsyncStatus(task.upstreamId, task.modelId, task.imageSize);
+    const upstreamStatus = normalizeString(upstream.status).toLowerCase();
+    const nextStatus: PublicAsyncGenerationTask['status'] =
+      upstreamStatus === 'succeeded' || upstreamStatus === 'failed' || upstreamStatus === 'running'
+        ? upstreamStatus
+        : 'queued';
+    const baseNextTask: PublicAsyncGenerationTask = {
+      ...task,
+      status: nextStatus,
+      generationStatus: normalizeString(upstream.generationStatus) || (nextStatus === 'queued' ? 'pending' : nextStatus),
+      progress: Math.max(0, Math.min(100, Number(upstream.progress || 0))),
+      retryAfterSeconds: Math.max(0, Number(upstream.retryAfterSeconds ?? 5)),
+      updatedAt: nowIso(),
+    };
+
+    if (nextStatus === 'succeeded') {
+      const existing = await readPublicAsyncTask(taskId, apiKeyHash);
+      if (existing?.status === 'succeeded' && existing.imagePath) return existing;
+
+      const imageSource =
+        upstream.results?.find((item) => item.url || item.content)?.url ||
+        upstream.results?.[0]?.content;
+      if (!imageSource) throw new Error('Visionary async task succeeded without an image URL');
+      const imagePath = await persistGeneratedImage(imageSource);
+
+      return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
+        if (current.status === 'succeeded' && current.imagePath) return current;
+        const nextTask: PublicAsyncGenerationTask = {
+          ...current,
+          status: 'succeeded',
+          generationStatus: normalizeString(upstream.generationStatus) || 'succeeded',
+          progress: 100,
+          retryAfterSeconds: 0,
+          imagePath,
+          updatedAt: nowIso(),
+        };
+        await persistPublicAsyncGeneration(nextTask, imagePath);
+        return nextTask;
+      });
+    }
+
+    if (nextStatus === 'failed') {
+      const error = getVisionaryErrorMessage(upstream, '图像生成失败');
+      return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
+        if (current.status === 'failed' && current.refunded) return current;
+        if (!current.refunded && current.creditsUsed > 0) {
+          await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed);
+        }
+        return {
+          ...current,
+          status: 'failed',
+          generationStatus: normalizeString(upstream.generationStatus) || 'failed',
+          progress: baseNextTask.progress,
+          retryAfterSeconds: 0,
+          error,
+          refunded: true,
+          updatedAt: nowIso(),
+        };
+      });
+    }
+
+    return updatePublicAsyncTask(taskId, apiKeyHash, (current) => ({
+      ...current,
+      status: nextStatus,
+      generationStatus: baseNextTask.generationStatus,
+      progress: baseNextTask.progress,
+      retryAfterSeconds: baseNextTask.retryAfterSeconds,
+      updatedAt: nowIso(),
+    }));
   }
 
   async function monitorPublicAsyncTask(taskId: string, apiKeyHash: string) {
@@ -4535,8 +4613,10 @@ async function start() {
         await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
       }
       console.error('[async-generate]', error);
-      const message = error instanceof Error ? error.message : 'Async generation failed';
-      const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
+      const message = error instanceof Error
+        ? sanitizeExternalErrorMessage(error.message, 'Async generation failed')
+        : 'Async generation failed';
+      const status = getPublicApiErrorStatus(message);
       res.status(status).json({ error: message });
     }
   };
@@ -4569,10 +4649,30 @@ async function start() {
     } catch (error) {
       console.error('[async-status]', error);
       res.status(502).json({
-        error: error instanceof Error ? error.message : 'Query failed',
+        error: error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Query failed') : 'Query failed',
       });
     }
   };
+
+  async function mapWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    mapper: (item: T, index: number) => Promise<R>,
+  ) {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    const workerCount = Math.max(1, Math.min(limit, items.length));
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (nextIndex < items.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          results[index] = await mapper(items[index], index);
+        }
+      }),
+    );
+    return results;
+  }
 
   const publicAsyncBatchStatusHandler = async (req: Request, res: Response) => {
     const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
@@ -4599,23 +4699,22 @@ async function start() {
     }
 
     const apiKeyHash = hashPublicApiKey(apiKey);
-    const data = [];
-    for (const id of ids) {
+    const data = await mapWithConcurrency(ids, 8, async (id) => {
       try {
         const task = await refreshPublicAsyncTask(id, apiKeyHash);
-        data.push(task
+        return task
           ? { requestedId: id, ...publicAsyncTaskPayload(req, task) }
-          : { requestedId: id, status: 'failed', error: 'Generation task not found', results: [], retryAfterSeconds: 0 });
+          : { requestedId: id, status: 'failed', error: 'Generation task not found', results: [], retryAfterSeconds: 0 };
       } catch (error) {
-        data.push({
+        return {
           requestedId: id,
           status: 'failed',
-          error: error instanceof Error ? error.message : 'Query failed',
+          error: error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Query failed') : 'Query failed',
           results: [],
           retryAfterSeconds: 0,
-        });
+        };
       }
-    }
+    });
     res.json({
       object: 'list',
       data,
@@ -4625,15 +4724,19 @@ async function start() {
     });
   };
 
-  ['/api/v1/async/generate', '/v1/async/images/generations', '/openapi/v1/async/images/generations']
-    .forEach((path) => app.post(path, publicAsyncGenerateHandler));
+  app.post('/v1/async/images/generations', publicAsyncGenerateHandler);
+  app.get('/v1/async/images/generations/:id', publicAsyncStatusHandler);
+  app.post('/v1/async/images/generations/status', publicAsyncBatchStatusHandler);
+
+  [
+    '/api/v1/async/generate',
+    '/openapi/v1/async/images/generations',
+  ].forEach((path) => app.post(path, legacyPublicImageApiRemovedHandler));
   [
     '/api/v1/async/status/:taskId',
-    '/v1/async/images/generations/:id',
     '/openapi/v1/async/images/generations/:id',
-  ].forEach((path) => app.get(path, publicAsyncStatusHandler));
-  ['/v1/async/images/generations/status', '/openapi/v1/async/images/generations/status']
-    .forEach((path) => app.post(path, publicAsyncBatchStatusHandler));
+  ].forEach((path) => app.get(path, legacyPublicImageApiRemovedHandler));
+  app.post('/openapi/v1/async/images/generations/status', legacyPublicImageApiRemovedHandler);
   void readPublicAsyncTasks()
     .then((tasks) => {
       for (const task of tasks) {
@@ -4756,7 +4859,7 @@ async function start() {
       updateJob({
         status: 'failed',
         progress: Math.max(12, generationJobs.get(jobId)?.progress || 12),
-        error: error instanceof Error ? error.message : 'Generate failed',
+        error: error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Generate failed') : 'Generate failed',
         completedAt: nowIso(),
       });
     }
@@ -4977,7 +5080,9 @@ async function start() {
 
       res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Generate failed' });
+      const message = error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Generate failed') : 'Generate failed';
+      const status = getPublicApiErrorStatus(message);
+      res.status(status).json({ error: message });
     }
   });
 
@@ -6918,7 +7023,10 @@ async function start() {
       }),
     );
     // 鍓嶇璺敱 fallback锛堟帓闄?API 鍜?uploads锛?
-    app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => {
+    app.all(/^\/(?:api|v1|openapi)(?:\/|$)/, (_req, res) => {
+      res.status(404).json({ error: 'API endpoint not found' });
+    });
+    app.get(/^(?!\/(?:api|v1|openapi|uploads)(?:\/|$)).*/, (_req, res) => {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       res.sendFile(path.join(DIST_DIR, 'index.html'));
     });
@@ -6927,8 +7035,14 @@ async function start() {
   // 鈹€鈹€鈹€ 閿欒澶勭悊 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    const message = error instanceof Error ? error.message : 'Unexpected server error';
-    res.status(500).json({ error: message });
+    const rawStatus = Number(
+      (error as { status?: unknown; statusCode?: unknown } | null)?.status ||
+      (error as { statusCode?: unknown } | null)?.statusCode,
+    );
+    const status = Number.isFinite(rawStatus) && rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500;
+    const fallback = status === 400 ? '请求 JSON 格式不正确' : 'Unexpected server error';
+    const message = error instanceof Error ? sanitizeExternalErrorMessage(error.message, fallback) : fallback;
+    res.status(status).json({ error: message });
   });
 
   // 鈹€鈹€鈹€ 鍚姩鐩戝惉 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
