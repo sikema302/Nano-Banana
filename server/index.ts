@@ -189,6 +189,7 @@ type PublicAsyncGenerationTask = {
   dimensions: string;
   imageSize: string;
   referenceImages: string[];
+  temporaryReferenceImages?: string[];
   createdAt: string;
   updatedAt: string;
   imagePath?: string;
@@ -290,6 +291,8 @@ const EXAMPLES_DIR = path.join(UPLOADS_DIR, 'examples');
 const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
+const MAX_REFERENCE_IMAGE_COUNT = 9;
+const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 7));
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const STORE_REFERENCE_IMAGES = normalizeEnvValue(process.env.STORE_REFERENCE_IMAGES || 'false').toLowerCase() === 'true';
@@ -3403,17 +3406,25 @@ async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadI
 
   const output: string[] = [];
 
-  for (const item of referenceImages.slice(0, 9)) {
+  for (const item of referenceImages.slice(0, MAX_REFERENCE_IMAGE_COUNT)) {
     const data = normalizeString(item.data);
     if (!data.startsWith('data:image/')) continue;
 
     const base64 = data.split(',').pop() || '';
     if (!base64) continue;
 
+    const buffer = Buffer.from(base64, 'base64');
+    if (buffer.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+      throw new Error('Each reference image must be 10 MB or smaller');
+    }
+    if (!isValidImageBuffer(buffer, item.mimeType)) {
+      throw new Error('Reference image data is not a valid supported image');
+    }
+
     const extension = fileExtensionFromMimeType(item.mimeType);
     const fileName = `temp-reference-${Date.now()}-${randomHex(3)}.${extension}`;
     const target = path.join(REFERENCES_DIR, fileName);
-    await fs.writeFile(target, Buffer.from(base64, 'base64'));
+    await fs.writeFile(target, buffer);
     output.push(`/uploads/references/${fileName}`);
   }
 
@@ -3739,7 +3750,7 @@ async function start() {
     }),
   );
 
-  app.use(express.json({ limit: '20mb' }));
+  app.use(express.json({ limit: '100mb' }));
 
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
@@ -4501,17 +4512,23 @@ async function start() {
   }
 
   async function monitorPublicAsyncTask(taskId: string, apiKeyHash: string) {
-    for (let poll = 0; poll < 120; poll += 1) {
-      try {
-        const task = await refreshPublicAsyncTask(taskId, apiKeyHash);
-        if (!task || task.status === 'succeeded' || task.status === 'failed') return;
-        await new Promise((resolve) => setTimeout(resolve, Math.max(1, task.retryAfterSeconds) * 1_000));
-      } catch (error) {
-        console.warn(`[public-async] task ${taskId} poll ${poll + 1} failed:`, error);
-        await new Promise((resolve) => setTimeout(resolve, 5_000));
+    try {
+      for (let poll = 0; poll < 120; poll += 1) {
+        try {
+          const task = await refreshPublicAsyncTask(taskId, apiKeyHash);
+          if (!task || task.status === 'succeeded' || task.status === 'failed') return;
+          await new Promise((resolve) => setTimeout(resolve, Math.max(1, task.retryAfterSeconds) * 1_000));
+        } catch (error) {
+          console.warn(`[public-async] task ${taskId} poll ${poll + 1} failed:`, error);
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
       }
+      console.warn(`[public-async] task ${taskId} exceeded the background polling window`);
+    } finally {
+      const tasks = await readPublicAsyncTasks().catch(() => [] as PublicAsyncGenerationTask[]);
+      const task = tasks.find((item) => item.id === taskId && item.apiKeyHash === apiKeyHash);
+      await cleanupTemporaryReferenceImages(task?.temporaryReferenceImages || []);
     }
-    console.warn(`[public-async] task ${taskId} exceeded the background polling window`);
   }
 
   const publicAsyncGenerateHandler = async (req: Request, res: Response) => {
@@ -4527,7 +4544,7 @@ async function start() {
       : Array.isArray(req.body?.images)
         ? req.body.images
         : [];
-    const referenceImages = rawReferenceImages
+    const suppliedReferenceImages = rawReferenceImages
       .map((item: unknown) => {
         if (typeof item === 'string') return item;
         const record = asPlainObject(item);
@@ -4543,15 +4560,32 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
-    if (referenceImages.some((item: string) => !/^https:\/\//i.test(item))) {
-      res.status(400).json({ error: 'Async generation only supports HTTPS reference image URLs' });
-      return;
-    }
-
     let reservedKey: PublicApiKeyRecord | null = null;
     let creditsUsed = 0;
+    let temporaryReferenceImages: string[] = [];
 
     try {
+      if (suppliedReferenceImages.length > MAX_REFERENCE_IMAGE_COUNT) {
+        throw new Error(`A maximum of ${MAX_REFERENCE_IMAGE_COUNT} reference images is supported`);
+      }
+      const remoteReferenceImages = suppliedReferenceImages.filter((item: string) => /^https:\/\//i.test(item));
+      const dataReferenceImages = suppliedReferenceImages.filter((item: string) => item.startsWith('data:image/'));
+      const unsupportedReferenceImages = suppliedReferenceImages.filter(
+        (item: string) => !/^https:\/\//i.test(item) && !item.startsWith('data:image/'),
+      );
+      if (unsupportedReferenceImages.length > 0) {
+        throw new Error('Reference images must be HTTPS URLs or base64 data URLs');
+      }
+
+      temporaryReferenceImages = await persistTemporaryReferenceImages(toReferenceUploadInputs(dataReferenceImages));
+      const temporaryReferenceUrls = temporaryReferenceImages
+        .map((item) => toPublicAssetUrl(req, item))
+        .filter((item) => item.startsWith('https://'));
+      if (dataReferenceImages.length > 0 && temporaryReferenceUrls.length !== dataReferenceImages.length) {
+        throw new Error('Base64 reference images require persistent hosting and a public HTTPS APP_URL');
+      }
+      const referenceImages = Array.from(new Set([...remoteReferenceImages, ...temporaryReferenceUrls]));
+
       const modelId = normalizeModelId(model);
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
@@ -4588,6 +4622,7 @@ async function start() {
         dimensions: ratio,
         imageSize,
         referenceImages: Array.from(new Set(referenceImages)),
+        temporaryReferenceImages,
         createdAt: nowIso(),
         updatedAt: nowIso(),
       };
@@ -4609,6 +4644,7 @@ async function start() {
         },
       });
     } catch (error) {
+      await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       if (reservedKey && creditsUsed > 0) {
         await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
       }
