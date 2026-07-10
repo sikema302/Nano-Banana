@@ -107,21 +107,49 @@ Visionary key routing:
 
 ## Deploy flow
 
-Important: the server's local frontend build has produced incomplete Tailwind CSS in the past. Use local build + upload instead of building the frontend on the server.
+Recommended deploy path is GitHub Actions, not direct local SSH. This avoids local IP bans / SSH reset issues and gives one repeatable command.
 
-Normal deploy:
+One-click production deploy:
+
+```bash
+npm run deploy:prod -- -Message "describe this release"
+```
+
+With local checks before pushing:
+
+```bash
+npm run deploy:prod:check -- -Message "describe this release"
+```
+
+Force a redeploy when there are no code changes:
+
+```bash
+npm run deploy:prod:force -- -Message "redeploy production"
+```
+
+What the one-click deploy script does:
+
+1. Optionally runs local checks (`deploy:prod:check`).
+2. Commits local changes when the worktree is dirty.
+3. Pushes `main` to GitHub with a GitHub IP fallback for unstable local routing.
+4. Waits for the `Deploy production` GitHub Actions workflow.
+5. Verifies `https://pixory.top/api/health`.
+
+Direct SSH deploy is kept as fallback. Important: the server's local frontend build has produced incomplete Tailwind CSS in the past. Use local build + upload instead of building the frontend on the server.
+
+Normal direct SSH deploy:
 
 ```bash
 npm run deploy:server
 ```
 
-Fast deploy:
+Fast direct SSH deploy:
 
 ```bash
 npm run deploy:server:fast
 ```
 
-What the deploy script does:
+What the direct SSH deploy script does:
 
 1. Runs local checks and frontend build.
 2. Packages tracked files plus untracked non-ignored files.

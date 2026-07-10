@@ -99,13 +99,33 @@ npm run build
 
 This project is currently deployed on a Rainyun Debian server with PM2 and Nginx.
 
-Useful commands:
+Recommended one-click deploy:
+
+```bash
+npm run deploy:prod -- -Message "describe this release"
+```
+
+What it does:
+
+1. Commits local changes when the worktree is dirty.
+2. Pushes `main` to GitHub with a GitHub IP fallback for unstable local network routing.
+3. Waits for the `Deploy production` GitHub Actions run to finish.
+4. Verifies `https://pixory.top/api/health`.
+
+Useful variants:
+
+```bash
+npm run deploy:prod:check -- -Message "describe this release"
+npm run deploy:prod:force -- -Message "redeploy production"
+npm run rollback:server
+npm run rollback:server:list
+```
+
+Direct SSH deploy commands are kept as fallback only:
 
 ```bash
 npm run deploy:server
 npm run deploy:server:fast
-npm run rollback:server
-npm run rollback:server:list
 ```
 
 Detailed deployment, domain, SSL, and rollback notes:
