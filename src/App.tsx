@@ -1581,10 +1581,11 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
       ) : null}
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
-        <table className="min-w-[760px] w-full text-left text-xs">
+        <table className="min-w-[900px] w-full text-left text-xs">
           <thead className="bg-white/[0.04] text-zinc-500">
             <tr>
               <th className="px-3 py-2 font-medium">名称</th>
+              <th className="px-3 py-2 font-medium">Key ID</th>
               <th className="px-3 py-2 font-medium">Key</th>
               <th className="px-3 py-2 font-medium">额度</th>
               <th className="px-3 py-2 font-medium">状态</th>
@@ -1595,6 +1596,16 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
             {apiKeys.length > 0 ? apiKeys.map((item) => (
               <tr key={item.id} className="text-zinc-300">
                 <td className="px-3 py-3 font-semibold text-white">{item.name}</td>
+                <td className="px-3 py-3 font-mono text-zinc-500">
+                  <button
+                    className="transition hover:text-sky-200"
+                    title="点击复制 Key ID；用户页中的 api-前缀对应此 ID"
+                    type="button"
+                    onClick={() => void copyText(item.id, `api-key-id-${item.id}`)}
+                  >
+                    {copiedText === `api-key-id-${item.id}` ? '已复制' : item.id}
+                  </button>
+                </td>
                 <td className="px-3 py-3 font-mono text-zinc-500">
                   <div>{item.keyPreview}</div>
                   {!item.copyable ? <div className="mt-1 text-[11px] text-amber-300/80">旧 Key 暂不可复制</div> : null}
