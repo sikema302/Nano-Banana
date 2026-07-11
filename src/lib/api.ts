@@ -78,6 +78,7 @@ export interface AdminUserSummary {
   totalCredits: number;
   usedCredits: number;
   remainingCredits: number;
+  apiKeyId?: string;
   lastGeneratedAt: string;
   usageTrend?: number[];
 }

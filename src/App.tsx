@@ -2302,8 +2302,8 @@ function AdminView({
           </div>
         </aside>
 
-        <div className="flex min-h-0 flex-col overflow-visible pr-0 lg:overflow-hidden lg:pr-1">
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible lg:overflow-hidden">
+        <div className="custom-scrollbar flex min-h-0 flex-col overflow-visible pr-0 lg:overflow-y-auto lg:pr-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible">
             {section === 'dashboard' ? (
             <>
             <div className="grid gap-3 xl:grid-cols-4">
@@ -2739,6 +2739,7 @@ function AdminView({
                       </thead>
                       <tbody className="divide-y divide-white/6">
                         {pagedUsers.map((item) => {
+                          const isApiKeyUsage = Boolean(item.apiKeyId || item.userId.startsWith('api-key:'));
                           const usageRate = item.totalCredits > 0 ? (item.usedCredits / item.totalCredits) * 100 : 0;
                           const trend = item.usageTrend || usageTrendByUserId[item.userId] || Array.from({ length: 7 }, () => 0);
                           const inviteCode = item.inviteCode || invitePrefixesByUserId[item.userId]?.[0] || '';
@@ -2776,7 +2777,7 @@ function AdminView({
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleRechargeUser(item)}
                                   >
@@ -2784,7 +2785,7 @@ function AdminView({
                                   </button>
                                   <button
                                     className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={item.username.toLowerCase() === 'admin' || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeductUser(item)}
                                   >
@@ -2792,7 +2793,7 @@ function AdminView({
                                   </button>
                                   <button
                                     className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={item.username.toLowerCase() === 'admin' || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeleteUser(item)}
                                   >

@@ -965,6 +965,7 @@ type AdminUserSummaryRow = {
   totalCredits: number;
   usedCredits: number;
   remainingCredits: number;
+  apiKeyId?: string;
   lastGeneratedAt: string;
   usageTrend?: number[];
 };
@@ -1022,12 +1023,14 @@ function summarizeRecordStatRows(records: Array<{ createdAt: string; creditsUsed
 
 async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
   const db = await getSupabaseDb();
-  const [generationSummaries, registeredUsers, creditRows, inviteRows] = await Promise.all([
+  const [generationSummaries, registeredUsers, creditRows, inviteRows, apiKeys] = await Promise.all([
     db.getGenerationSummaries(),
     db.getRegisteredUsers(),
     db.getAllCreditRows(),
     db.listInviteCodes(1, 100000),
+    readPublicApiKeyRecords(),
   ]);
+  const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
   const summaryByUserId = new Map(
     generationSummaries.map((row) => [
       row.user_id,
@@ -1080,15 +1083,22 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
 
   for (const summary of summaryByUserId.values()) {
     const current = userMap.get(summary.userId);
+    const apiKeyId = summary.userId.startsWith('api-key:')
+      ? summary.userId.slice('api-key:'.length)
+      : '';
+    const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
     userMap.set(summary.userId, {
       userId: summary.userId,
       username: current?.username || summary.username,
       inviteCode: current?.inviteCode || inviteCodeByUserId.get(summary.userId) || '',
       generations: summary.generations,
       creditsUsed: summary.creditsUsed,
-      totalCredits: current?.totalCredits || 0,
-      usedCredits: current?.usedCredits || 0,
-      remainingCredits: current?.remainingCredits || 0,
+      totalCredits: apiKey?.totalCredits ?? current?.totalCredits ?? 0,
+      usedCredits: apiKey?.usedCredits ?? current?.usedCredits ?? 0,
+      remainingCredits: apiKey
+        ? Math.max(0, apiKey.totalCredits - apiKey.usedCredits)
+        : current?.remainingCredits || 0,
+      apiKeyId: apiKey?.id,
       lastGeneratedAt: summary.lastGeneratedAt,
     });
   }
@@ -5183,9 +5193,13 @@ async function start() {
         const db = await getSupabaseDb();
         await db.reclaimLowBalanceInviteCodes();
 
-        const generationSummaries = await db.getGenerationSummaries();
-        const registeredUsers = await db.getRegisteredUsers();
-        const creditRows = await db.getAllCreditRows();
+        const [generationSummaries, registeredUsers, creditRows, apiKeys] = await Promise.all([
+          db.getGenerationSummaries(),
+          db.getRegisteredUsers(),
+          db.getAllCreditRows(),
+          readPublicApiKeyRecords(),
+        ]);
+        const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
 
         const summaryByUserId = new Map(
           generationSummaries.map((row) => [
@@ -5210,6 +5224,7 @@ async function start() {
             totalCredits: number;
             usedCredits: number;
             remainingCredits: number;
+            apiKeyId?: string;
             lastGeneratedAt: string;
           }
         >();
@@ -5244,14 +5259,21 @@ async function start() {
 
         for (const summary of summaryByUserId.values()) {
           const current = userMap.get(summary.userId);
+          const apiKeyId = summary.userId.startsWith('api-key:')
+            ? summary.userId.slice('api-key:'.length)
+            : '';
+          const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
           userMap.set(summary.userId, {
             userId: summary.userId,
             username: current?.username || summary.username,
             generations: summary.generations,
             creditsUsed: summary.creditsUsed,
-            totalCredits: current?.totalCredits || 0,
-            usedCredits: current?.usedCredits || 0,
-            remainingCredits: current?.remainingCredits || 0,
+            totalCredits: apiKey?.totalCredits ?? current?.totalCredits ?? 0,
+            usedCredits: apiKey?.usedCredits ?? current?.usedCredits ?? 0,
+            remainingCredits: apiKey
+              ? Math.max(0, apiKey.totalCredits - apiKey.usedCredits)
+              : current?.remainingCredits || 0,
+            apiKeyId: apiKey?.id,
             lastGeneratedAt: summary.lastGeneratedAt,
           });
         }
