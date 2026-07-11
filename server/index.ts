@@ -5961,9 +5961,9 @@ async function start() {
           return;
         }
 
-        await db.setUserTotalCredits(userId, Number(target.total_credits || 0) - requestedCredits);
+        // 人工扣除按“已使用”计入，保留用户总积分，只减少剩余额度。
+        await db.incrementUsedCredits(userId, requestedCredits);
         await db.syncInviteCodeBalanceForUser(userId);
-        await db.adjustAdminTotalCredits(requestedCredits);
         res.json({
           credits: await db.getUserCredits(userId),
           adminCredits: await db.getAdminCreditSummary(),
@@ -5987,9 +5987,9 @@ async function start() {
         if (requestedCredits > currentCredits.remainingCredits) {
           throw new Error(`扣除积分不能超过用户剩余积分 ${currentCredits.remainingCredits}`);
         }
-        setUserTotalCredits(db, userId, currentCredits.totalCredits - requestedCredits);
+        // 人工扣除按“已使用”计入，保留用户总积分，只减少剩余额度。
+        incrementUserUsedCredits(db, userId, requestedCredits);
         syncInviteCodeBalanceForUser(db, userId);
-        adjustAdminTotalCredits(db, requestedCredits);
         return {
           credits: getUserCredits(db, userId),
           adminCredits: getAdminCreditSummary(db),

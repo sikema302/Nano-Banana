@@ -3626,7 +3626,7 @@ export default function App() {
           : item),
         adminCredits: payload.adminCredits,
       }));
-      setNotice(`已从用户 ${user.username} 扣除 ${payload.deductedCredits} 积分，并退回 admin 总池`);
+      setNotice(`已从用户 ${user.username} 扣除 ${payload.deductedCredits} 积分（总积分不变）`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '用户积分扣除失败');
       throw error;
