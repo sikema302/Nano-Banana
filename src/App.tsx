@@ -3056,8 +3056,8 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
-  const [imageSize, setImageSize] = useState<ImageSizeOption>('STANDARD');
-  const [gptQuality, setGptQuality] = useState<GptQualityOption>('medium');
+  const [imageSize, setImageSize] = useState<ImageSizeOption>('4K');
+  const [gptQuality, setGptQuality] = useState<GptQualityOption>('high');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
   const [batchCount, setBatchCount] = useState(1);
   const [autoPlace] = useState(true);
@@ -3242,20 +3242,18 @@ export default function App() {
 
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
+    if (modelId === 'gpt-image-2') {
+      setImageSize('4K');
+      setGptQuality('high');
+      setOptimizeChineseText(false);
+      return;
+    }
     setImageSize((current) => {
       if (modelId === 'Nano_Banana_Pro') {
         return current === '4K' ? '4K' : '2K';
       }
       return current === '2K' || current === '4K' ? current : 'STANDARD';
     });
-    setGptQuality((current) => {
-      if (modelId !== 'gpt-image-2') return current;
-      if (imageSize === '2K' || imageSize === '4K') return 'low';
-      return 'medium';
-    });
-    if (modelId !== 'Nano_Banana_Pro') {
-      setOptimizeChineseText(false);
-    }
   }
 
   async function appendReferenceFiles(files: File[]) {
@@ -4705,7 +4703,7 @@ export default function App() {
                             setImageSize(item.value);
                             if (selectedModel === 'gpt-image-2') {
                               if (item.value === '2K' || item.value === '4K') {
-                                setGptQuality('low');
+                                setGptQuality('high');
                               }
                             }
                           }}
