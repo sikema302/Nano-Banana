@@ -11,6 +11,7 @@ import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
+import sharp from 'sharp';
 import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
@@ -105,6 +106,7 @@ type GeneratedImagePayload = {
   dimensions: string;
   imageSize?: string;
   imagePath: string;
+  thumbnailPath?: string;
   referenceImages: string[];
   createdAt: string;
 };
@@ -113,10 +115,17 @@ type ImageStorageStats = {
   uploadsTotalBytes: number;
   generatedBytes: number;
   generatedCount: number;
+  thumbnailBytes: number;
+  thumbnailCount: number;
   referenceBytes: number;
   referenceCount: number;
   referenceStorageEnabled: boolean;
   retentionDays: number;
+  originalRetentionDays: number;
+  thumbnailRetentionDays: number;
+  diskUsagePercent: number;
+  diskWarningPercent: number;
+  diskEmergencyPercent: number;
 };
 
 type ReferenceUploadInput = {
@@ -286,6 +295,7 @@ const DATA_DIR = path.join(ROOT_DIR, 'data');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
 const GENERATED_DIR = path.join(UPLOADS_DIR, 'generated');
+const THUMBNAILS_DIR = path.join(UPLOADS_DIR, 'thumbnails');
 const REFERENCES_DIR = path.join(UPLOADS_DIR, 'references');
 const EXAMPLES_DIR = path.join(UPLOADS_DIR, 'examples');
 const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
@@ -293,9 +303,20 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const MAX_REFERENCE_IMAGE_COUNT = 9;
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
-const IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.IMAGE_RETENTION_DAYS || 7));
+const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 5));
+const THUMBNAIL_RETENTION_DAYS = Math.max(
+  ORIGINAL_IMAGE_RETENTION_DAYS,
+  Number(process.env.THUMBNAIL_RETENTION_DAYS || process.env.IMAGE_RETENTION_DAYS || 15),
+);
+const IMAGE_RETENTION_DAYS = THUMBNAIL_RETENTION_DAYS;
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
-const STORE_REFERENCE_IMAGES = normalizeEnvValue(process.env.STORE_REFERENCE_IMAGES || 'false').toLowerCase() === 'true';
+const DISK_WARNING_PERCENT = Math.min(99, Math.max(1, Number(process.env.DISK_WARNING_PERCENT || 70)));
+const DISK_EMERGENCY_PERCENT = Math.min(100, Math.max(DISK_WARNING_PERCENT, Number(process.env.DISK_EMERGENCY_PERCENT || 85)));
+const DISK_EMERGENCY_TARGET_PERCENT = Math.max(
+  DISK_WARNING_PERCENT,
+  Math.min(DISK_EMERGENCY_PERCENT - 1, Number(process.env.DISK_EMERGENCY_TARGET_PERCENT || 80)),
+);
+const STORE_REFERENCE_IMAGES = false;
 const PROMO_PURCHASE_URL = 'https://pay.ldxp.cn/shop/RHPYAKWG';
 const PROMO_COUPON_DISCOUNT_PERCENT = 10;
 const PROMO_COUPON_SETTING_PREFIX = 'promo_coupon_v1:';
@@ -598,32 +619,60 @@ async function getDirectoryUsage(targetPath: string): Promise<{ bytes: number; c
   }
 }
 
+async function getDiskUsagePercent() {
+  if (IS_VERCEL) return 0;
+  try {
+    const stats = await fs.statfs(UPLOADS_DIR);
+    const total = Number(stats.blocks) * Number(stats.bsize);
+    const available = Number(stats.bavail) * Number(stats.bsize);
+    return total > 0 ? Math.max(0, Math.min(100, ((total - available) / total) * 100)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function getImageStorageStats(): Promise<ImageStorageStats> {
   if (IS_VERCEL) {
     return {
       uploadsTotalBytes: 0,
       generatedBytes: 0,
       generatedCount: 0,
+      thumbnailBytes: 0,
+      thumbnailCount: 0,
       referenceBytes: 0,
       referenceCount: 0,
       referenceStorageEnabled: STORE_REFERENCE_IMAGES,
       retentionDays: IMAGE_RETENTION_DAYS,
+      originalRetentionDays: ORIGINAL_IMAGE_RETENTION_DAYS,
+      thumbnailRetentionDays: THUMBNAIL_RETENTION_DAYS,
+      diskUsagePercent: 0,
+      diskWarningPercent: DISK_WARNING_PERCENT,
+      diskEmergencyPercent: DISK_EMERGENCY_PERCENT,
     };
   }
 
-  const [generated, references] = await Promise.all([
+  const [generated, thumbnails, references, diskUsagePercent] = await Promise.all([
     getDirectoryUsage(GENERATED_DIR),
+    getDirectoryUsage(THUMBNAILS_DIR),
     getDirectoryUsage(REFERENCES_DIR),
+    getDiskUsagePercent(),
   ]);
 
   return {
-    uploadsTotalBytes: generated.bytes + references.bytes,
+    uploadsTotalBytes: generated.bytes + thumbnails.bytes + references.bytes,
     generatedBytes: generated.bytes,
     generatedCount: generated.count,
+    thumbnailBytes: thumbnails.bytes,
+    thumbnailCount: thumbnails.count,
     referenceBytes: references.bytes,
     referenceCount: references.count,
     referenceStorageEnabled: STORE_REFERENCE_IMAGES,
     retentionDays: IMAGE_RETENTION_DAYS,
+    originalRetentionDays: ORIGINAL_IMAGE_RETENTION_DAYS,
+    thumbnailRetentionDays: THUMBNAIL_RETENTION_DAYS,
+    diskUsagePercent,
+    diskWarningPercent: DISK_WARNING_PERCENT,
+    diskEmergencyPercent: DISK_EMERGENCY_PERCENT,
   };
 }
 
@@ -632,6 +681,7 @@ async function ensureRuntimeDirectories() {
     fs.mkdir(DATA_DIR, { recursive: true }),
     fs.mkdir(UPLOADS_DIR, { recursive: true }),
     fs.mkdir(GENERATED_DIR, { recursive: true }),
+    fs.mkdir(THUMBNAILS_DIR, { recursive: true }),
     fs.mkdir(REFERENCES_DIR, { recursive: true }),
     fs.mkdir(EXAMPLES_DIR, { recursive: true }),
   ]);
@@ -707,6 +757,13 @@ function parseReferenceImages(raw: unknown) {
   }
 }
 
+function thumbnailPathForImage(imagePath: string) {
+  const normalized = normalizeString(imagePath);
+  if (!normalized.startsWith('/uploads/generated/')) return '';
+  const fileName = path.basename(normalized);
+  return `/uploads/thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`;
+}
+
 function toSavedImage(row: Record<string, unknown>) {
   return {
     id: Number(row.id),
@@ -714,6 +771,7 @@ function toSavedImage(row: Record<string, unknown>) {
     modelName: String(row.model_name || ''),
     dimensions: String(row.dimensions || ''),
     imageUrl: String(row.image_path || ''),
+    thumbnailUrl: thumbnailPathForImage(String(row.image_path || '')),
     category: String(row.category || '') as ImageCategory,
     referenceImages: parseReferenceImages(row.reference_images),
     createdAt: String(row.created_at || ''),
@@ -731,6 +789,7 @@ function toGeneration(row: Record<string, unknown>) {
     dimensions: String(row.dimensions || ''),
     imageSize: String(row.image_size || ''),
     imageUrl: String(row.image_path || ''),
+    thumbnailUrl: thumbnailPathForImage(String(row.image_path || '')),
     creditsUsed: Number(row.credits_used || 0),
     apiRequestMs: Number(row.api_request_ms || 0),
     referenceImages: parseReferenceImages(row.reference_images),
@@ -747,6 +806,7 @@ function toPublicGeneratedImagePayload(req: Request, payload: GeneratedImagePayl
   return {
     ...payload,
     imagePath: toPublicAssetUrl(req, payload.imagePath) || payload.imagePath,
+    thumbnailPath: toPublicAssetUrl(req, payload.thumbnailPath || thumbnailPathForImage(payload.imagePath)) || undefined,
     referenceImages: toPublicReferenceImages(req, payload.referenceImages),
   };
 }
@@ -755,6 +815,7 @@ function toPublicSavedImage(req: Request, image: ReturnType<typeof toSavedImage>
   return {
     ...image,
     imageUrl: toPublicAssetUrl(req, image.imageUrl) || image.imageUrl,
+    thumbnailUrl: toPublicAssetUrl(req, image.thumbnailUrl) || image.thumbnailUrl,
     referenceImages: toPublicReferenceImages(req, image.referenceImages),
   };
 }
@@ -763,6 +824,7 @@ function toPublicGeneration(req: Request, record: ReturnType<typeof toGeneration
   return {
     ...record,
     imageUrl: toPublicAssetUrl(req, record.imageUrl) || record.imageUrl,
+    thumbnailUrl: toPublicAssetUrl(req, record.thumbnailUrl) || record.thumbnailUrl,
     referenceImages: toPublicReferenceImages(req, record.referenceImages),
   };
 }
@@ -2814,11 +2876,69 @@ async function purgeExpiredGeneratedFiles(retentionDays = IMAGE_RETENTION_DAYS) 
     const stats = await fs.stat(filePath).catch(() => null);
     if (!stats || stats.mtimeMs >= cutoffTime) continue;
 
+    const thumbnailFile = path.join(THUMBNAILS_DIR, `${entry.name.replace(/\.[^.]+$/, '')}.webp`);
+    if (!(await pathExists(thumbnailFile))) continue;
+
     await fs.unlink(filePath).catch(() => undefined);
     deletedFiles += 1;
   }
 
   return deletedFiles;
+}
+
+async function purgeExpiredThumbnailFiles(retentionDays = THUMBNAIL_RETENTION_DAYS) {
+  if (IS_VERCEL) return 0;
+
+  const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const entries = await fs.readdir(THUMBNAILS_DIR, { withFileTypes: true }).catch(() => []);
+  let deletedFiles = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const filePath = path.join(THUMBNAILS_DIR, entry.name);
+    const stats = await fs.stat(filePath).catch(() => null);
+    if (!stats || stats.mtimeMs >= cutoffTime) continue;
+    await fs.unlink(filePath).catch(() => undefined);
+    deletedFiles += 1;
+  }
+
+  return deletedFiles;
+}
+
+async function enforceDiskPressure(reason: string) {
+  let usagePercent = await getDiskUsagePercent();
+  let deletedEmergencyFiles = 0;
+
+  if (usagePercent >= DISK_WARNING_PERCENT) {
+    console.warn(
+      `[disk-usage:${reason}] usage=${usagePercent.toFixed(1)}% warning=${DISK_WARNING_PERCENT}% emergency=${DISK_EMERGENCY_PERCENT}%`,
+    );
+  }
+  if (usagePercent < DISK_EMERGENCY_PERCENT || IS_VERCEL) {
+    return { diskUsagePercent: usagePercent, deletedEmergencyFiles };
+  }
+
+  const candidates = await Promise.all(
+    (await fs.readdir(GENERATED_DIR, { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isFile())
+      .map(async (entry) => {
+        const filePath = path.join(GENERATED_DIR, entry.name);
+        const stats = await fs.stat(filePath).catch(() => null);
+        return stats ? { filePath, mtimeMs: stats.mtimeMs } : null;
+      }),
+  );
+
+  for (const candidate of candidates.filter((item): item is { filePath: string; mtimeMs: number } => Boolean(item)).sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    await fs.unlink(candidate.filePath).catch(() => undefined);
+    deletedEmergencyFiles += 1;
+    usagePercent = await getDiskUsagePercent();
+    if (usagePercent <= DISK_EMERGENCY_TARGET_PERCENT) break;
+  }
+
+  console.warn(
+    `[disk-emergency:${reason}] deletedOriginals=${deletedEmergencyFiles} usage=${usagePercent.toFixed(1)}% target=${DISK_EMERGENCY_TARGET_PERCENT}%`,
+  );
+  return { diskUsagePercent: usagePercent, deletedEmergencyFiles };
 }
 
 async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RETENTION_DAYS) {
@@ -2831,32 +2951,40 @@ async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RE
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const result = await db.purgeExpiredImageData(retentionDays);
-        const deletedReferenceFiles = await purgeExpiredReferenceFiles(retentionDays);
-        const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
-        if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
+        const deletedReferenceFiles = await purgeExpiredReferenceFiles(1);
+        const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(ORIGINAL_IMAGE_RETENTION_DAYS);
+        const deletedThumbnailFiles = await purgeExpiredThumbnailFiles(retentionDays);
+        const diskPressure = await enforceDiskPressure(reason);
+        if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0 || deletedThumbnailFiles > 0 || diskPressure.deletedEmergencyFiles > 0) {
           console.log(
-            `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
+            `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles} thumbnailFiles=${deletedThumbnailFiles} emergencyOriginals=${diskPressure.deletedEmergencyFiles}`,
           );
         }
         return {
           ...result,
           deletedReferenceFiles,
           deletedGeneratedFiles,
+          deletedThumbnailFiles,
+          ...diskPressure,
         };
       }
 
       const result = await withWriteDb((db) => purgeExpiredImageDataSqlite(db, retentionDays));
-      const deletedReferenceFiles = await purgeExpiredReferenceFiles(retentionDays);
-      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
-      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0) {
+      const deletedReferenceFiles = await purgeExpiredReferenceFiles(1);
+      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(ORIGINAL_IMAGE_RETENTION_DAYS);
+      const deletedThumbnailFiles = await purgeExpiredThumbnailFiles(retentionDays);
+      const diskPressure = await enforceDiskPressure(reason);
+      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0 || deletedThumbnailFiles > 0 || diskPressure.deletedEmergencyFiles > 0) {
         console.log(
-          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles}`,
+          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles} thumbnailFiles=${deletedThumbnailFiles} emergencyOriginals=${diskPressure.deletedEmergencyFiles}`,
         );
       }
       return {
         ...result,
         deletedReferenceFiles,
         deletedGeneratedFiles,
+        deletedThumbnailFiles,
+        ...diskPressure,
       };
     } catch (error) {
       console.error(`[image-cleanup:${reason}] failed`, error);
@@ -2869,6 +2997,9 @@ async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RE
         deletedImages: 0,
         deletedReferenceFiles: 0,
         deletedGeneratedFiles: 0,
+        deletedThumbnailFiles: 0,
+        deletedEmergencyFiles: 0,
+        diskUsagePercent: 0,
       };
     } finally {
       imageCleanupPromise = null;
@@ -3355,6 +3486,60 @@ function fileExtensionFromUrl(value: string) {
   return 'png';
 }
 
+async function createGeneratedThumbnail(buffer: Buffer, fileName: string) {
+  const thumbnailName = `${fileName.replace(/\.[^.]+$/, '')}.webp`;
+  const target = path.join(THUMBNAILS_DIR, thumbnailName);
+  const qualities = [72, 60, 48, 36, 28, 20];
+  let thumbnail = Buffer.alloc(0);
+
+  for (const quality of qualities) {
+    thumbnail = await sharp(buffer, { failOn: 'none', limitInputPixels: 100_000_000 })
+      .rotate()
+      .resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality, effort: 4 })
+      .toBuffer();
+    if (thumbnail.byteLength <= 100 * 1024) break;
+  }
+
+  await fs.writeFile(target, thumbnail);
+  return `/uploads/thumbnails/${thumbnailName}`;
+}
+
+async function writeGeneratedImage(buffer: Buffer, extension: string) {
+  const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
+  const target = path.join(GENERATED_DIR, fileName);
+  await fs.writeFile(target, buffer);
+  try {
+    await createGeneratedThumbnail(buffer, fileName);
+  } catch (error) {
+    console.error(`[thumbnail] failed for ${fileName}`, error);
+  }
+  return `/uploads/generated/${fileName}`;
+}
+
+async function backfillGeneratedThumbnails() {
+  if (IS_VERCEL) return;
+  const entries = await fs.readdir(GENERATED_DIR, { withFileTypes: true }).catch(() => []);
+  let created = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const thumbnailFile = path.join(THUMBNAILS_DIR, `${entry.name.replace(/\.[^.]+$/, '')}.webp`);
+    if (await pathExists(thumbnailFile)) continue;
+    try {
+      const originalFile = path.join(GENERATED_DIR, entry.name);
+      const [buffer, stats] = await Promise.all([fs.readFile(originalFile), fs.stat(originalFile)]);
+      await createGeneratedThumbnail(buffer, entry.name);
+      await fs.utimes(thumbnailFile, stats.atime, stats.mtime);
+      created += 1;
+    } catch (error) {
+      console.error(`[thumbnail-backfill] failed for ${entry.name}`, error);
+    }
+  }
+
+  if (created > 0) console.log(`[thumbnail-backfill] created=${created}`);
+}
+
 async function persistGeneratedImage(source: string) {
   const normalizedSource = normalizeString(source);
   if (!normalizedSource) {
@@ -3379,10 +3564,7 @@ async function persistGeneratedImage(source: string) {
       throw new Error(generatedImageDownloadError(buffer, '图像服务返回的结果不是有效图片'));
     }
 
-    const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
-    const target = path.join(GENERATED_DIR, fileName);
-    await fs.writeFile(target, buffer);
-    return `/uploads/generated/${fileName}`;
+    return writeGeneratedImage(buffer, extension);
   }
 
   if (!/^https?:\/\//i.test(normalizedSource)) {
@@ -3393,10 +3575,7 @@ async function persistGeneratedImage(source: string) {
   const extension = contentType.startsWith('image/')
     ? fileExtensionFromMimeType(contentType.split(';')[0])
     : fileExtensionFromUrl(normalizedSource);
-  const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
-  const target = path.join(GENERATED_DIR, fileName);
-  await fs.writeFile(target, buffer);
-  return `/uploads/generated/${fileName}`;
+  return writeGeneratedImage(buffer, extension);
 }
 
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
@@ -5737,8 +5916,19 @@ async function start() {
 
   app.post('/api/admin/image-cleanup', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const retentionDays = 5;
-      const result = await runImageRetentionCleanup('manual-5d', retentionDays);
+      const retentionDays = ORIGINAL_IMAGE_RETENTION_DAYS;
+      const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
+      const deletedReferenceFiles = await purgeExpiredReferenceFiles(1);
+      const diskPressure = await enforceDiskPressure('manual-5d');
+      const result = {
+        cutoffIso: subtractDaysIso(retentionDays),
+        deletedGenerations: 0,
+        deletedImages: 0,
+        deletedReferenceFiles,
+        deletedGeneratedFiles,
+        deletedThumbnailFiles: 0,
+        ...diskPressure,
+      };
       const imageStorage = await getImageStorageStats();
       res.json({
         cleanup: {
@@ -7131,6 +7321,7 @@ async function start() {
 
   app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
+    setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   return app;
 }

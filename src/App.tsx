@@ -1,4 +1,4 @@
-import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, type SyntheticEvent, useEffect, useState } from 'react';
 import {
   BookOpen,
   Bookmark,
@@ -96,6 +96,7 @@ interface UploadPreview {
 
 interface DisplayImage extends GeneratedImagePayload {
   imageUrl: string;
+  thumbnailUrl?: string;
   savedImageId?: number;
   category?: ImageCategory;
 }
@@ -174,10 +175,17 @@ const emptyImageStorageStats: AdminImageStorageStats = {
   uploadsTotalBytes: 0,
   generatedBytes: 0,
   generatedCount: 0,
+  thumbnailBytes: 0,
+  thumbnailCount: 0,
   referenceBytes: 0,
   referenceCount: 0,
   referenceStorageEnabled: false,
-  retentionDays: 7,
+  retentionDays: 15,
+  originalRetentionDays: 5,
+  thumbnailRetentionDays: 15,
+  diskUsagePercent: 0,
+  diskWarningPercent: 70,
+  diskEmergencyPercent: 85,
 };
 
 const emptyRecordsStats: AdminRecordsStats = {
@@ -256,6 +264,7 @@ function toDisplayImage(payload: GeneratedImagePayload): DisplayImage {
   return {
     ...payload,
     imageUrl: payload.imagePath,
+    thumbnailUrl: payload.thumbnailPath,
   };
 }
 
@@ -269,6 +278,27 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+const ORIGINAL_IMAGE_RETENTION_MS = 5 * 24 * 60 * 60 * 1000;
+
+function isOriginalImageExpired(createdAt: string) {
+  const createdTime = new Date(createdAt).getTime();
+  return Number.isFinite(createdTime) && Date.now() - createdTime >= ORIGINAL_IMAGE_RETENTION_MS;
+}
+
+function fallbackToOriginal(event: SyntheticEvent<HTMLImageElement>, originalUrl: string) {
+  const image = event.currentTarget;
+  if (!originalUrl || image.dataset.originalFallback === 'true') return;
+  image.dataset.originalFallback = 'true';
+  image.src = originalUrl;
+}
+
+function fallbackToThumbnail(event: SyntheticEvent<HTMLImageElement>, thumbnailUrl?: string) {
+  const image = event.currentTarget;
+  if (!thumbnailUrl || image.dataset.thumbnailFallback === 'true') return;
+  image.dataset.thumbnailFallback = 'true';
+  image.src = thumbnailUrl;
 }
 
 function formatApiRequestTime(value?: number) {
@@ -471,7 +501,7 @@ function StageCard({
           </div>
         ) : item ? (
           <button className="h-full w-full" type="button" onClick={() => onPreview?.(item)}>
-            <img alt={item.prompt} className="h-full w-full object-cover" src={item.imageUrl} />
+            <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
           </button>
         ) : (
           <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-semibold text-zinc-400">
@@ -624,7 +654,7 @@ function SidePanel({
           <div className="custom-scrollbar flex max-w-full gap-3 overflow-x-auto overflow-y-hidden pb-1">
             {items.map((item) => (
               <article key={item.id} className="card w-36 shrink-0 p-2.5">
-                <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.imageUrl} />
+                <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
                 <p className="mt-2 text-xs leading-5 text-zinc-300">{item.prompt}</p>
                 <p className="mt-2 text-[11px] text-zinc-500">{formatTime(item.createdAt)}</p>
 
@@ -722,7 +752,7 @@ function HistoryView({
                 <tr key={item.id} className="h-14 text-zinc-300">
                   <td className="px-4 py-2">
                     <button className="h-10 w-10 overflow-hidden rounded-lg bg-black" type="button" onClick={() => onPreview(item)}>
-                      <img alt={item.prompt} className="h-full w-full object-cover" src={item.imageUrl} />
+                      <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
                     </button>
                   </td>
                   <td className="max-w-[520px] truncate px-4 py-2 text-white">{item.prompt}</td>
@@ -2374,7 +2404,7 @@ function AdminView({
                 <div>
                   <h2 className="text-base font-black text-white">图片占用统计</h2>
                   <p className="mt-1 text-xs text-zinc-500">
-                    生成图保留在本地，参考图默认不落盘，本地图片按 {imageStorageStats.retentionDays} 天自动清理。
+                    原图保留 {imageStorageStats.originalRetentionDays} 天，缩略图和记录保留 {imageStorageStats.thumbnailRetentionDays} 天，参考图任务结束立即删除。
                   </p>
                 </div>
                 <button
@@ -2400,7 +2430,7 @@ function AdminView({
                   <p className="text-xs text-zinc-500">总占用</p>
                   <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.uploadsTotalBytes)}</p>
                   <p className="mt-2 text-xs text-zinc-500">
-                    共 {imageStorageStats.generatedCount + imageStorageStats.referenceCount} 张本地图片
+                    共 {imageStorageStats.generatedCount + imageStorageStats.thumbnailCount + imageStorageStats.referenceCount} 个本地文件
                   </p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
@@ -2409,14 +2439,26 @@ function AdminView({
                   <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.generatedCount} 张图片</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">缩略图占用</p>
+                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.thumbnailBytes)}</p>
+                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.thumbnailCount} 张缩略图</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
+                  <p className="text-xs text-zinc-500">磁盘使用率</p>
+                  <p className={`mt-2 text-2xl font-black ${imageStorageStats.diskUsagePercent >= imageStorageStats.diskEmergencyPercent ? 'text-rose-300' : imageStorageStats.diskUsagePercent >= imageStorageStats.diskWarningPercent ? 'text-amber-300' : 'text-emerald-200'}`}>
+                    {imageStorageStats.diskUsagePercent.toFixed(1)}%
+                  </p>
+                  <p className="mt-2 text-xs text-zinc-500">70% 告警，85% 自动清理最旧原图</p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">参考图占用</p>
                   <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.referenceBytes)}</p>
                   <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.referenceCount} 张图片</p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
                   <p className="text-xs text-zinc-500">清理策略</p>
-                  <p className="mt-2 text-2xl font-black text-sky-100">{imageStorageStats.retentionDays} 天</p>
-                  <p className="mt-2 text-xs text-zinc-500">自动清理本地旧图，不影响网站正常运行。</p>
+                  <p className="mt-2 text-lg font-black text-sky-100">{imageStorageStats.originalRetentionDays} 天原图 / {imageStorageStats.thumbnailRetentionDays} 天缩略图</p>
+                  <p className="mt-2 text-xs text-zinc-500">缩略图用于列表，打开和下载使用有效期内的原图。</p>
                 </div>
               </div>
             </div>
@@ -2953,7 +2995,7 @@ function AdminView({
                           <tr key={item.id} className="align-top text-zinc-300">
                             <td className="px-3 py-3">
                               <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
-                                <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.imageUrl} />
+                                <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
                               </button>
                             </td>
                             <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
@@ -4023,6 +4065,8 @@ export default function App() {
       imageSize: item.imageSize,
       imagePath: item.imageUrl,
       imageUrl: item.imageUrl,
+      thumbnailPath: item.thumbnailUrl,
+      thumbnailUrl: item.thumbnailUrl,
       referenceImages: item.referenceImages,
       createdAt: item.createdAt,
       savedImageId: item.id,
@@ -5033,12 +5077,17 @@ export default function App() {
               </div>
               <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <button
-                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition hover:text-white"
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                   type="button"
-                  onClick={() => window.open(previewImage.imageUrl, '_blank', 'noopener,noreferrer')}
+                  disabled={isOriginalImageExpired(previewImage.createdAt)}
+                  onClick={() => {
+                    if (!isOriginalImageExpired(previewImage.createdAt)) {
+                      window.open(previewImage.imageUrl, '_blank', 'noopener,noreferrer');
+                    }
+                  }}
                 >
                   <Download size={14} />
-                  原图
+                  {isOriginalImageExpired(previewImage.createdAt) ? '原图已过期' : '原图'}
                 </button>
                 <button
                   className="rounded-xl border border-white/10 p-2 text-zinc-400 transition hover:text-white"
@@ -5050,7 +5099,12 @@ export default function App() {
               </div>
             </div>
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3 sm:p-4">
-              <img alt={previewImage.prompt} className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]" src={previewImage.imageUrl} />
+              <img
+                alt={previewImage.prompt}
+                className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]"
+                src={isOriginalImageExpired(previewImage.createdAt) ? previewImage.thumbnailUrl || previewImage.imageUrl : previewImage.imageUrl}
+                onError={(event) => fallbackToThumbnail(event, previewImage.thumbnailUrl)}
+              />
             </div>
           </div>
         </div>

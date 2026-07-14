@@ -22,6 +22,7 @@ export interface GeneratedImagePayload {
   dimensions: string;
   imageSize?: string;
   imagePath: string;
+  thumbnailPath?: string;
   referenceImages: string[];
   createdAt: string;
 }
@@ -47,6 +48,7 @@ export interface SavedImage {
   dimensions: string;
   imageSize?: string;
   imageUrl: string;
+  thumbnailUrl?: string;
   category: ImageCategory;
   referenceImages: string[];
   createdAt: string;
@@ -62,6 +64,7 @@ export interface GenerationRecord {
   dimensions: string;
   imageSize?: string;
   imageUrl: string;
+  thumbnailUrl?: string;
   creditsUsed: number;
   apiRequestMs?: number;
   referenceImages: string[];
@@ -150,10 +153,17 @@ export interface AdminImageStorageStats {
   uploadsTotalBytes: number;
   generatedBytes: number;
   generatedCount: number;
+  thumbnailBytes: number;
+  thumbnailCount: number;
   referenceBytes: number;
   referenceCount: number;
   referenceStorageEnabled: boolean;
   retentionDays: number;
+  originalRetentionDays: number;
+  thumbnailRetentionDays: number;
+  diskUsagePercent: number;
+  diskWarningPercent: number;
+  diskEmergencyPercent: number;
 }
 
 export interface AdminImageCleanupResult {
@@ -163,6 +173,9 @@ export interface AdminImageCleanupResult {
   deletedImages: number;
   deletedReferenceFiles: number;
   deletedGeneratedFiles: number;
+  deletedThumbnailFiles: number;
+  deletedEmergencyFiles: number;
+  diskUsagePercent: number;
 }
 
 export interface AdminRecordsStats {
@@ -214,6 +227,7 @@ function normalizeGeneratedImage(image: GeneratedImagePayload): GeneratedImagePa
   return {
     ...image,
     imagePath: resolveAssetUrl(image.imagePath),
+    thumbnailPath: image.thumbnailPath ? resolveAssetUrl(image.thumbnailPath) : undefined,
     referenceImages: image.referenceImages.map(resolveAssetUrl),
   };
 }
@@ -222,6 +236,7 @@ function normalizeSavedImage(image: SavedImage): SavedImage {
   return {
     ...image,
     imageUrl: resolveAssetUrl(image.imageUrl),
+    thumbnailUrl: image.thumbnailUrl ? resolveAssetUrl(image.thumbnailUrl) : undefined,
     referenceImages: image.referenceImages.map(resolveAssetUrl),
   };
 }
@@ -230,6 +245,7 @@ function normalizeGenerationRecord(record: GenerationRecord): GenerationRecord {
   return {
     ...record,
     imageUrl: resolveAssetUrl(record.imageUrl),
+    thumbnailUrl: record.thumbnailUrl ? resolveAssetUrl(record.thumbnailUrl) : undefined,
     referenceImages: record.referenceImages.map(resolveAssetUrl),
   };
 }
