@@ -2986,6 +2986,20 @@ function sanitizeExternalErrorMessage(value: string, fallback = '图像服务返
   const raw = normalizeString(value);
   const lower = `${raw} ${normalized}`.toLowerCase();
 
+  // Never expose implementation details returned by an upstream provider (for
+  // example Prisma/PostgreSQL shutdown messages) to end users. These errors
+  // are transient provider failures and do not indicate a problem with the
+  // user's API key or credits.
+  if (
+    lower.includes('prisma.') ||
+    lower.includes('error querying the database') ||
+    lower.includes('database system is shutting down') ||
+    lower.includes('database connection') ||
+    lower.includes('connection terminated unexpectedly')
+  ) {
+    return '图像服务暂时不可用，请稍后重试';
+  }
+
   if (lower.includes('504 gateway time-out') || lower.includes('504 gateway timeout')) {
     return '图像服务响应超时，请稍后重试';
   }
@@ -4190,6 +4204,7 @@ async function start() {
         await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
       }
 
+      console.error('[public-generate]', error);
       const message = error instanceof Error ? error.message : 'Generate failed';
       const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
       res.status(status).json({ error: message });
@@ -5126,6 +5141,7 @@ async function start() {
 
       res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
+      console.error('[generate]', error);
       const message = error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Generate failed') : 'Generate failed';
       const status = getPublicApiErrorStatus(message);
       res.status(status).json({ error: message });
