@@ -85,9 +85,7 @@ jobs:
           rm -rf dist server src scripts supabase api .github
           tar -xzf /tmp/nano-banana-release.tar.gz -C "$project"
           rm -f /tmp/nano-banana-release.tar.gz
-          if [ ! -x node_modules/.bin/tsx ]; then
-            npm ci
-          fi
+          npm ci
           if pm2 describe nano-banana >/dev/null 2>&1; then
             pm2 restart nano-banana --update-env
           else
