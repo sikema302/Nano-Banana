@@ -25,6 +25,25 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect runtime changes
+        id: changes
+        shell: bash
+        run: |
+          server_changed=false
+          before_sha='${{ github.event.before }}'
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$before_sha" ] || [ "$before_sha" = '0000000000000000000000000000000000000000' ]; then
+            server_changed=true
+          else
+            changed_files="$(git diff --name-only "$before_sha" "$GITHUB_SHA")"
+            if printf '%s\n' "$changed_files" | grep -Eq '^(server/|api/|package(-lock)?\.json$|src/lib/model-pricing\.ts$)'; then
+              server_changed=true
+            fi
+          fi
+          echo "server_changed=$server_changed" >> "$GITHUB_OUTPUT"
+          echo "Server restart required: $server_changed"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -58,10 +77,10 @@ jobs:
           sshpass -e scp -P "$SSH_PORT" -o StrictHostKeyChecking=no \
             release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
 
-      - name: Back up and restart
+      - name: Back up and deploy
         run: |
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+            "$SERVER_USER@$SERVER_HOST" "SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' bash -s" <<'REMOTE'
           set -euo pipefail
           project='/var/www/nano-banana'
           backups="$project/.deploy-backups"
@@ -81,15 +100,30 @@ jobs:
             --exclude='./uploads' \
             --exclude='./.uploads' \
             -C "$project" .
+          ls -1t "$backups"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
           cd "$project"
           rm -rf dist server src scripts supabase api .github
           tar -xzf /tmp/nano-banana-release.tar.gz -C "$project"
           rm -f /tmp/nano-banana-release.tar.gz
-          npm ci
-          if pm2 describe nano-banana >/dev/null 2>&1; then
+
+          dependency_stamp='node_modules/.pixory-package-lock.sha256'
+          current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
+          installed_lock_hash="$(cat "$dependency_stamp" 2>/dev/null || true)"
+          dependencies_changed=false
+          if [ ! -x node_modules/.bin/tsx ] || [ "$current_lock_hash" != "$installed_lock_hash" ]; then
+            npm ci
+            printf '%s' "$current_lock_hash" > "$dependency_stamp"
+            dependencies_changed=true
+          else
+            echo 'Dependencies unchanged; skipping npm ci.'
+          fi
+
+          if ! pm2 describe nano-banana >/dev/null 2>&1; then
+            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx
+          elif [ "$SERVER_CHANGED" = 'true' ] || [ "$dependencies_changed" = 'true' ]; then
             pm2 restart nano-banana --update-env
           else
-            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx
+            echo 'Frontend-only release; skipping PM2 restart.'
           fi
           pm2 save >/dev/null
           for attempt in $(seq 1 45); do
