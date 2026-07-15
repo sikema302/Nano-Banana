@@ -1960,8 +1960,6 @@ function AdminView({
   const canSelectInviteCodes = pagedInviteCodes.map((item) => item.code);
   const allSelectableChecked =
     canSelectInviteCodes.length > 0 && canSelectInviteCodes.every((code) => selectedInviteCodes.includes(code));
-  const hasAdminData = users.length > 0 || records.length > 0 || inviteCodes.length > 0;
-
   function getSectionParams(targetSection: AdminSection) {
     if (targetSection === 'invites') {
       return {
@@ -2333,7 +2331,15 @@ function AdminView({
         </aside>
 
         <div className="custom-scrollbar flex min-h-0 flex-col overflow-visible pr-0 lg:overflow-y-auto lg:pr-1">
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible">
+          <div className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-visible">
+            {loading ? (
+              <div className="pointer-events-none sticky top-2 z-50 flex h-0 justify-center">
+                <div className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-[#111]/95 px-4 text-sm text-zinc-200 shadow-lg">
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                  刷新中...
+                </div>
+              </div>
+            ) : null}
             {section === 'dashboard' ? (
             <>
             <div className="grid gap-3 xl:grid-cols-4">
@@ -2465,31 +2471,8 @@ function AdminView({
             </>
             ) : null}
 
-            {loading && !hasAdminData ? (
-              <div className="grid gap-4">
-                {[0, 1, 2].map((item) => (
-                  <div key={item} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
-                    <div className="h-5 w-40 animate-pulse rounded-full bg-white/10" />
-                    <div className="mt-4 space-y-3">
-                      {[0, 1, 2, 3].map((row) => (
-                        <div key={row} className="h-12 animate-pulse rounded-2xl bg-white/[0.05]" />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
             {section === 'invites' ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
-                {loading && hasAdminData ? (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
-                      <LoaderCircle className="h-4 w-4 animate-spin" />
-                      刷新中...
-                    </div>
-                  </div>
-                ) : null}
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">邀请码管理</h2>
@@ -2714,14 +2697,6 @@ function AdminView({
 
             {section === 'users' ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
-                {loading && hasAdminData ? (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
-                      <LoaderCircle className="h-4 w-4 animate-spin" />
-                      刷新中...
-                    </div>
-                  </div>
-                ) : null}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">用户信息与 Key 使用页</h2>
@@ -2882,14 +2857,6 @@ function AdminView({
 
             {section === 'records' ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
-                {loading && hasAdminData ? (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-black/40 backdrop-blur-[1px]">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-4 py-2 text-sm text-zinc-200">
-                      <LoaderCircle className="h-4 w-4 animate-spin" />
-                      刷新中...
-                    </div>
-                  </div>
-                ) : null}
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">生图记录页</h2>
