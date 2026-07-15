@@ -2331,15 +2331,7 @@ function AdminView({
         </aside>
 
         <div className="custom-scrollbar flex min-h-0 flex-col overflow-visible pr-0 lg:overflow-y-auto lg:pr-1">
-          <div className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-visible">
-            {loading ? (
-              <div className="pointer-events-none sticky top-2 z-50 flex h-0 justify-center">
-                <div className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-[#111]/95 px-4 text-sm text-zinc-200 shadow-lg">
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                  刷新中...
-                </div>
-              </div>
-            ) : null}
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible">
             {section === 'dashboard' ? (
             <>
             <div className="grid gap-3 xl:grid-cols-4">
