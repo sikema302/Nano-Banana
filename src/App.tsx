@@ -728,7 +728,6 @@ function HistoryView({
               }}
             >
               <option className="bg-[#111]" value="createdAt">时间最新</option>
-              <option className="bg-[#111]" value="creditsUsed">积分消耗</option>
               <option className="bg-[#111]" value="modelName">模型名称</option>
             </select>
           </div>
@@ -742,8 +741,6 @@ function HistoryView({
                 <th className="px-4 py-2 font-medium">提示词</th>
                 <th className="px-4 py-2 font-medium">模型</th>
                 <th className="px-4 py-2 font-medium">比例</th>
-                <th className="px-4 py-2 font-medium">积分</th>
-                <th className="px-4 py-2 font-medium">接口耗时</th>
                 <th className="px-4 py-2 font-medium">时间</th>
               </tr>
             </thead>
@@ -761,8 +758,6 @@ function HistoryView({
                     {item.dimensions}
                     {item.imageSize ? ` / ${item.imageSize}` : ''}
                   </td>
-                  <td className="px-4 py-2 text-sky-200">{item.creditsUsed}</td>
-                  <td className="px-4 py-2 text-emerald-200">{formatApiRequestTime(item.apiRequestMs)}</td>
                   <td className="px-4 py-2">{formatTime(item.createdAt)}</td>
                 </tr>
               ))}
