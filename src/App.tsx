@@ -8,6 +8,7 @@ import {
   Download,
   ImagePlus,
   Info,
+  Home,
   KeyRound,
   LoaderCircle,
   LogIn,
@@ -116,11 +117,12 @@ const defaultModels: ModelInfo[] = [
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
-type AppTab = 'create' | 'history' | 'apiDocs' | 'admin';
+type AppTab = 'home' | 'create' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
-  create: '/',
+  home: '/',
+  create: '/create',
   history: '/history',
   apiDocs: '/apidoc',
   admin: '/manage',
@@ -131,10 +133,11 @@ function getTabPath(tab: AppTab) {
 }
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
+  if (pathname === '/create') return 'create';
   if (pathname === '/history') return 'history';
   if (pathname === '/apidoc') return 'apiDocs';
-  if (pathname === '/manage') return canAccessAdmin ? 'admin' : 'create';
-  return 'create';
+  if (pathname === '/manage') return canAccessAdmin ? 'admin' : 'home';
+  return 'home';
 }
 
 interface AdminOverviewState {
@@ -688,6 +691,99 @@ function SidePanel({
             {emptyText}
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => void }) {
+  const features = [
+    {
+      title: '多模型支持',
+      description: '接入多种先进模型，满足不同风格与创作需求。',
+      icon: <Sparkles size={25} />,
+    },
+    {
+      title: '高清图片生成',
+      description: '支持多种比例与高清尺寸，轻松获得精美作品。',
+      icon: <ImagePlus size={25} />,
+    },
+    {
+      title: '稳定 API 接入',
+      description: '提供清晰易用的 API 文档，方便快速集成。',
+      icon: <CodeIcon size={25} />,
+    },
+  ];
+
+  return (
+    <section className="custom-scrollbar h-full overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className="mx-auto flex min-h-full w-full max-w-[1380px] flex-col">
+        <div className="grid flex-1 items-center gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-12">
+          <div className="max-w-2xl py-2 lg:py-8">
+            <div className="inline-flex rounded-full border border-violet-400/35 bg-violet-500/8 px-4 py-2 text-xs font-bold tracking-[0.08em] text-violet-200">
+              PIXORY AI 图像平台
+            </div>
+            <h1 className="mt-6 text-4xl font-black leading-[1.18] tracking-tight text-white sm:text-5xl lg:text-[54px]">
+              简单、稳定的
+              <br className="hidden sm:block" /> AI 图像创作平台
+            </h1>
+            <p className="mt-5 max-w-xl text-base leading-8 text-zinc-400 sm:text-lg">
+              支持文生图、图生图与 API 接入，让创作更高效。
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <button
+                className="btn-primary min-w-40 justify-center px-6 py-3 text-base font-bold"
+                type="button"
+                onClick={() => onNavigate('create')}
+              >
+                开始创作
+              </button>
+              <button
+                className="btn-secondary min-w-40 justify-center px-6 py-3 text-base font-bold"
+                type="button"
+                onClick={() => onNavigate('apiDocs')}
+              >
+                API 接入
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-[26px] border border-violet-400/30 bg-[linear-gradient(145deg,rgba(124,58,237,0.08),rgba(255,255,255,0.015))] p-3 shadow-[0_28px_90px_rgba(76,29,149,0.18)] sm:p-4">
+            <div className="mb-3 flex items-center justify-between px-1">
+              <h2 className="text-sm font-black text-white sm:text-base">精选作品</h2>
+              <div className="flex gap-2 text-[10px] font-bold text-zinc-400 sm:text-[11px]">
+                <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">Nano Banana Pro</span>
+                <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">GPT Image 2</span>
+              </div>
+            </div>
+            <img
+              alt="PIXORY 精选 AI 作品"
+              className="aspect-[16/9] w-full rounded-[18px] object-cover"
+              src="/images/pixory-showcase.webp"
+            />
+          </div>
+        </div>
+
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {features.map((feature) => (
+            <article key={feature.title} className="rounded-[22px] border border-white/10 bg-white/[0.025] p-5">
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-violet-400/35 bg-violet-500/10 text-violet-300">
+                  {feature.icon}
+                </div>
+                <div>
+                  <h3 className="font-black text-white">{feature.title}</h3>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500 sm:text-sm">{feature.description}</p>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 px-1 py-5 text-xs text-zinc-600">
+          <span className="text-base font-black tracking-[0.14em] text-zinc-300">PIXORY</span>
+          <span>服务条款 · 隐私政策</span>
+        </footer>
       </div>
     </section>
   );
@@ -3081,7 +3177,7 @@ export default function App() {
     visionaryDocSync: null,
   });
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
-    if (typeof window === 'undefined') return 'create';
+    if (typeof window === 'undefined') return 'home';
     return getTabFromPath(window.location.pathname, Boolean(getStoredUser()?.isAdmin));
   });
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
@@ -4211,6 +4307,7 @@ export default function App() {
   }
 
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
+    { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
@@ -4898,7 +4995,9 @@ export default function App() {
             </form>
           </aside>
 
-          {activeTab === 'create' ? (
+          {activeTab === 'home' ? (
+            <HomeView onNavigate={handleTabChange} />
+          ) : activeTab === 'create' ? (
             <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
               <div className="grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-hidden lg:pr-1">
                 {stageCards.map((item, index) => (
