@@ -2378,12 +2378,12 @@ function AdminView({
     }
   }
 
-  const menuItems: Array<{ id: AdminSection; label: string; hint: string }> = [
-    { id: 'dashboard', label: '看板', hint: '今日概览' },
-    { id: 'invites', label: '邀请码', hint: '发码与回收' },
-    { id: 'apiKeys', label: 'API Key', hint: '发放与停用' },
-    { id: 'users', label: '用户', hint: '余额与活跃' },
-    { id: 'records', label: '生图记录', hint: '模型与消耗' },
+  const menuItems: Array<{ id: AdminSection; label: string }> = [
+    { id: 'dashboard', label: '看板' },
+    { id: 'invites', label: '邀请码' },
+    { id: 'apiKeys', label: 'API Key' },
+    { id: 'users', label: '用户' },
+    { id: 'records', label: '生图记录' },
   ];
 
   return (
@@ -2395,7 +2395,7 @@ function AdminView({
             <p className="mt-2 text-lg font-black text-white">后台管理</p>
             <p className="mt-1 text-xs leading-5 text-zinc-500">邀请码、用户、记录和运行状态集中处理。</p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+          <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
             {menuItems.map((item) => {
               const active = section === item.id;
               return (
@@ -2403,8 +2403,8 @@ function AdminView({
                   key={item.id}
                   className={
                     active
-                      ? 'rounded-[18px] border border-sky-400/30 bg-sky-400/12 px-4 py-3 text-left'
-                      : 'rounded-[18px] border border-white/8 bg-white/[0.03] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.05]'
+                      ? 'rounded-[16px] border border-sky-400/30 bg-sky-400/12 px-4 py-3 text-left'
+                      : 'rounded-[16px] border border-white/8 bg-white/[0.03] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.05]'
                   }
                   type="button"
                   onClick={() => {
@@ -2416,7 +2416,6 @@ function AdminView({
                   }}
                 >
                   <span className={active ? 'block text-sm font-black text-white' : 'block text-sm font-black text-zinc-200'}>{item.label}</span>
-                  <span className={active ? 'mt-1 block text-[11px] text-sky-100/80' : 'mt-1 block text-[11px] text-zinc-500'}>{item.hint}</span>
                 </button>
               );
             })}

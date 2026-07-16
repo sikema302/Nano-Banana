@@ -183,7 +183,7 @@ type VisionaryAsyncBatchResponse = {
 
 type PublicAsyncGenerationTask = {
   id: string;
-  upstreamId: string;
+  upstreamId?: string;
   apiKeyId: string;
   apiKeyHash: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
@@ -197,6 +197,8 @@ type PublicAsyncGenerationTask = {
   modelName: string;
   dimensions: string;
   imageSize: string;
+  quality?: string;
+  optimizeChineseText?: boolean;
   referenceImages: string[];
   temporaryReferenceImages?: string[];
   createdAt: string;
@@ -331,6 +333,11 @@ const CANONICAL_WEB_ORIGIN =
   normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN) || `https://${CANONICAL_WEB_HOST}`;
 const APP_URL = normalizeEnvValue(process.env.APP_URL);
 const ADMIN_STATS_TIME_ZONE = normalizeEnvValue(process.env.ADMIN_STATS_TIME_ZONE) || 'Asia/Shanghai';
+const PUBLIC_ASYNC_MAX_PENDING = Math.max(1, Math.min(1_000, Number(process.env.PUBLIC_ASYNC_MAX_PENDING || 100)));
+const PUBLIC_ASYNC_CONCURRENCY = Math.max(
+  1,
+  Math.min(PUBLIC_ASYNC_MAX_PENDING, Number(process.env.PUBLIC_ASYNC_CONCURRENCY || 15)),
+);
 
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -2204,14 +2211,15 @@ function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): Pu
   const upstreamId = normalizeString(value.upstreamId);
   const apiKeyId = normalizeString(value.apiKeyId);
   const apiKeyHash = normalizeString(value.apiKeyHash);
-  if (!id || !upstreamId || !apiKeyId || !apiKeyHash) return null;
+  if (!id || !apiKeyId || !apiKeyHash) return null;
 
   const rawStatus = normalizeString(value.status).toLowerCase();
-  const status: PublicAsyncGenerationTask['status'] =
+  let status: PublicAsyncGenerationTask['status'] =
     rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'running' ? rawStatus : 'queued';
+  if (status === 'running' && !upstreamId) status = 'queued';
   return {
     id,
-    upstreamId,
+    upstreamId: upstreamId || undefined,
     apiKeyId,
     apiKeyHash,
     status,
@@ -2225,8 +2233,13 @@ function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): Pu
     modelName: normalizeString(value.modelName),
     dimensions: normalizeString(value.dimensions) || '1:1',
     imageSize: normalizeString(value.imageSize),
+    quality: normalizeString(value.quality) || undefined,
+    optimizeChineseText: Boolean(value.optimizeChineseText),
     referenceImages: Array.isArray(value.referenceImages)
       ? value.referenceImages.map(normalizeString).filter(Boolean)
+      : [],
+    temporaryReferenceImages: Array.isArray(value.temporaryReferenceImages)
+      ? value.temporaryReferenceImages.map(normalizeString).filter(Boolean)
       : [],
     createdAt: normalizeString(value.createdAt) || nowIso(),
     updatedAt: normalizeString(value.updatedAt) || nowIso(),
@@ -3178,6 +3191,7 @@ async function parseVisionaryJsonResponse<T>(response: globalThis.Response, fall
 function getPublicApiErrorStatus(message: string) {
   if (/invalid|无效|停用|revoked/i.test(message)) return 401;
   if (/额度不足|余额不足|credits?.*(not enough|insufficient)|insufficient/i.test(message)) return 402;
+  if (/queue capacity|queue is full|队列已满/i.test(message)) return 429;
   return 500;
 }
 
@@ -4643,6 +4657,7 @@ async function start() {
     const task = await readPublicAsyncTask(taskId, apiKeyHash);
     if (!task) return null;
     if ((task.status === 'succeeded' && task.imagePath) || (task.status === 'failed' && task.refunded)) return task;
+    if (!task.upstreamId) return task;
 
     const upstream = await queryVisionaryAsyncStatus(task.upstreamId, task.modelId, task.imageSize);
     const upstreamStatus = normalizeString(upstream.status).toLowerCase();
@@ -4735,6 +4750,96 @@ async function start() {
     }
   }
 
+  const activePublicAsyncTasks = new Set<string>();
+  let publicAsyncQueuePump: Promise<void> | null = null;
+  let publicAsyncQueuePumpRequested = false;
+
+  async function failPublicAsyncTask(task: PublicAsyncGenerationTask, error: unknown) {
+    const message = error instanceof Error
+      ? sanitizeExternalErrorMessage(error.message, 'Async generation failed')
+      : 'Async generation failed';
+    await updatePublicAsyncTask(task.id, task.apiKeyHash, async (current) => {
+      if (current.status === 'succeeded' || (current.status === 'failed' && current.refunded)) return current;
+      if (!current.refunded && current.creditsUsed > 0) {
+        await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed);
+      }
+      return {
+        ...current,
+        status: 'failed',
+        generationStatus: 'failed',
+        retryAfterSeconds: 0,
+        error: message,
+        refunded: true,
+        updatedAt: nowIso(),
+      };
+    });
+    await cleanupTemporaryReferenceImages(task.temporaryReferenceImages || []);
+  }
+
+  async function executePublicAsyncTask(task: PublicAsyncGenerationTask) {
+    try {
+      let current = await readPublicAsyncTask(task.id, task.apiKeyHash);
+      if (!current || current.status === 'succeeded' || current.status === 'failed') return;
+
+      if (!current.upstreamId) {
+        const upstream = await callVisionaryAsyncGeneration({
+          prompt: current.prompt,
+          modelId: current.modelId,
+          ratio: current.dimensions,
+          imageSize: current.imageSize,
+          quality: current.quality || '',
+          optimizeChineseText: Boolean(current.optimizeChineseText),
+          images: current.referenceImages,
+        });
+        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, (latest) => ({
+          ...latest,
+          upstreamId: upstream.id,
+          status: 'running',
+          generationStatus: normalizeString(upstream.generationStatus) || 'running',
+          progress: Math.max(1, Math.min(100, Number(upstream.progress || 1))),
+          retryAfterSeconds: Math.max(1, Number(upstream.retryAfterSeconds || 3)),
+          updatedAt: nowIso(),
+        }));
+      }
+
+      if (current) await monitorPublicAsyncTask(current.id, current.apiKeyHash);
+    } catch (error) {
+      console.error(`[public-async] task ${task.id} failed:`, error);
+      await failPublicAsyncTask(task, error).catch((failureError) => {
+        console.error(`[public-async] task ${task.id} failure handling failed:`, failureError);
+      });
+    } finally {
+      activePublicAsyncTasks.delete(task.id);
+      setTimeout(() => void schedulePublicAsyncQueue(), 0);
+    }
+  }
+
+  function schedulePublicAsyncQueue() {
+    publicAsyncQueuePumpRequested = true;
+    if (publicAsyncQueuePump) return publicAsyncQueuePump;
+    publicAsyncQueuePump = (async () => {
+      while (publicAsyncQueuePumpRequested) {
+        publicAsyncQueuePumpRequested = false;
+        const availableSlots = Math.max(0, PUBLIC_ASYNC_CONCURRENCY - activePublicAsyncTasks.size);
+        if (availableSlots === 0) return;
+        const tasks = await readPublicAsyncTasks();
+        const ready = tasks
+          .filter((task) => (task.status === 'queued' || task.status === 'running') && !activePublicAsyncTasks.has(task.id))
+          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+          .slice(0, availableSlots);
+        for (const task of ready) {
+          activePublicAsyncTasks.add(task.id);
+          void executePublicAsyncTask(task);
+        }
+      }
+    })()
+      .catch((error) => console.error('[public-async] queue pump failed:', error))
+      .finally(() => {
+        publicAsyncQueuePump = null;
+      });
+    return publicAsyncQueuePump;
+  }
+
   const publicAsyncGenerateHandler = async (req: Request, res: Response) => {
     const apiKey = normalizeString(req.headers['x-api-key'] || req.headers.authorization?.replace(/^Bearer\s+/i, ''));
     const prompt = normalizeString(req.body?.prompt);
@@ -4769,6 +4874,13 @@ async function start() {
     let temporaryReferenceImages: string[] = [];
 
     try {
+      const queueSnapshot = await readPublicAsyncTasks();
+      const unfinishedSnapshotCount = queueSnapshot.filter(
+        (item) => item.status === 'queued' || item.status === 'running',
+      ).length;
+      if (unfinishedSnapshotCount >= PUBLIC_ASYNC_MAX_PENDING) {
+        throw new Error(`Async generation queue is full (capacity ${PUBLIC_ASYNC_MAX_PENDING})`);
+      }
       if (suppliedReferenceImages.length > MAX_REFERENCE_IMAGE_COUNT) {
         throw new Error(`A maximum of ${MAX_REFERENCE_IMAGE_COUNT} reference images is supported`);
       }
@@ -4798,26 +4910,14 @@ async function start() {
       creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
-      const task = await callVisionaryAsyncGeneration({
-        prompt,
-        modelId,
-        ratio,
-        imageSize,
-        quality,
-        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
-        images: Array.from(new Set(referenceImages)),
-      });
       const publicTask: PublicAsyncGenerationTask = {
         id: `pxgen_${Date.now()}_${randomHex(8)}`,
-        upstreamId: task.id,
         apiKeyId: reservedKey.id,
         apiKeyHash: reservedKey.keyHash,
-        status: task.status === 'queued' ? 'queued' : 'running',
-        generationStatus: task.status === 'succeeded' || task.status === 'failed'
-          ? 'pending'
-          : normalizeString(task.generationStatus) || 'pending',
-        progress: Math.max(0, Math.min(100, Number(task.progress || 0))),
-        retryAfterSeconds: Math.max(1, Number(task.retryAfterSeconds || 3)),
+        status: 'queued',
+        generationStatus: 'queued',
+        progress: 0,
+        retryAfterSeconds: 3,
         creditsUsed,
         refunded: false,
         prompt,
@@ -4825,6 +4925,8 @@ async function start() {
         modelName,
         dimensions: ratio,
         imageSize,
+        quality,
+        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         referenceImages: Array.from(new Set(referenceImages)),
         temporaryReferenceImages,
         createdAt: nowIso(),
@@ -4832,16 +4934,22 @@ async function start() {
       };
       await withPublicAsyncTaskMutationLock(async () => {
         const tasks = await readPublicAsyncTasks();
+        const unfinishedCount = tasks.filter((item) => item.status === 'queued' || item.status === 'running').length;
+        if (unfinishedCount >= PUBLIC_ASYNC_MAX_PENDING) {
+          throw new Error(`Async generation queue is full (capacity ${PUBLIC_ASYNC_MAX_PENDING})`);
+        }
         tasks.push(publicTask);
         await writePublicAsyncTasks(tasks);
       });
-      void monitorPublicAsyncTask(publicTask.id, publicTask.apiKeyHash).catch((error) => {
-        console.error(`[public-async] task ${publicTask.id} monitor failed:`, error);
-      });
+      void schedulePublicAsyncQueue();
 
       res.status(202).json({
         ...publicAsyncTaskPayload(req, publicTask),
         message: `Task accepted. Use GET /v1/async/images/generations/${publicTask.id} to query the result.`,
+        queue: {
+          maxPending: PUBLIC_ASYNC_MAX_PENDING,
+          concurrency: PUBLIC_ASYNC_CONCURRENCY,
+        },
         usage: {
           creditsUsed,
           remainingCredits: Math.max(0, reservedKey.totalCredits - reservedKey.usedCredits),
@@ -4880,7 +4988,7 @@ async function start() {
         res.status(401).json({ error: 'API Key is invalid or revoked' });
         return;
       }
-      const task = await refreshPublicAsyncTask(taskId, hashPublicApiKey(apiKey));
+      const task = await readPublicAsyncTask(taskId, hashPublicApiKey(apiKey));
       if (!task) {
         res.status(404).json({ error: 'Generation task not found' });
         return;
@@ -4941,7 +5049,7 @@ async function start() {
     const apiKeyHash = hashPublicApiKey(apiKey);
     const data = await mapWithConcurrency(ids, 8, async (id) => {
       try {
-        const task = await refreshPublicAsyncTask(id, apiKeyHash);
+        const task = await readPublicAsyncTask(id, apiKeyHash);
         return task
           ? { requestedId: id, ...publicAsyncTaskPayload(req, task) }
           : { requestedId: id, status: 'failed', error: 'Generation task not found', results: [], retryAfterSeconds: 0 };
@@ -4977,22 +5085,7 @@ async function start() {
     '/openapi/v1/async/images/generations/:id',
   ].forEach((path) => app.get(path, legacyPublicImageApiRemovedHandler));
   app.post('/openapi/v1/async/images/generations/status', legacyPublicImageApiRemovedHandler);
-  void readPublicAsyncTasks()
-    .then((tasks) => {
-      for (const task of tasks) {
-        if (
-          task.status === 'queued' ||
-          task.status === 'running' ||
-          (task.status === 'succeeded' && !task.imagePath) ||
-          (task.status === 'failed' && !task.refunded)
-        ) {
-          void monitorPublicAsyncTask(task.id, task.apiKeyHash).catch((error) => {
-            console.error(`[public-async] resumed task ${task.id} monitor failed:`, error);
-          });
-        }
-      }
-    })
-    .catch((error) => console.error('[public-async] failed to resume persisted tasks:', error));
+  void schedulePublicAsyncQueue();
 
   type AuthenticatedGenerationJob = {
     id: string;
