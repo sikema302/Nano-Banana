@@ -700,37 +700,36 @@ function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => v
   const features = [
     {
       title: '多模型支持',
-      description: '接入多种先进模型，满足不同风格与创作需求。',
+      description: '灵活选择不同模型，覆盖多种创作场景。',
       icon: <Sparkles size={25} />,
     },
     {
       title: '高清图片生成',
-      description: '支持多种比例与高清尺寸，轻松获得精美作品。',
+      description: '支持多种画幅与高清输出，作品可直接查看下载。',
       icon: <ImagePlus size={25} />,
     },
     {
       title: '稳定 API 接入',
-      description: '提供清晰易用的 API 文档，方便快速集成。',
+      description: '清晰的接口文档与稳定服务，帮助业务快速接入。',
       icon: <CodeIcon size={25} />,
     },
   ];
 
   return (
-    <section className="custom-scrollbar h-full overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+    <section className="custom-scrollbar h-full overflow-y-auto px-4 py-5 sm:px-6 lg:overflow-hidden lg:px-8 lg:py-4">
       <div className="mx-auto flex min-h-full w-full max-w-[1380px] flex-col">
-        <div className="grid flex-1 items-center gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-12">
-          <div className="max-w-2xl py-2 lg:py-8">
-            <div className="inline-flex rounded-full border border-violet-400/35 bg-violet-500/8 px-4 py-2 text-xs font-bold tracking-[0.08em] text-violet-200">
-              PIXORY AI 图像平台
+        <div className="grid flex-1 items-center gap-6 lg:min-h-0 lg:grid-cols-[0.9fr_1.1fr] lg:gap-10">
+          <div className="max-w-2xl py-2 lg:py-3">
+            <div className="inline-flex rounded-full bg-violet-500/10 px-4 py-2 text-xs font-bold tracking-[0.12em] text-violet-200">
+              PIXORY · AI IMAGE PLATFORM
             </div>
-            <h1 className="mt-6 text-4xl font-black leading-[1.18] tracking-tight text-white sm:text-5xl lg:text-[54px]">
-              简单、稳定的
-              <br className="hidden sm:block" /> AI 图像创作平台
+            <h1 className="mt-5 text-4xl font-black leading-[1.18] tracking-tight text-white sm:text-5xl lg:whitespace-nowrap lg:text-[48px]">
+              让创意，更快成为作品
             </h1>
-            <p className="mt-5 max-w-xl text-base leading-8 text-zinc-400 sm:text-lg">
-              支持文生图、图生图与 API 接入，让创作更高效。
+            <p className="mt-4 max-w-xl text-base leading-7 text-zinc-400 sm:text-lg">
+              PIXORY 提供稳定易用的 AI 图像生成与 API 服务，支持文生图、图生图和高清输出。
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-6 flex flex-wrap gap-3">
               <button
                 className="btn-primary min-w-40 justify-center px-6 py-3 text-base font-bold"
                 type="button"
@@ -748,27 +747,27 @@ function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => v
             </div>
           </div>
 
-          <div className="rounded-[26px] border border-violet-400/30 bg-[linear-gradient(145deg,rgba(124,58,237,0.08),rgba(255,255,255,0.015))] p-3 shadow-[0_28px_90px_rgba(76,29,149,0.18)] sm:p-4">
+          <div className="rounded-[26px] bg-white/[0.035] p-3 shadow-[0_24px_70px_rgba(0,0,0,0.24)] ring-1 ring-inset ring-white/[0.07] sm:p-4">
             <div className="mb-3 flex items-center justify-between px-1">
               <h2 className="text-sm font-black text-white sm:text-base">精选作品</h2>
               <div className="flex gap-2 text-[10px] font-bold text-zinc-400 sm:text-[11px]">
-                <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">Nano Banana Pro</span>
-                <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">GPT Image 2</span>
+                <span className="rounded-full bg-black/25 px-2.5 py-1">Nano Banana Pro</span>
+                <span className="rounded-full bg-black/25 px-2.5 py-1">GPT Image 2</span>
               </div>
             </div>
             <img
               alt="PIXORY 精选 AI 作品"
-              className="aspect-[16/9] w-full rounded-[18px] object-cover"
+              className="aspect-[16/9] max-h-[360px] w-full rounded-[18px] object-cover"
               src="/images/pixory-showcase.webp"
             />
           </div>
         </div>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
           {features.map((feature) => (
-            <article key={feature.title} className="rounded-[22px] border border-white/10 bg-white/[0.025] p-5">
+            <article key={feature.title} className="rounded-[20px] bg-white/[0.025] p-4 ring-1 ring-inset ring-white/[0.055]">
               <div className="flex items-center gap-4">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-violet-400/35 bg-violet-500/10 text-violet-300">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                   {feature.icon}
                 </div>
                 <div>
@@ -780,9 +779,12 @@ function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => v
           ))}
         </div>
 
-        <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 px-1 py-5 text-xs text-zinc-600">
-          <span className="text-base font-black tracking-[0.14em] text-zinc-300">PIXORY</span>
-          <span>服务条款 · 隐私政策</span>
+        <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-1 py-3 text-xs text-zinc-600">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-black tracking-[0.14em] text-zinc-300">PIXORY</span>
+            <span>专业 AI 图像生成与 API 服务</span>
+          </div>
+          <span>产品服务 · API 文档 · 服务条款 · 隐私政策 · 联系我们</span>
         </footer>
       </div>
     </section>
@@ -4607,13 +4609,12 @@ export default function App() {
                 return (
                   <button
                     key={item.id}
-                    className={`btn-ghost inline-flex min-h-0 items-center gap-2 px-3 py-2 text-sm transition ${
+                    className={`btn-ghost inline-flex min-h-0 items-center px-4 py-2 text-sm transition ${
                       active ? 'nav-tab-active' : ''
                     }`}
                     type="button"
                     onClick={() => handleTabChange(item.id)}
                   >
-                    {item.icon}
                     {item.label}
                   </button>
                 );
@@ -4621,24 +4622,15 @@ export default function App() {
           </nav>
 
           <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
-            <div className="hidden items-center gap-2 rounded-xl border border-pink-300/20 bg-[linear-gradient(135deg,rgba(255,143,205,0.12)_0%,rgba(219,92,168,0.06)_100%)] px-2 py-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:inline-flex">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-black text-white">微信</span>
-                <span className="rounded-md bg-white/[0.04] px-2 py-1 text-[12px] font-bold tracking-[0.04em] text-pink-50">lzp983813676</span>
-                <button
-                  className={
-                    wechatCopied
-                      ? 'inline-flex items-center gap-1 rounded-lg border border-emerald-300/20 bg-emerald-500/15 px-2 py-1 text-[11px] font-bold text-emerald-100 transition'
-                      : 'inline-flex items-center gap-1 rounded-lg border border-pink-300/20 bg-pink-500/10 px-2 py-1 text-[11px] font-bold text-pink-100 transition hover:bg-pink-500/20'
-                  }
-                  type="button"
-                  onClick={() => void handleCopyWechat()}
-                >
-                  <Copy size={11} />
-                  {wechatCopied ? '已复制' : '复制'}
-                </button>
-              </div>
-            </div>
+            <button
+              className="btn-ghost hidden min-h-0 items-center gap-1.5 px-2.5 py-2 text-xs text-zinc-400 md:inline-flex"
+              type="button"
+              title="复制客服微信 lzp983813676"
+              onClick={() => void handleCopyWechat()}
+            >
+              <Copy size={12} />
+              {wechatCopied ? '微信已复制' : '联系客服'}
+            </button>
             {/* 购买积分按钮 - 头部导航栏 */}
             <button
               className="btn-primary hidden px-3.5 py-2 text-xs md:inline-flex"
