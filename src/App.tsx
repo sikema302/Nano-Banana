@@ -599,7 +599,7 @@ function StageCard({
           ) : null}
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-pink-300/10 bg-[linear-gradient(180deg,rgba(255,143,205,0.08)_0%,rgba(0,0,0,0.16)_100%)] px-4 py-3 text-[11px] font-semibold text-pink-100 sm:ml-3 sm:py-0">
+        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-dashed border-white/10 bg-black/45 px-4 py-3 text-[11px] font-semibold text-zinc-400 sm:ml-3 sm:py-0">
           下一张作品，等你输入灵感
         </div>
       )}
@@ -4781,7 +4781,7 @@ export default function App() {
                           key={item.value}
                           className={
                             active
-                              ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[16px] font-black'
+                              ? 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[16px] font-black text-black transition'
                               : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[16px] font-black text-zinc-400'
                           }
                           type="button"
@@ -4812,8 +4812,8 @@ export default function App() {
                         return (
                           <button
                             key={item.value}
-                            className={`group relative h-12 min-h-0 overflow-visible whitespace-nowrap px-3 py-0 text-[15px] font-black ${
-                              active ? 'btn-primary' : 'btn-secondary text-zinc-400'
+                            className={`group relative flex h-12 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-3 py-0 text-[15px] font-black ${
+                              active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
                             }`}
                             type="button"
                             aria-describedby={isHighQuality ? 'gpt-high-quality-tip' : undefined}
@@ -4855,7 +4855,7 @@ export default function App() {
                         className={
                           optimizeChineseText
                             ? 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
-                            : 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
+                            : 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[15px] font-black text-black transition'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(false)}
@@ -4865,7 +4865,7 @@ export default function App() {
                       <button
                         className={
                           optimizeChineseText
-                            ? 'btn-primary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black'
+                            ? 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[15px] font-black text-black transition'
                             : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
                         }
                         type="button"
@@ -4889,7 +4889,7 @@ export default function App() {
                         key={value}
                           className={
                             active
-                              ? 'btn-primary min-h-0 px-2.5 py-2 text-[12px] font-black'
+                              ? 'inline-flex min-h-0 items-center justify-center rounded-xl border border-white bg-white px-2.5 py-2 text-[12px] font-black text-black transition'
                               : 'btn-secondary min-h-0 px-2.5 py-2 text-[12px] font-black text-zinc-400'
                           }
                         type="button"
