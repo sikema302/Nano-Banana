@@ -1968,8 +1968,11 @@ function AdminView({
   }
 
   async function handleDeleteUser(user: AdminUserSummary) {
+    const creditNotice = user.username.toLowerCase() === 'admin'
+      ? 'admin 的个人剩余积分不会计入或退回平台总额度。'
+      : '剩余积分会退回平台总额度。';
     const confirmed = window.confirm(
-      `确定删除用户 ${user.username}？\n\n将同时删除该用户兑换的邀请码、积分账户、生成记录和收藏图片，剩余积分会退回 admin。此操作不可撤销。`,
+      `确定删除用户 ${user.username}？\n\n将同时删除该用户兑换的邀请码、积分账户、生成记录和收藏图片，${creditNotice}此操作不可撤销。`,
     );
     if (!confirmed) return;
 
@@ -2879,7 +2882,7 @@ function AdminView({
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || adminCredits.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || (item.username.toLowerCase() !== 'admin' && adminCredits.remainingCredits <= 0) || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleRechargeUser(item)}
                                   >
@@ -2887,7 +2890,7 @@ function AdminView({
                                   </button>
                                   <button
                                     className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeductUser(item)}
                                   >
@@ -2895,7 +2898,7 @@ function AdminView({
                                   </button>
                                   <button
                                     className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || item.username.toLowerCase() === 'admin' || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeleteUser(item)}
                                   >

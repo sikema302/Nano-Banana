@@ -94,6 +94,7 @@ const INVITE_RECLAIM_DAYS = 7;
 const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhrKpGbUUiHCaQrYCq';
 const IMAGE_RETENTION_DAYS = 7;
 const GENERATION_API_REQUEST_MS_SETTING_PREFIX = 'generation_api_request_ms:';
+const ADMIN_CREDIT_POOL_SETTING_KEY = 'admin_credit_pool_v2';
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
@@ -519,16 +520,28 @@ export async function getAdminCreditSummary(): Promise<CreditSummary> {
     .order('created_at', { ascending: true })
     .limit(1)
     .single();
-  if (error) return { totalCredits: 0, usedCredits: 0, remainingCredits: 0 };
-  return toCreditSummary(data as { total_credits: number; used_credits: number });
+  const fallback = error
+    ? { totalCredits: 0, usedCredits: 0, remainingCredits: 0 }
+    : toCreditSummary(data as { total_credits: number; used_credits: number });
+  const raw = await getSetting(ADMIN_CREDIT_POOL_SETTING_KEY, JSON.stringify(fallback));
+  try {
+    const parsed = JSON.parse(raw) as Partial<CreditSummary>;
+    const totalCredits = Math.max(0, Math.floor(Number(parsed.totalCredits || 0)));
+    const usedCredits = Math.max(0, Math.floor(Number(parsed.usedCredits || 0)));
+    return { totalCredits, usedCredits, remainingCredits: Math.max(0, totalCredits - usedCredits) };
+  } catch {
+    return fallback;
+  }
 }
 
 export async function adjustAdminTotalCredits(delta: number): Promise<void> {
-  const admin = await getAdminCreditOwner();
-  if (!admin?.user_id) {
-    throw new Error('Admin credits are not initialized');
-  }
-  await adjustUserTotalCredits(String(admin.user_id), delta);
+  const current = await getAdminCreditSummary();
+  const totalCredits = Math.max(current.usedCredits, current.totalCredits + Math.floor(delta));
+  await setSetting(ADMIN_CREDIT_POOL_SETTING_KEY, JSON.stringify({
+    totalCredits,
+    usedCredits: current.usedCredits,
+    remainingCredits: Math.max(0, totalCredits - current.usedCredits),
+  }));
 }
 
 // ─── 邀请码操作 ─────────────────────────────────────────────────────

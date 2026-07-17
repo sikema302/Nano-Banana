@@ -356,6 +356,7 @@ const PUBLIC_API_KEYS_BACKUP_SETTING_KEY = 'public_api_keys_v1_backup';
 const PUBLIC_ASYNC_TASKS_SETTING_KEY = 'public_async_generation_tasks_v1';
 const AUTH_SESSION_SETTING_PREFIX = 'auth_session_v1:';
 const INVITE_POPUP_IP_SETTING_PREFIX = 'invite_popup_ip_v1:';
+const ADMIN_CREDIT_POOL_SETTING_KEY = 'admin_credit_pool_v2';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
 const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
@@ -2696,12 +2697,25 @@ async function runUnifiedCreditMigrationSupabase() {
 }
 
 function getAdminCreditSummary(db: SqlDatabase) {
-  return toCreditSummary(
+  const fallback = toCreditSummary(
     getOne<Record<string, unknown>>(
       db,
       "SELECT total_credits, used_credits FROM user_credits WHERE username = 'admin' ORDER BY created_at ASC LIMIT 1",
     ),
   );
+  const raw = getSetting(db, ADMIN_CREDIT_POOL_SETTING_KEY, JSON.stringify(fallback));
+  try {
+    const parsed = JSON.parse(raw) as Partial<{
+      totalCredits: number;
+      usedCredits: number;
+      remainingCredits: number;
+    }>;
+    const totalCredits = Math.max(0, Math.floor(Number(parsed.totalCredits || 0)));
+    const usedCredits = Math.max(0, Math.floor(Number(parsed.usedCredits || 0)));
+    return { totalCredits, usedCredits, remainingCredits: Math.max(0, totalCredits - usedCredits) };
+  } catch {
+    return fallback;
+  }
 }
 
 function getUserCredits(db: SqlDatabase, userId: string) {
@@ -2757,12 +2771,13 @@ function getAdminCreditOwner(db: SqlDatabase) {
 }
 
 function adjustAdminTotalCredits(db: SqlDatabase, delta: number) {
-  const admin = getAdminCreditOwner(db);
-  if (!admin?.user_id) {
-    throw new Error('Admin credits are not initialized');
-  }
-
-  adjustUserTotalCredits(db, String(admin.user_id), delta);
+  const current = getAdminCreditSummary(db);
+  const totalCredits = Math.max(current.usedCredits, current.totalCredits + Math.floor(delta));
+  setSetting(db, ADMIN_CREDIT_POOL_SETTING_KEY, JSON.stringify({
+    totalCredits,
+    usedCredits: current.usedCredits,
+    remainingCredits: Math.max(0, totalCredits - current.usedCredits),
+  }));
 }
 
 function syncInviteCodeBalanceForUser(db: SqlDatabase, userId: string) {
@@ -6257,29 +6272,25 @@ async function start() {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [adminOwner, adminCredits, creditRows] = await Promise.all([
-          db.getAdminCreditOwner(),
+        const [adminCredits, creditRows] = await Promise.all([
           db.getAdminCreditSummary(),
           db.getAllCreditRows(),
         ]);
-        if (adminOwner?.user_id === userId) {
-          res.status(400).json({ error: '不能给 admin 自己充值' });
-          return;
-        }
 
         const target = creditRows.find((item) => item.user_id === userId);
         if (!target) {
           res.status(404).json({ error: '用户积分账户不存在' });
           return;
         }
-        if (adminCredits.remainingCredits < requestedCredits) {
+        const isAdminTarget = String(target.username || '').toLowerCase() === 'admin';
+        if (!isAdminTarget && adminCredits.remainingCredits < requestedCredits) {
           res.status(400).json({ error: `admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}` });
           return;
         }
 
         await db.setUserTotalCredits(userId, target.total_credits + requestedCredits);
         await db.syncInviteCodeBalanceForUser(userId);
-        await db.adjustAdminTotalCredits(-requestedCredits);
+        if (!isAdminTarget) await db.adjustAdminTotalCredits(-requestedCredits);
 
         res.json({
           credits: await db.getUserCredits(userId),
@@ -6291,25 +6302,23 @@ async function start() {
 
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
-        const adminOwner = getAdminCreditOwner(db);
-        if (adminOwner?.user_id === userId) throw new Error('不能给 admin 自己充值');
-
         const target = getOne<Record<string, unknown>>(
           db,
-          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          'SELECT username, total_credits, used_credits FROM user_credits WHERE user_id = ?',
           [userId],
         );
         if (!target) throw new Error('用户积分账户不存在');
 
         const adminCredits = getAdminCreditSummary(db);
-        if (adminCredits.remainingCredits < requestedCredits) {
+        const isAdminTarget = String(target.username || '').toLowerCase() === 'admin';
+        if (!isAdminTarget && adminCredits.remainingCredits < requestedCredits) {
           throw new Error(`admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}`);
         }
 
         const currentCredits = toCreditSummary(target);
         setUserTotalCredits(db, userId, currentCredits.totalCredits + requestedCredits);
         syncInviteCodeBalanceForUser(db, userId);
-        adjustAdminTotalCredits(db, -requestedCredits);
+        if (!isAdminTarget) adjustAdminTotalCredits(db, -requestedCredits);
         return {
           credits: getUserCredits(db, userId),
           adminCredits: getAdminCreditSummary(db),
@@ -6338,14 +6347,7 @@ async function start() {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [adminOwner, creditRows] = await Promise.all([
-          db.getAdminCreditOwner(),
-          db.getAllCreditRows(),
-        ]);
-        if (adminOwner?.user_id === userId) {
-          res.status(400).json({ error: '不能扣除 admin 自己的积分' });
-          return;
-        }
+        const creditRows = await db.getAllCreditRows();
 
         const target = creditRows.find((item) => item.user_id === userId);
         if (!target) {
@@ -6371,8 +6373,6 @@ async function start() {
 
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
-        const adminOwner = getAdminCreditOwner(db);
-        if (adminOwner?.user_id === userId) throw new Error('不能扣除 admin 自己的积分');
         const target = getOne<Record<string, unknown>>(
           db,
           'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
@@ -6410,15 +6410,10 @@ async function start() {
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const [adminOwner, creditRows, invites] = await Promise.all([
-          db.getAdminCreditOwner(),
+        const [creditRows, invites] = await Promise.all([
           db.getAllCreditRows(),
           db.getInviteCodesRedeemedByUser(userId),
         ]);
-        if (adminOwner?.user_id === userId) {
-          res.status(400).json({ error: '不能删除 admin 用户' });
-          return;
-        }
 
         const target = creditRows.find((item) => item.user_id === userId);
         if (!target) {
@@ -6432,7 +6427,7 @@ async function start() {
         const deletedInviteCodes = invites.map((invite) => String(invite.code));
 
         await db.deleteUserAccountData(userId);
-        if (returnedCredits > 0) {
+        if (String(target.username || '').toLowerCase() !== 'admin' && returnedCredits > 0) {
           await db.adjustAdminTotalCredits(returnedCredits);
         }
         res.json({
@@ -6446,11 +6441,9 @@ async function start() {
 
       const payload = await withWriteDb((db) => {
         ensureSchema(db);
-        const adminOwner = getAdminCreditOwner(db);
-        if (adminOwner?.user_id === userId) throw new Error('不能删除 admin 用户');
         const target = getOne<Record<string, unknown>>(
           db,
-          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          'SELECT username, total_credits, used_credits FROM user_credits WHERE user_id = ?',
           [userId],
         );
         if (!target) throw new Error('用户不存在');
@@ -6468,7 +6461,7 @@ async function start() {
         db.run('DELETE FROM user_credits WHERE user_id = ?', [userId]);
         db.run('DELETE FROM users WHERE CAST(id AS TEXT) = ?', [userId]);
         db.run('DELETE FROM user_migrations WHERE supabase_user_id = ?', [userId]);
-        if (credits.remainingCredits > 0) {
+        if (String(target.username || '').toLowerCase() !== 'admin' && credits.remainingCredits > 0) {
           adjustAdminTotalCredits(db, credits.remainingCredits);
         }
         return {
