@@ -361,6 +361,12 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
   const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
+    if (auth && response.status === 401) {
+      clearSession();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pixory:session-expired'));
+      }
+    }
     throw new Error(getApiErrorMessage(payload, responseText));
   }
 
@@ -369,6 +375,10 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
 
 export async function fetchHealth() {
   return request<{ ok: boolean; userStorage: string }>('/api/health');
+}
+
+export async function claimInvitePopup() {
+  return request<{ shouldShow: boolean }>('/api/ui/invite-popup/claim', { method: 'POST' });
 }
 
 export async function fetchMe() {

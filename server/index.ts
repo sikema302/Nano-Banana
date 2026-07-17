@@ -61,6 +61,7 @@ type ImageCategory = 'favorite' | 'backup' | 'discarded';
 type AuthUser = {
   userId: string;
   username: string;
+  sessionId?: string;
 };
 
 type SupabaseUserInput = {
@@ -353,6 +354,8 @@ const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
 const PUBLIC_API_KEYS_SETTING_KEY = 'public_api_keys_v1';
 const PUBLIC_API_KEYS_BACKUP_SETTING_KEY = 'public_api_keys_v1_backup';
 const PUBLIC_ASYNC_TASKS_SETTING_KEY = 'public_async_generation_tasks_v1';
+const AUTH_SESSION_SETTING_PREFIX = 'auth_session_v1:';
+const INVITE_POPUP_IP_SETTING_PREFIX = 'invite_popup_ip_v1:';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
 const UNIFIED_CREDIT_MIGRATION_BACKUP_SETTING_KEY = 'unified_credit_migration_v1_backup';
 const API_CREDIT_POOL_DEFINITIONS: Array<{
@@ -1181,6 +1184,41 @@ function issueToken(user: AuthUser) {
   return jwt.sign(user, tokenSecret, { expiresIn: '30d' });
 }
 
+function authSessionSettingKey(userId: string) {
+  return `${AUTH_SESSION_SETTING_PREFIX}${sha256Digest(userId).slice(0, 40)}`;
+}
+
+async function setActiveAuthSession(userId: string, sessionId: string) {
+  const key = authSessionSettingKey(userId);
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.setSetting(key, sessionId);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    setSetting(db, key, sessionId);
+  });
+}
+
+async function getActiveAuthSession(userId: string) {
+  const key = authSessionSettingKey(userId);
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    return db.getSetting(key, '');
+  }
+  return withReadDb((db) => {
+    ensureSchema(db);
+    return getSetting(db, key, '');
+  });
+}
+
+async function issueExclusiveToken(user: AuthUser) {
+  const sessionId = crypto.randomUUID();
+  await setActiveAuthSession(user.userId, sessionId);
+  return issueToken({ ...user, sessionId });
+}
+
 function adminUsernames() {
   return (process.env.ADMIN_USERNAMES || 'admin')
     .split(',')
@@ -1244,7 +1282,7 @@ function getVisionaryApiKeyLabel(modelId: string, imageSize: string) {
   return 'VISIONARY_API_KEY';
 }
 
-function requireAuth(req: Request, res: Response, next: NextFunction) {
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Missing Bearer token' });
@@ -1253,9 +1291,16 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
   try {
     const payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
+    const userId = String(payload.userId);
+    const sessionId = normalizeString(payload.sessionId);
+    if (!sessionId || (await getActiveAuthSession(userId)) !== sessionId) {
+      res.status(401).json({ error: 'This account has signed in on another device' });
+      return;
+    }
     req.authUser = {
-      userId: String(payload.userId),
+      userId,
       username: String(payload.username),
+      sessionId,
     };
     next();
   } catch {
@@ -3919,7 +3964,9 @@ async function start() {
   }
 
   const app = express();
+  app.set('trust proxy', 'loopback');
   const hasDistBuild = !IS_VERCEL && (await pathExists(path.join(DIST_DIR, 'index.html')));
+  let invitePopupClaimQueue: Promise<unknown> = Promise.resolve();
 
   app.use((req, res, next) => {
     const originHeader = req.headers.origin;
@@ -3982,6 +4029,38 @@ async function start() {
     });
   });
 
+  app.post('/api/ui/invite-popup/claim', async (req, res) => {
+    const clientIp = normalizeString(req.ip || req.socket.remoteAddress).replace(/^::ffff:/, '');
+    if (!clientIp) {
+      res.json({ shouldShow: false });
+      return;
+    }
+    const settingKey = `${INVITE_POPUP_IP_SETTING_PREFIX}${sha256Digest(clientIp).slice(0, 40)}`;
+    const claim = async () => {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const existing = await db.getSetting(settingKey, '');
+        if (existing) return false;
+        await db.setSetting(settingKey, nowIso());
+        return true;
+      }
+      return withWriteDb((db) => {
+        ensureSchema(db);
+        if (getSetting(db, settingKey, '')) return false;
+        setSetting(db, settingKey, nowIso());
+        return true;
+      });
+    };
+    const result = invitePopupClaimQueue.then(claim, claim);
+    invitePopupClaimQueue = result.then(() => undefined, () => undefined);
+    try {
+      res.json({ shouldShow: await result });
+    } catch (error) {
+      console.error('[invite-popup] claim failed:', error);
+      res.json({ shouldShow: false });
+    }
+  });
+
   // 鈹€鈹€鈹€ 娉ㄥ唽 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   app.post('/api/auth/register', async (req, res) => {
@@ -4015,7 +4094,7 @@ async function start() {
 
         const authUser = { userId: user.id, username };
         res.status(201).json({
-          token: issueToken(authUser),
+          token: await issueExclusiveToken(authUser),
           user: await getPublicUser(authUser),
         });
         return;
@@ -4038,10 +4117,7 @@ async function start() {
         const legacyUserId = lastInsertId(db);
         const externalUserId = await resolveExternalUserId(db, legacyUserId, username);
         ensureUserCredits(db, externalUserId, username, 0);
-        return {
-          token: issueToken({ userId: externalUserId, username }),
-          authUser: { userId: externalUserId, username },
-        };
+        return { authUser: { userId: externalUserId, username } };
       });
 
       if (!result) {
@@ -4050,7 +4126,7 @@ async function start() {
       }
 
       res.status(201).json({
-        token: result.token,
+        token: await issueExclusiveToken(result.authUser),
         user: await getPublicUser(result.authUser),
       });
     } catch (error) {
@@ -4089,7 +4165,7 @@ async function start() {
         const authUser = { userId: record.id, username: record.username };
 
         res.json({
-          token: issueToken(authUser),
+          token: await issueExclusiveToken(authUser),
           user: await getPublicUser(authUser),
         });
         return;
@@ -4127,7 +4203,7 @@ async function start() {
       }
 
       res.json({
-        token: issueToken({ userId: user.id, username: user.username }),
+        token: await issueExclusiveToken({ userId: user.id, username: user.username }),
         user: await getPublicUser({ userId: user.id, username: user.username }),
       });
     } catch (error) {
@@ -4180,7 +4256,7 @@ async function start() {
 
         const authUser = { userId, username };
         res.json({
-          token: issueToken(authUser),
+          token: await issueExclusiveToken(authUser),
           user: await getPublicUser(authUser),
         });
         return;
@@ -4216,7 +4292,7 @@ async function start() {
       }
 
       res.json({
-        token: issueToken({ userId: inviteUser.id, username: inviteUser.username }),
+        token: await issueExclusiveToken({ userId: inviteUser.id, username: inviteUser.username }),
         user: await getPublicUser({ userId: inviteUser.id, username: inviteUser.username }),
       });
     } catch (error) {

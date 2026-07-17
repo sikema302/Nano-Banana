@@ -44,6 +44,7 @@ import {
   fetchPublicApiKeys,
   deleteImage,
   acknowledgePromoCoupon,
+  claimInvitePopup,
   fetchHealth,
   fetchMe,
   fetchModels,
@@ -3254,10 +3255,37 @@ export default function App() {
     if (!authInitialized || activeTab !== 'create' || hasVisitedCreateRef.current) return;
     hasVisitedCreateRef.current = true;
     if (user) return;
-    setAuthError('');
-    setAuthMode('invite');
-    setAuthOpen(true);
+    let cancelled = false;
+    void claimInvitePopup()
+      .then(({ shouldShow }) => {
+        if (cancelled || !shouldShow) return;
+        setAuthError('');
+        setAuthMode('invite');
+        setAuthOpen(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab, authInitialized, user]);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      hasVisitedCreateRef.current = true;
+      setUser(null);
+      setFavorites([]);
+      setBackup([]);
+      setDiscarded([]);
+      setHistoryRecords([]);
+      setPromoCoupon(null);
+      setPromoCouponOpen(false);
+      setAuthMode('login');
+      setAuthError('该账号已在其他设备或浏览器登录，请重新登录。');
+      setAuthOpen(true);
+    };
+    window.addEventListener('pixory:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('pixory:session-expired', handleSessionExpired);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -4276,6 +4304,7 @@ export default function App() {
   }
 
   function logout() {
+    hasVisitedCreateRef.current = true;
     clearSession();
     setUser(null);
     setFavorites([]);
