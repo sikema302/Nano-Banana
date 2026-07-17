@@ -261,9 +261,10 @@
 }
 
 .nav-tab-active {
-  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  box-shadow: none;
+  font-weight: var(--weight-bold) !important;
 }
 
 .app-panel {
