@@ -1,4 +1,4 @@
-import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, type SyntheticEvent, useEffect, useState } from 'react';
+import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   Bookmark,
@@ -3195,10 +3195,12 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'invite'>('login');
   const [authLoading, setAuthLoading] = useState(false);
+  const [authInitialized, setAuthInitialized] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authForm, setAuthForm] = useState({ username: '', password: '', email: '', inviteCode: '' });
   const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
   const [promoCouponOpen, setPromoCouponOpen] = useState(false);
+  const hasVisitedCreateRef = useRef(false);
 
   const sideFavoriteItems = user ? favorites : [];
   const sideBackupItems = user ? backup : [];
@@ -3232,6 +3234,7 @@ export default function App() {
     const storedUser = getStoredUser();
     if (storedUser?.username === 'demo') {
       clearSession();
+      setAuthInitialized(true);
     } else if (storedUser) {
       setUser(storedUser);
       void fetchMe()
@@ -3240,9 +3243,21 @@ export default function App() {
           clearSession();
           setUser(null);
           setPromoCoupon(null);
-        });
+        })
+        .finally(() => setAuthInitialized(true));
+    } else {
+      setAuthInitialized(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!authInitialized || activeTab !== 'create' || hasVisitedCreateRef.current) return;
+    hasVisitedCreateRef.current = true;
+    if (user) return;
+    setAuthError('');
+    setAuthMode('invite');
+    setAuthOpen(true);
+  }, [activeTab, authInitialized, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -4287,7 +4302,7 @@ export default function App() {
     setActiveTab('create');
     setCurrentImage(null);
     setHistoryQueue([]);
-    setNotice('已退出登录');
+    setNotice('');
   }
 
   const stageSourceCards = currentImage ? [currentImage, ...historyQueue] : historyQueue;
@@ -4595,8 +4610,8 @@ export default function App() {
       <div className="flex min-h-[100dvh] flex-col bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)] lg:h-[100dvh] lg:overflow-hidden">
         <header className="app-header shrink-0 flex flex-wrap items-center justify-between gap-4 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
-            <div className="brand-mark h-8 w-8" />
-            <span className="text-[30px] font-extrabold leading-none tracking-tight text-white">PIXORY</span>
+            <div className="brand-mark h-9 w-9" />
+            <span className="text-[26px] font-semibold leading-none tracking-[-0.025em] text-zinc-100">PIXORY</span>
           </div>
 
           <nav className="nav-shell order-3 flex w-full overflow-x-auto p-1 sm:order-none sm:w-auto">
