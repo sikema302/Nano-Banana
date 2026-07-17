@@ -17,9 +17,9 @@
   --weight-bold: 600;
   --weight-medium: 500;
   --weight-regular: 400;
-  --primary: #7c3aed;
-  --primary-hover: #8b5cf6;
-  --primary-glow: rgba(124, 58, 237, 0.3);
+  --primary: #5f5ac7;
+  --primary-hover: #6b65d4;
+  --primary-glow: rgba(95, 90, 199, 0.12);
   --bg-main: #0b0b10;
   --bg-card: #141420;
   --bg-elevated: #1c1c2a;
@@ -81,7 +81,7 @@
   overflow-y: auto;
   background:
     radial-gradient(circle at 18% -12%, var(--primary-glow), transparent 32%),
-    radial-gradient(circle at 88% 8%, rgba(139, 92, 246, 0.18), transparent 28%),
+    radial-gradient(circle at 88% 8%, rgba(95, 90, 199, 0.08), transparent 28%),
     var(--bg-main);
   color: var(--text-primary);
   font-family: var(--font-family);
@@ -118,14 +118,28 @@
 
 .btn-primary {
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  background: var(--primary);
   color: var(--text-primary);
-  box-shadow: var(--shadow-md), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  box-shadow: 0 6px 18px rgba(12, 12, 24, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.035) inset;
 }
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow-lg), 0 0 32px var(--primary-glow);
+  background: var(--primary-hover);
+  box-shadow: 0 8px 22px rgba(12, 12, 24, 0.34);
+}
+
+.btn-primary:active {
+  background: #514cac;
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  border-color: rgba(255, 255, 255, 0.05);
+  background: #292936;
+  color: #8a8a96;
+  box-shadow: none;
+  transform: none;
 }
 
 .btn-secondary {
@@ -269,12 +283,12 @@
   content: '';
   position: absolute;
   inset: 9px 3px 3px 9px;
-  border: 2px solid rgba(167, 139, 250, 0.95);
+  border: 2px solid rgba(141, 136, 219, 0.95);
   border-radius: 9px;
-  background: linear-gradient(145deg, rgba(124, 58, 237, 0.22), rgba(59, 130, 246, 0.06));
+  background: linear-gradient(145deg, rgba(95, 90, 199, 0.2), rgba(91, 106, 165, 0.06));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 8px 22px rgba(76, 29, 149, 0.2);
+    0 8px 22px rgba(48, 45, 110, 0.16);
   transform: rotate(7deg);
 }
 

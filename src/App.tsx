@@ -4503,11 +4503,6 @@ export default function App() {
                 {notice}
               </div>
             ) : null}
-            {healthError ? (
-              <div className="app-alert app-alert-error">
-                {healthError}
-              </div>
-            ) : null}
             <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={openPurchasePage} />
 
             <button
@@ -4660,14 +4655,27 @@ export default function App() {
               <span className={healthError ? 'h-2.5 w-2.5 rounded-full bg-rose-400' : 'h-2.5 w-2.5 rounded-full bg-emerald-400'} />
             </div>
             {user ? (
-              <button
-                className="btn-secondary px-4 py-2 text-sm"
-                type="button"
-                onClick={logout}
-              >
-                <LogOut size={14} />
-                退出
-              </button>
+              <div className="flex min-w-0 items-center gap-2.5 border-l border-white/10 pl-3">
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
+                  <div className="absolute inset-x-1 bottom-0 h-4 rounded-t-full bg-[var(--primary)]/45" />
+                  <UserRound className="relative z-10" size={22} strokeWidth={1.8} />
+                </div>
+                <div className="min-w-0 leading-tight">
+                  <p className="max-w-28 truncate text-sm font-semibold text-zinc-100">{user.username}</p>
+                  <p className="mt-1 whitespace-nowrap text-[11px] font-medium text-zinc-500">
+                    {user.isAdmin ? '管理员' : '正式用户'} <span className="px-0.5">•</span> 积分{user.creditsRemaining ?? 0}
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost min-h-0 shrink-0 px-2 py-2 text-zinc-400 hover:text-white"
+                  type="button"
+                  title="退出登录"
+                  aria-label="退出登录"
+                  onClick={logout}
+                >
+                  <LogOut size={19} />
+                </button>
+              </div>
             ) : (
               <button
                 className="btn-secondary px-4 py-2 text-sm"
@@ -4957,10 +4965,6 @@ export default function App() {
 
               {notice ? (
                 <div className="app-alert">{notice}</div>
-              ) : null}
-
-              {healthError ? (
-                <div className="app-alert app-alert-error">{healthError}</div>
               ) : null}
 
               <div className="grid gap-2.5 pt-1 xl:mt-auto xl:grid-cols-[200px_minmax(0,1fr)]">
