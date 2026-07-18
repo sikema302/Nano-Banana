@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Brain, ChevronDown, Lightbulb, LoaderCircle, Menu, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { Brain, Check, ChevronDown, Lightbulb, LoaderCircle, Menu, MessageSquarePlus, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
 
 import {
   createChatConversation,
+  addChatMemory,
+  deleteChatMemory,
   deleteChatConversation,
   fetchChatConversations,
+  fetchChatMemory,
   sendChatMessage,
+  setChatMemoryEnabled,
   type ChatConversation,
+  type ChatMemory,
   type ChatModel,
 } from './lib/api';
 
@@ -32,6 +37,10 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
   const [error, setError] = useState('');
   const [modelOpen, setModelOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memory, setMemory] = useState<ChatMemory>({ enabled: true, items: [] });
+  const [memoryInput, setMemoryInput] = useState('');
+  const [memoryLoading, setMemoryLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const active = useMemo(
@@ -86,6 +95,58 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
       });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '删除会话失败');
+    }
+  }
+
+  async function openMemory() {
+    if (!loggedIn) {
+      onLogin();
+      return;
+    }
+    setMemoryOpen(true);
+    setMemoryLoading(true);
+    setError('');
+    try {
+      setMemory((await fetchChatMemory()).memory);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '长期记忆加载失败');
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
+
+  async function toggleMemory() {
+    const previous = memory;
+    const enabled = !memory.enabled;
+    setMemory({ ...memory, enabled });
+    try {
+      setMemory((await setChatMemoryEnabled(enabled)).memory);
+    } catch (reason) {
+      setMemory(previous);
+      setError(reason instanceof Error ? reason.message : '长期记忆设置失败');
+    }
+  }
+
+  async function createMemory(event: FormEvent) {
+    event.preventDefault();
+    const content = memoryInput.trim();
+    if (!content || memoryLoading) return;
+    setMemoryLoading(true);
+    try {
+      setMemory((await addChatMemory(content)).memory);
+      setMemoryInput('');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '添加长期记忆失败');
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
+
+  async function removeMemory(id: string) {
+    try {
+      setMemory((await deleteChatMemory(id)).memory);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除长期记忆失败');
     }
   }
 
@@ -151,7 +212,7 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
         <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-white/10 px-3 sm:h-14 sm:px-5">
           <button className="btn-ghost min-h-0 p-1.5 lg:hidden" onClick={() => setSidebarOpen(true)}><Menu size={17} /></button>
           <div className="text-[13px] font-black tracking-wide text-white sm:text-sm">PIXORY-CHAT</div>
-          <Brain className="ml-auto text-zinc-500" size={18} />
+          <button className="btn-ghost ml-auto min-h-0 p-1.5 text-zinc-500 hover:text-white" type="button" title="长期记忆" aria-label="打开长期记忆" onClick={() => void openMemory()}><Brain size={18} /></button>
         </header>
 
         <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
@@ -190,6 +251,46 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
           {error ? <p className="mx-auto mt-2 max-w-5xl px-2 text-xs text-rose-400">{error}</p> : null}
         </div>
       </div>
+
+      {memoryOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setMemoryOpen(false); }}>
+          <section className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-white/15 bg-[#171717] shadow-[0_30px_100px_rgba(0,0,0,0.7)]">
+            <header className="flex items-start gap-3 border-b border-white/10 px-5 py-5 sm:px-8 sm:py-7">
+              <Brain className="mt-0.5 shrink-0 text-white" size={24} />
+              <div className="min-w-0 flex-1">
+                <div className="text-xl font-black text-white">长期记忆</div>
+                <p className="mt-2 text-sm leading-6 text-zinc-500">仅在你开启后用于跨对话记住偏好。你可以随时查看、删除或关闭。</p>
+              </div>
+              <button className="btn-ghost min-h-0 shrink-0 p-1.5 text-zinc-500 hover:text-white" type="button" aria-label="关闭" onClick={() => setMemoryOpen(false)}><X size={25} /></button>
+            </header>
+
+            <div className="custom-scrollbar min-h-0 overflow-y-auto px-5 py-5 sm:px-8 sm:py-7">
+              <button className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-[#101010] px-5 py-4 text-left transition hover:border-white/20" type="button" onClick={() => void toggleMemory()} disabled={memoryLoading}>
+                <div className="min-w-0 flex-1">
+                  <strong className="block text-base text-white">允许跨对话使用记忆</strong>
+                  <span className="mt-1 block text-sm text-zinc-500">关闭后，已保存内容不会发送给模型。</span>
+                </div>
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${memory.enabled ? 'bg-emerald-400 text-black' : 'border border-white/15 bg-white/[0.05] text-transparent'}`}><Check size={22} strokeWidth={4} /></span>
+              </button>
+
+              <form className="mt-5 flex gap-3" onSubmit={(event) => void createMemory(event)}>
+                <input className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-[#101010] px-5 py-3.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-white/20" maxLength={500} placeholder="例如：我偏好简洁、中文回答" value={memoryInput} onChange={(event) => setMemoryInput(event.target.value)} />
+                <button className="flex shrink-0 items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-black disabled:opacity-40 sm:px-6" type="submit" disabled={!memoryInput.trim() || memoryLoading}>{memoryLoading ? <LoaderCircle className="animate-spin" size={18} /> : <Plus size={19} />}<span className="hidden sm:inline">添加</span></button>
+              </form>
+
+              <div className="mt-6 space-y-2">
+                {memory.items.map((item) => (
+                  <div key={item.id} className="group flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3.5">
+                    <p className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{item.content}</p>
+                    <button className="shrink-0 rounded-lg p-2 text-zinc-600 transition hover:bg-white/[0.06] hover:text-rose-300" type="button" title="删除" aria-label="删除记忆" onClick={() => void removeMemory(item.id)}><Trash2 size={16} /></button>
+                  </div>
+                ))}
+                {!memoryLoading && memory.items.length === 0 ? <p className="py-8 text-center text-sm text-zinc-600">还没有长期记忆。也可以在对话中输入“记住：…”保存。</p> : null}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

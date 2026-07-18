@@ -118,6 +118,11 @@ type ChatConversation = {
   updatedAt: string;
 };
 
+type ChatMemory = {
+  enabled: boolean;
+  items: Array<{ id: string; content: string; createdAt: string }>;
+};
+
 type GeneratedImagePayload = {
   prompt: string;
   modelName: string;
@@ -569,6 +574,51 @@ function nowIso() {
 
 function chatSettingKey(userId: string) {
   return `chat_conversations:${userId}`;
+}
+
+function chatMemorySettingKey(userId: string) {
+  return `chat_memory:${userId}`;
+}
+
+function normalizeChatMemory(value: unknown): ChatMemory {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const items = Array.isArray(record.items) ? record.items.slice(0, 30).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const row = item as Record<string, unknown>;
+    const content = normalizeString(row.content).slice(0, 500);
+    if (!content) return [];
+    return [{ id: normalizeString(row.id) || crypto.randomUUID(), content, createdAt: normalizeString(row.createdAt) || nowIso() }];
+  }) : [];
+  return { enabled: record.enabled !== false, items };
+}
+
+async function loadChatMemory(userId: string): Promise<ChatMemory> {
+  let raw = '';
+  if (USE_SUPABASE) {
+    raw = await (await getSupabaseDb()).getSetting(chatMemorySettingKey(userId), '');
+  } else {
+    raw = await withWriteDb((db) => {
+      ensureSchema(db);
+      return getSetting(db, chatMemorySettingKey(userId), '');
+    });
+  }
+  try {
+    return normalizeChatMemory(raw ? JSON.parse(raw) : {});
+  } catch {
+    return normalizeChatMemory({});
+  }
+}
+
+async function saveChatMemory(userId: string, memory: ChatMemory) {
+  const value = JSON.stringify(normalizeChatMemory(memory));
+  if (USE_SUPABASE) {
+    await (await getSupabaseDb()).setSetting(chatMemorySettingKey(userId), value);
+  } else {
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      setSetting(db, chatMemorySettingKey(userId), value);
+    });
+  }
 }
 
 function normalizeChatConversations(value: unknown): ChatConversation[] {
@@ -4480,6 +4530,56 @@ async function start() {
     }
   });
 
+  app.get('/api/chat/memory', requireAuth, async (req, res) => {
+    try {
+      res.json({ memory: await loadChatMemory(req.authUser!.userId) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '长期记忆加载失败' });
+    }
+  });
+
+  app.put('/api/chat/memory', requireAuth, async (req, res) => {
+    try {
+      const memory = await loadChatMemory(req.authUser!.userId);
+      memory.enabled = req.body?.enabled !== false;
+      await saveChatMemory(req.authUser!.userId, memory);
+      res.json({ memory });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '长期记忆设置失败' });
+    }
+  });
+
+  app.post('/api/chat/memory/items', requireAuth, async (req, res) => {
+    const content = normalizeString(req.body?.content).slice(0, 500);
+    if (!content) {
+      res.status(400).json({ error: '记忆内容不能为空' });
+      return;
+    }
+    try {
+      const memory = await loadChatMemory(req.authUser!.userId);
+      if (memory.items.length >= 30) {
+        res.status(400).json({ error: '最多保存 30 条长期记忆' });
+        return;
+      }
+      memory.items.unshift({ id: crypto.randomUUID(), content, createdAt: nowIso() });
+      await saveChatMemory(req.authUser!.userId, memory);
+      res.status(201).json({ memory });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '添加长期记忆失败' });
+    }
+  });
+
+  app.delete('/api/chat/memory/items/:id', requireAuth, async (req, res) => {
+    try {
+      const memory = await loadChatMemory(req.authUser!.userId);
+      memory.items = memory.items.filter((item) => item.id !== normalizeString(req.params.id));
+      await saveChatMemory(req.authUser!.userId, memory);
+      res.json({ memory });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '删除长期记忆失败' });
+    }
+  });
+
   app.post('/api/chat/conversations', requireAuth, async (req, res) => {
     try {
       const createdAt = nowIso();
@@ -4531,12 +4631,21 @@ async function start() {
       }
       const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content, createdAt: nowIso() };
       const history = [...conversation.messages, userMessage].slice(-40);
+      const memory = await loadChatMemory(req.authUser!.userId);
+      const rememberedContent = content.match(/^记住[：:]\s*(.+)$/s)?.[1]?.trim().slice(0, 500);
+      if (rememberedContent && !memory.items.some((item) => item.content === rememberedContent) && memory.items.length < 30) {
+        memory.items.unshift({ id: crypto.randomUUID(), content: rememberedContent, createdAt: nowIso() });
+        await saveChatMemory(req.authUser!.userId, memory);
+      }
+      const memoryInstruction = memory.enabled && memory.items.length
+        ? `\n用户的长期记忆：\n${memory.items.map((item) => `- ${item.content}`).join('\n')}\n仅在与当前问题有关时自然地使用这些信息。`
+        : '';
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
       const response = await ai.models.generateContent({
         model: CHAT_MODEL,
         contents: history.map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
         config: {
-          systemInstruction: '你是 PIXORY-CHAT，一名可靠、清晰且富有创意的中文 AI 助手。优先直接回答用户问题；涉及图像创作时，给出可直接使用的高质量提示词。',
+          systemInstruction: `你是 PIXORY-CHAT，一名可靠、清晰且富有创意的中文 AI 助手。优先直接回答用户问题；涉及图像创作时，给出可直接使用的高质量提示词。${memoryInstruction}`,
           maxOutputTokens: 4096,
         },
       });

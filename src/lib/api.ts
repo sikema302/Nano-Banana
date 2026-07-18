@@ -297,6 +297,17 @@ export interface ChatModel {
   description: string;
 }
 
+export interface ChatMemoryItem {
+  id: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatMemory {
+  enabled: boolean;
+  items: ChatMemoryItem[];
+}
+
 function parseJsonPayload<T>(text: string): T | { error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null {
   if (!text) return null;
   try {
@@ -417,6 +428,22 @@ export async function sendChatMessage(id: string, payload: { content: string; mo
     { method: 'POST', body: JSON.stringify(payload) },
     true,
   );
+}
+
+export async function fetchChatMemory() {
+  return request<{ memory: ChatMemory }>('/api/chat/memory', {}, true);
+}
+
+export async function setChatMemoryEnabled(enabled: boolean) {
+  return request<{ memory: ChatMemory }>('/api/chat/memory', { method: 'PUT', body: JSON.stringify({ enabled }) }, true);
+}
+
+export async function addChatMemory(content: string) {
+  return request<{ memory: ChatMemory }>('/api/chat/memory/items', { method: 'POST', body: JSON.stringify({ content }) }, true);
+}
+
+export async function deleteChatMemory(id: string) {
+  return request<{ memory: ChatMemory }>(`/api/chat/memory/items/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
 }
 
 export async function claimInvitePopup() {
