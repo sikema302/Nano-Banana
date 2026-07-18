@@ -205,6 +205,29 @@
   transform: none;
 }
 
+/* The API reference intentionally follows the compact documentation visual
+   system used by the upstream reference page instead of the heavier app UI. */
+.api-docs-view {
+  --api-docs-panel: #11131a;
+  --api-docs-code: #0b1020;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.api-docs-view .font-black {
+  font-weight: 600;
+}
+
+.api-docs-view pre,
+.api-docs-view code {
+  font-variant-ligatures: none;
+}
+
+.api-docs-view pre {
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
 .app-alert {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);

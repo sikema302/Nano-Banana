@@ -1351,6 +1351,27 @@ function normalizeModelId(modelId: string) {
   return models.find((item) => item.id.toLowerCase() === normalized)?.id || 'gpt-image-2';
 }
 
+function normalizePublicModelId(modelId: string) {
+  const normalized = normalizeString(modelId).toLowerCase();
+  if (!normalized) return null;
+
+  const directModel = models.find((item) => item.id.toLowerCase() === normalized);
+  if (directModel) return directModel.id;
+
+  const bananaAliases = new Set([
+    'nano-banana-pro',
+    'nano_banana_pro',
+    'nano-banana2',
+    'nano_banana_2',
+    'gemini-3-pro-image-preview',
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash-image-preview',
+    'dalle3-mini',
+    'sdxl',
+  ]);
+  return bananaAliases.has(normalized) ? 'Nano_Banana_Pro' : null;
+}
+
 function normalizeRatio(value: string, modelId: string) {
   const pixelRatioAliases: Record<string, string> = {
     '1024x1024': '1:1',
@@ -4395,12 +4416,19 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
+    const modelId = normalizePublicModelId(model);
+    if (!modelId) {
+      res.status(400).json({
+        error: `Unsupported model: ${model || '(empty)'}`,
+        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+      });
+      return;
+    }
 
     let reservedKey: PublicApiKeyRecord | null = null;
     let creditsUsed = 0;
 
     try {
-      const modelId = normalizeModelId(model);
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
       const imageSize = normalizeImageSize(requestedImageSize, modelId);
@@ -4969,6 +4997,14 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
+    const modelId = normalizePublicModelId(model);
+    if (!modelId) {
+      res.status(400).json({
+        error: `Unsupported model: ${model || '(empty)'}`,
+        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+      });
+      return;
+    }
     let reservedKey: PublicApiKeyRecord | null = null;
     let creditsUsed = 0;
     let temporaryReferenceImages: string[] = [];
@@ -5002,7 +5038,6 @@ async function start() {
       }
       const referenceImages = Array.from(new Set([...remoteReferenceImages, ...temporaryReferenceUrls]));
 
-      const modelId = normalizeModelId(model);
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
       const imageSize = normalizeImageSize(requestedImageSize, modelId);

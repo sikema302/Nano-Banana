@@ -21,6 +21,7 @@ import {
   Star,
   Trash2,
   UserRound,
+  WalletCards,
   X,
 } from 'lucide-react';
 import {
@@ -892,9 +893,22 @@ function ApiDocsView({
   const [balanceResult, setBalanceResult] = useState<CreditSummary | null>(null);
   const [balanceError, setBalanceError] = useState('');
   const [balanceLoading, setBalanceLoading] = useState(false);
+  const [activeDocSection, setActiveDocSection] = useState('quick-start');
+  const docsScrollRef = useRef<HTMLElement | null>(null);
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
   const apiKeyPlaceholder = 'px_your_api_key';
   const apiKeyHighlightClassName = 'font-mono text-[1.08em] font-black tracking-[0.04em] text-[#8fd3ff]';
+  const submitEndpoint = `${baseUrl}/v1/async/images/generations`;
+  const queryEndpoint = `${baseUrl}/v1/async/images/generations/TASK_ID`;
+  const quickStartCurl = `curl --location '${submitEndpoint}' \\
+--header 'Authorization: Bearer ${apiKeyPlaceholder}' \\
+--header 'Content-Type: application/json' \\
+--data '{
+  "model": "nano-banana-pro",
+  "prompt": "生成一张具有高级质感的品牌海报",
+  "aspectRatio": "1:1",
+  "imageSize": "2K"
+}'`;
   const requestExample = JSON.stringify(
     {
       model: 'nano-banana-pro',
@@ -999,24 +1013,28 @@ function ApiDocsView({
     {
       model: 'gpt-image-2',
       rows: [
-        ['\u6807\u51c6 / 1K', `${gptImagePricing.standard} \u70b9 / \u5f20`],
-        ['2K', `${gptImagePricing.twoK} \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.twoKHigh} \u70b9`],
-        ['4K', `${gptImagePricing.fourK} \u70b9 / \u5f20\uff0c\u9ad8\u8d28\u91cf ${gptImagePricing.fourKHigh} \u70b9`],
+        ['标准 / 1K', `${gptImagePricing.standard} 点 / 张`, 'imageSize=STANDARD 或标准像素值；quality 任意'],
+        ['2K 非高质量', `${gptImagePricing.twoK} 点 / 张`, 'imageSize=2K；quality=auto / low / medium 或不传'],
+        ['2K 高质量', `${gptImagePricing.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
+        ['4K 非高质量', `${gptImagePricing.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
+        ['4K 高质量', `${gptImagePricing.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
       ],
+      note: '',
     },
     {
       model: 'nano-banana-pro',
       rows: [
-        ['\u57fa\u7840\u751f\u6210', '24 \u70b9 / \u5f20'],
-        ['AI\u589e\u5f3a', '\u989d\u5916 +8 \u70b9 / \u5f20'],
+        ['基础生成', '24 点 / 张', '支持 2K / 4K 与参考图生成'],
+        ['AI 增强', '额外 +8 点 / 张', '开启 optimizeChineseText 时计费'],
       ],
+      note: '适合参考图重绘、融合、商品图和中文场景增强。',
     },
   ];
   const endpointSections = [
     {
       id: 'gpt-image-2',
-      label: 'gpt-image-2 接口',
-      title: 'gpt-image-2 接口',
+      label: 'GPT-Image-2 接口',
+      title: 'GPT-Image-2 图像生成',
       subtitle: '适合通用高质量生图。通过同一个 PIXORY 入口调用，model 固定传 gpt-image-2。',
       model: 'gpt-image-2',
       endpointPath: '/v1/async/images/generations',
@@ -1035,8 +1053,8 @@ function ApiDocsView({
     },
     {
       id: 'nano-banana',
-      label: 'nano-banana 接口',
-      title: 'nano-banana 接口',
+      label: 'Nano Banana 接口',
+      title: 'Nano Banana 图像生成',
       subtitle: '适合参考图重绘、融合、商品图改版和中文场景增强。model 可传 nano-banana-pro。',
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
@@ -1044,6 +1062,28 @@ function ApiDocsView({
       bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
     },
   ];
+  const docNavigation = [
+    ['1', '快速开始', 'quick-start'],
+    ['2', '开发指南', 'development'],
+    ['3', 'GPT-Image-2 接口', 'gpt-image-2'],
+    ['4', 'Nano Banana 接口', 'nano-banana'],
+    ['5', '价格指南', 'pricing'],
+  ];
+
+  function handleDocsScroll() {
+    const container = docsScrollRef.current;
+    if (!container) return;
+    const containerTop = container.getBoundingClientRect().top;
+    let current = docNavigation[0][2];
+    for (const [, , id] of docNavigation) {
+      const element = document.getElementById(id);
+      if (element && element.getBoundingClientRect().top - containerTop <= 150) current = id;
+    }
+    if (container.scrollHeight - container.scrollTop - container.clientHeight <= 4) {
+      current = docNavigation[docNavigation.length - 1][2];
+    }
+    setActiveDocSection((previous) => (previous === current ? previous : current));
+  }
 
   function renderHighlightedApiKey(value: string) {
     const parts = value.split(apiKeyPlaceholder);
@@ -1118,22 +1158,21 @@ function ApiDocsView({
   }
 
   return (
-    <section className="custom-scrollbar page-shell h-full overflow-auto py-10 sm:py-14">
-      <div className="grid gap-6">
-        <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="card p-3 lg:sticky lg:top-24 lg:self-start">
+    <section ref={docsScrollRef} className="api-docs-view custom-scrollbar h-full overflow-auto bg-[#050505] px-4 pb-20 pt-8 text-zinc-200 md:px-6 md:pt-10" onScroll={handleDocsScroll}>
+      <div className="mx-auto grid max-w-[1500px] gap-6">
+        <div className="grid min-w-0 gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="min-w-0 self-start border-y border-white/10 bg-[#11131a] p-2 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto lg:rounded-2xl lg:border lg:p-3">
             <p className="px-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">API 文档</p>
-            <div className="mt-3 grid gap-1.5 text-sm">
-              {[
-                ['1', 'gpt-image-2 接口', '#gpt-image-2'],
-                ['2', 'nano-banana 接口', '#nano-banana'],
-                ['3', '价格说明', '#pricing'],
-              ].map(([index, title, desc]) => (
-                <a key={title} className="btn-ghost justify-start px-3 py-2.5 font-semibold" href={desc}>
-                  <span className="font-mono text-xs font-black text-cyan-300">{index}</span>
+            <div className="mt-3 flex gap-1.5 overflow-x-auto text-sm lg:grid">
+              {docNavigation.map(([index, title, id]) => {
+                const active = activeDocSection === id;
+                return (
+                <a key={title} aria-current={active ? 'location' : undefined} className={`flex flex-none items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2 text-[0.78rem] transition ${active ? 'bg-sky-400/10 font-semibold text-sky-100' : 'font-medium text-zinc-300 hover:bg-white/5 hover:text-white'}`} href={`#${id}`} onClick={() => setActiveDocSection(id)}>
+                  <span className={`font-mono text-[0.66rem] font-black ${active ? 'text-sky-300' : 'text-zinc-600'}`}>{index}</span>
                   {title}
                 </a>
-              ))}
+                );
+              })}
             </div>
             <div className="mt-4 border-t border-white/10 pt-4">
               <button
@@ -1147,7 +1186,60 @@ function ApiDocsView({
             </div>
           </aside>
 
-          <div className="space-y-8">
+          <main className="min-w-0 space-y-8">
+            <section id="quick-start" className="scroll-mt-28 space-y-5">
+              <section className="rounded-2xl border border-white/10 bg-[#11131a] p-4 md:p-5">
+                <div className="border-b border-white/10 pb-4">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border border-sky-400/20 bg-sky-400/10 px-2.5 py-1 text-[0.72rem] font-semibold text-sky-200">PIXORY API</span>
+                    <span className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[0.72rem] font-semibold text-emerald-200">异步任务接口</span>
+                  </div>
+                  <h1 className="text-[1.7rem] font-semibold text-white">快速开始</h1>
+                  <p className="mt-2 text-[0.82rem] leading-6 text-zinc-400">使用统一的图片生成入口提交任务，再通过任务 ID 查询生成结果。</p>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  {[
+                    ['提交任务', 'POST /v1/async/images/generations，立即返回任务 ID。'],
+                    ['查询结果', 'GET /v1/async/images/generations/:id 查询任务状态。'],
+                    ['批量查询', 'POST /v1/async/images/generations/status 一次查询多个任务。'],
+                    ['读取图片', '任务成功后读取 results[0].url。'],
+                  ].map(([title, body]) => (
+                    <article key={title} className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <h3 className="text-[0.86rem] font-semibold text-white">{title}</h3>
+                      <p className="mt-1 text-[0.74rem] leading-5 text-zinc-400">{body}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+              <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><CodeIcon size={17} /></div>
+                  <h2 className="text-[1rem] font-semibold text-white">两步完成接入</h2>
+                </div>
+                <div className="grid min-w-0 gap-4 p-5 xl:grid-cols-2">
+                  <div className="min-w-0 space-y-3"><h3 className="text-[0.88rem] font-semibold text-white">1. 提交任务</h3><pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-[0.74rem] leading-5 text-zinc-200">{renderHighlightedApiKey(quickStartCurl)}</pre></div>
+                  <div className="min-w-0 space-y-3"><h3 className="text-[0.88rem] font-semibold text-white">2. 查询结果</h3><pre className="overflow-auto rounded-xl border border-white/10 bg-[#0b1020] px-4 py-4 text-[0.74rem] leading-5 text-zinc-200">{renderHighlightedApiKey(`curl '${queryEndpoint}' \\
+  -H 'Authorization: Bearer ${apiKeyPlaceholder}'`)}</pre></div>
+                </div>
+              </section>
+            </section>
+
+            <section id="development" className="scroll-mt-28 space-y-5">
+              <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                <div className="border-b border-white/10 px-5 py-5">
+                  <div className="mb-3 inline-flex rounded-md border border-orange-300/20 bg-orange-300/10 px-2.5 py-1 text-[0.72rem] font-semibold text-orange-200">开发指南</div>
+                  <h1 className="text-[1.7rem] font-semibold text-white">认证、任务与图片接入</h1>
+                  <p className="mt-2 text-[0.82rem] leading-6 text-zinc-400">API Key 必须保存在服务端。提交和查询请求都使用相同的 Bearer Token。</p>
+                </div>
+                <div className="grid gap-3 p-4 md:grid-cols-3">
+                  {[
+                    ['服务端调用', '不要把 API Key 写入网页前端、公开仓库或移动端安装包。'],
+                    ['异步轮询', '优先遵循 retryAfterSeconds，避免高频查询触发限流。'],
+                    ['及时归档', '结果地址生成后应保存到自己的业务存储中。'],
+                  ].map(([title, body]) => <article key={title} className="rounded-xl border border-white/10 bg-black/20 p-4"><h3 className="text-[0.86rem] font-semibold text-white">{title}</h3><p className="mt-1 text-[0.74rem] leading-5 text-zinc-400">{body}</p></article>)}
+                </div>
+              </section>
+            </section>
             {endpointSections.map((section) => {
               const sectionCurl = `curl --location '${baseUrl}${section.endpointPath}' \\
 --header 'Authorization: Bearer ${apiKeyPlaceholder}' \\
@@ -1390,33 +1482,37 @@ Content-Type: application/json`)}</pre>
               );
             })}
 
-            <section id="pricing" className="scroll-mt-28 overflow-hidden rounded-[24px] border border-white/10 bg-[#10131b]">
-              <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><KeyRound size={17} /></div>
-                <h2 className="text-xl font-black text-white">{'\u4ef7\u683c\u8bf4\u660e'}</h2>
+            <section id="pricing" className="scroll-mt-28 overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+              <div className="flex items-center gap-4 border-b border-white/10 px-5 py-5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/10 text-sky-200"><WalletCards size={20} /></div>
+                <h2 className="text-[1.15rem] font-semibold text-white">价格说明</h2>
               </div>
-              <div className="grid gap-4 p-5 xl:grid-cols-2">
+              <div className="grid items-stretch gap-4 p-5 lg:grid-cols-2">
                 {pricingCards.map((item) => (
-                  <article key={item.model} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <code className="inline-flex rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-sm font-black text-cyan-100">
+                  <article key={item.model} className="flex min-h-[360px] flex-col rounded-2xl border border-white/10 bg-black/20 p-5">
+                    <code className="inline-flex self-start rounded-lg border border-sky-400/25 bg-sky-400/10 px-3 py-1.5 text-[0.82rem] font-semibold text-sky-100">
                       {item.model}
                     </code>
-                    <div className="mt-4 grid gap-2">
-                      {item.rows.map(([label, value]) => (
+                    <div className="mt-4 grid gap-3">
+                      {item.rows.map(([label, value, detail]) => (
                         <div
                           key={`${item.model}-${label}`}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
                         >
-                          <span className="text-sm font-semibold text-zinc-400">{label}</span>
-                          <span className="text-sm font-black text-sky-100">{value}</span>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[0.78rem] font-medium text-zinc-400">{label}</span>
+                            <span className="whitespace-nowrap text-[0.82rem] font-semibold text-sky-100">{value}</span>
+                          </div>
+                          {detail ? <p className="mt-2 text-[0.68rem] leading-5 text-zinc-500">{detail}</p> : null}
                         </div>
                       ))}
                     </div>
+                    {item.note ? <p className="mt-5 text-[0.74rem] leading-6 text-zinc-500">{item.note}</p> : null}
                   </article>
                 ))}
               </div>
             </section>
-          </div>
+          </main>
         </div>
 
       </div>
