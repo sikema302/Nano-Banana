@@ -88,6 +88,7 @@ import {
   getGptImageCredits,
   type GptImagePricing,
 } from './lib/model-pricing';
+import ChatView from './ChatView';
 
 interface UploadPreview {
   id: string;
@@ -119,12 +120,13 @@ const defaultModels: ModelInfo[] = [
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
 type GptQualityOption = 'low' | 'medium' | 'high';
-type AppTab = 'home' | 'create' | 'history' | 'apiDocs' | 'admin';
+type AppTab = 'home' | 'create' | 'chat' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
   home: '/',
   create: '/create',
+  chat: '/chat',
   history: '/history',
   apiDocs: '/apidoc',
   admin: '/manage',
@@ -136,6 +138,7 @@ function getTabPath(tab: AppTab) {
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
+  if (pathname === '/chat') return 'chat';
   if (pathname === '/history') return 'history';
   if (pathname === '/apidoc') return 'apiDocs';
   if (pathname === '/manage') return canAccessAdmin ? 'admin' : 'home';
@@ -4453,6 +4456,7 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
+    { id: 'chat', label: '对话', icon: <Sparkles size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
     { id: 'admin', label: '后台管理', icon: <ShieldCheck size={15} />, hidden: !user?.isAdmin },
@@ -5156,6 +5160,15 @@ export default function App() {
             </section>
           ) : activeTab === 'history' ? (
             <HistoryView records={historyRecords} onPreview={setPreviewImage} />
+          ) : activeTab === 'chat' ? (
+            <ChatView
+              loggedIn={Boolean(user)}
+              username={user?.username}
+              onLogin={() => {
+                setAuthMode('login');
+                setAuthOpen(true);
+              }}
+            />
           ) : activeTab === 'apiDocs' ? (
             <ApiDocsView onNotice={setNotice} gptImagePricing={gptImagePricing} />
           ) : (

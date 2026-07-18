@@ -275,6 +275,28 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  model: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatModel {
+  id: string;
+  name: string;
+  description: string;
+}
+
 function parseJsonPayload<T>(text: string): T | { error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null {
   if (!text) return null;
   try {
@@ -375,6 +397,26 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
 
 export async function fetchHealth() {
   return request<{ ok: boolean; userStorage: string }>('/api/health');
+}
+
+export async function fetchChatConversations() {
+  return request<{ conversations: ChatConversation[]; models: ChatModel[] }>('/api/chat/conversations', {}, true);
+}
+
+export async function createChatConversation() {
+  return request<{ conversation: ChatConversation }>('/api/chat/conversations', { method: 'POST', body: '{}' }, true);
+}
+
+export async function deleteChatConversation(id: string) {
+  return request<{ ok: boolean }>(`/api/chat/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
+}
+
+export async function sendChatMessage(id: string, payload: { content: string; model: string }) {
+  return request<{ conversation: ChatConversation }>(
+    `/api/chat/conversations/${encodeURIComponent(id)}/messages`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  );
 }
 
 export async function claimInvitePopup() {

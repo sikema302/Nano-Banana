@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs';
 import compression from 'compression';
 import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { GoogleGenAI } from '@google/genai';
 import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
@@ -99,6 +100,22 @@ type PromoCouponPayload = {
   purchaseUrl: string;
   active: boolean;
   shouldPopup: boolean;
+};
+
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+};
+
+type ChatConversation = {
+  id: string;
+  title: string;
+  model: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 type GeneratedImagePayload = {
@@ -407,6 +424,13 @@ const SUPABASE_URL = normalizeEnvValue(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const DATABASE_PROVIDER = normalizeEnvValue(process.env.DATABASE_PROVIDER || 'sqlite').toLowerCase();
 const USE_SUPABASE = DATABASE_PROVIDER === 'supabase';
+const GEMINI_API_KEY = normalizeEnvValue(process.env.GEMINI_API_KEY);
+const CHAT_MODEL = normalizeEnvValue(process.env.CHAT_MODEL || 'gemini-2.5-flash');
+const CHAT_MAX_CONVERSATIONS = 30;
+const CHAT_MAX_MESSAGES = 100;
+const CHAT_MODELS = [
+  { id: CHAT_MODEL, name: CHAT_MODEL, description: '快速响应，支持中文创意、写作与问答' },
+];
 const CORS_ORIGIN = normalizeEnvValue(process.env.CORS_ORIGIN);
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -541,6 +565,70 @@ function normalizeEnvValue(value: string | undefined) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function chatSettingKey(userId: string) {
+  return `chat_conversations:${userId}`;
+}
+
+function normalizeChatConversations(value: unknown): ChatConversation[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, CHAT_MAX_CONVERSATIONS).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Record<string, unknown>;
+    const id = normalizeString(record.id);
+    if (!id) return [];
+    const createdAt = normalizeString(record.createdAt) || nowIso();
+    const messages: ChatMessage[] = Array.isArray(record.messages)
+      ? record.messages.slice(-CHAT_MAX_MESSAGES).flatMap((message) => {
+          if (!message || typeof message !== 'object') return [];
+          const row = message as Record<string, unknown>;
+          const role = row.role === 'assistant' ? 'assistant' : row.role === 'user' ? 'user' : null;
+          const content = normalizeString(row.content).slice(0, 24000);
+          if (!role || !content) return [];
+          return [{ id: normalizeString(row.id) || crypto.randomUUID(), role, content, createdAt: normalizeString(row.createdAt) || createdAt } as ChatMessage];
+        })
+      : [];
+    return [{
+      id,
+      title: normalizeString(record.title).slice(0, 60) || '新对话',
+      model: CHAT_MODEL,
+      messages,
+      createdAt,
+      updatedAt: normalizeString(record.updatedAt) || createdAt,
+    }];
+  });
+}
+
+async function loadChatConversations(userId: string) {
+  let raw = '[]';
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    raw = await db.getSetting(chatSettingKey(userId), '[]');
+  } else {
+    raw = await withWriteDb((db) => {
+      ensureSchema(db);
+      return getSetting(db, chatSettingKey(userId), '[]');
+    });
+  }
+  try {
+    return normalizeChatConversations(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+async function saveChatConversations(userId: string, conversations: ChatConversation[]) {
+  const value = JSON.stringify(normalizeChatConversations(conversations));
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.setSetting(chatSettingKey(userId), value);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    setSetting(db, chatSettingKey(userId), value);
+  });
 }
 
 function formatDateKeyInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TIME_ZONE) {
@@ -4382,6 +4470,88 @@ async function start() {
 
   app.get('/api/models', requireAuth, (_req, res) => {
     res.json({ models, gptImagePricing: getActiveGptImagePricing() });
+  });
+
+  app.get('/api/chat/conversations', requireAuth, async (req, res) => {
+    try {
+      res.json({ conversations: await loadChatConversations(req.authUser!.userId), models: CHAT_MODELS });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '会话加载失败' });
+    }
+  });
+
+  app.post('/api/chat/conversations', requireAuth, async (req, res) => {
+    try {
+      const createdAt = nowIso();
+      const conversation: ChatConversation = { id: crypto.randomUUID(), title: '新对话', model: CHAT_MODEL, messages: [], createdAt, updatedAt: createdAt };
+      const conversations = await loadChatConversations(req.authUser!.userId);
+      await saveChatConversations(req.authUser!.userId, [conversation, ...conversations]);
+      res.status(201).json({ conversation });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '新建会话失败' });
+    }
+  });
+
+  app.delete('/api/chat/conversations/:id', requireAuth, async (req, res) => {
+    try {
+      const id = normalizeString(req.params.id);
+      const conversations = await loadChatConversations(req.authUser!.userId);
+      if (!conversations.some((item) => item.id === id)) {
+        res.status(404).json({ error: '会话不存在' });
+        return;
+      }
+      await saveChatConversations(req.authUser!.userId, conversations.filter((item) => item.id !== id));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '删除会话失败' });
+    }
+  });
+
+  app.post('/api/chat/conversations/:id/messages', requireAuth, async (req, res) => {
+    const content = normalizeString(req.body?.content).slice(0, 8000);
+    const model = normalizeString(req.body?.model);
+    if (!content) {
+      res.status(400).json({ error: '消息内容不能为空' });
+      return;
+    }
+    if (model !== CHAT_MODEL) {
+      res.status(400).json({ error: `不支持的对话模型：${model || '(empty)'}` });
+      return;
+    }
+    if (!GEMINI_API_KEY) {
+      res.status(503).json({ error: '对话模型尚未配置，请先设置 GEMINI_API_KEY' });
+      return;
+    }
+    try {
+      const conversations = await loadChatConversations(req.authUser!.userId);
+      const conversation = conversations.find((item) => item.id === normalizeString(req.params.id));
+      if (!conversation) {
+        res.status(404).json({ error: '会话不存在' });
+        return;
+      }
+      const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content, createdAt: nowIso() };
+      const history = [...conversation.messages, userMessage].slice(-40);
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: CHAT_MODEL,
+        contents: history.map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
+        config: {
+          systemInstruction: '你是 PIXORY-CHAT，一名可靠、清晰且富有创意的中文 AI 助手。优先直接回答用户问题；涉及图像创作时，给出可直接使用的高质量提示词。',
+          maxOutputTokens: 4096,
+        },
+      });
+      const answer = normalizeString(response.text);
+      if (!answer) throw new Error('模型未返回有效内容');
+      const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: answer, createdAt: nowIso() };
+      conversation.messages = [...conversation.messages, userMessage, assistantMessage].slice(-CHAT_MAX_MESSAGES);
+      conversation.title = conversation.messages.find((message) => message.role === 'user')?.content.slice(0, 24) || '新对话';
+      conversation.updatedAt = assistantMessage.createdAt;
+      await saveChatConversations(req.authUser!.userId, [conversation, ...conversations.filter((item) => item.id !== conversation.id)]);
+      res.json({ conversation });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '消息发送失败';
+      res.status(502).json({ error: message.includes('API key') ? '对话模型密钥无效或不可用' : message });
+    }
   });
 
   // 鈹€鈹€鈹€ 鍥剧墖鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
