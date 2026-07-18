@@ -355,6 +355,9 @@ const PUBLIC_API_KEYS_SETTING_KEY = 'public_api_keys_v1';
 const PUBLIC_API_KEYS_BACKUP_SETTING_KEY = 'public_api_keys_v1_backup';
 const PUBLIC_ASYNC_TASKS_SETTING_KEY = 'public_async_generation_tasks_v1';
 const AUTH_SESSION_SETTING_PREFIX = 'auth_session_v1:';
+const ALLOW_MULTI_DEVICE_LOGIN = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.ALLOW_MULTI_DEVICE_LOGIN || 'true').trim().toLowerCase(),
+);
 const INVITE_POPUP_IP_SETTING_PREFIX = 'invite_popup_ip_v1:';
 const ADMIN_CREDIT_POOL_SETTING_KEY = 'admin_credit_pool_v2';
 const UNIFIED_CREDIT_MIGRATION_SETTING_KEY = 'unified_credit_migration_v1';
@@ -1216,7 +1219,9 @@ async function getActiveAuthSession(userId: string) {
 
 async function issueExclusiveToken(user: AuthUser) {
   const sessionId = crypto.randomUUID();
-  await setActiveAuthSession(user.userId, sessionId);
+  if (!ALLOW_MULTI_DEVICE_LOGIN) {
+    await setActiveAuthSession(user.userId, sessionId);
+  }
   return issueToken({ ...user, sessionId });
 }
 
@@ -1294,7 +1299,11 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
     const payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
     const userId = String(payload.userId);
     const sessionId = normalizeString(payload.sessionId);
-    if (!sessionId || (await getActiveAuthSession(userId)) !== sessionId) {
+    if (!sessionId) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
+    if (!ALLOW_MULTI_DEVICE_LOGIN && (await getActiveAuthSession(userId)) !== sessionId) {
       res.status(401).json({ error: 'This account has signed in on another device' });
       return;
     }

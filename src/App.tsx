@@ -3283,7 +3283,7 @@ export default function App() {
       setPromoCoupon(null);
       setPromoCouponOpen(false);
       setAuthMode('login');
-      setAuthError('该账号已在其他设备或浏览器登录，请重新登录。');
+      setAuthError('登录状态已失效或已过期，请重新登录。');
       setAuthOpen(true);
     };
     window.addEventListener('pixory:session-expired', handleSessionExpired);
