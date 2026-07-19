@@ -423,7 +423,7 @@ export async function deleteChatConversation(id: string) {
 }
 
 export async function sendChatMessage(id: string, payload: { content: string; model: string }) {
-  return request<{ conversation: ChatConversation }>(
+  return request<{ conversation: ChatConversation; creditsUsed: number; creditsRemaining: number }>(
     `/api/chat/conversations/${encodeURIComponent(id)}/messages`,
     { method: 'POST', body: JSON.stringify(payload) },
     true,

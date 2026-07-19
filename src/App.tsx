@@ -5164,6 +5164,8 @@ export default function App() {
             <ChatView
               loggedIn={Boolean(user)}
               username={user?.username}
+              creditsRemaining={user?.creditsRemaining}
+              onCreditsChange={(creditsRemaining) => setUser((current) => current ? { ...current, creditsRemaining } : current)}
               onLogin={() => {
                 setAuthMode('login');
                 setAuthOpen(true);

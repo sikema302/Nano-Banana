@@ -18,7 +18,9 @@ import {
 interface ChatViewProps {
   loggedIn: boolean;
   username?: string;
+  creditsRemaining?: number;
   onLogin: () => void;
+  onCreditsChange: (creditsRemaining: number) => void;
 }
 
 const suggestions = [
@@ -26,7 +28,9 @@ const suggestions = [
   { icon: Sparkles, title: '生成一份 AI 漫画提示词', prompt: '帮我写一份四格 AI 漫画提示词，主题是设计师和人工智能成为搭档。' },
 ];
 
-export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps) {
+const CHAT_CREDITS = 20;
+
+export default function ChatView({ loggedIn, username, creditsRemaining = 0, onLogin, onCreditsChange }: ChatViewProps) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState('');
   const [models, setModels] = useState<ChatModel[]>([]);
@@ -174,6 +178,7 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
       const payload = await sendChatMessage(conversation.id, { content, model: selectedModel });
       setConversations((current) => [payload.conversation, ...current.filter((item) => item.id !== payload.conversation.id)]);
       setActiveId(payload.conversation.id);
+      onCreditsChange(payload.creditsRemaining);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '消息发送失败');
       if (active) {
@@ -238,14 +243,15 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
         </div>
 
         <div className="shrink-0 border-t border-white/10 bg-[#101010] p-3 sm:p-5">
+          {loggedIn && creditsRemaining < CHAT_CREDITS ? <p className="mx-auto mb-2 max-w-5xl px-2 text-xs text-rose-400">当前正式积分不足，本次对话需要 {CHAT_CREDITS} 积分。</p> : null}
           <form className="relative mx-auto max-w-5xl rounded-3xl border border-white/15 bg-[#0b0b0b] p-3 focus-within:border-white/25" onSubmit={(event) => void submit(event)}>
             <textarea className="min-h-16 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-white outline-none placeholder:text-zinc-700" maxLength={8000} placeholder={loggedIn ? '给 PIXORY-CHAT 发送消息，Enter 发送，Shift + Enter 换行' : '登录后开始对话'} disabled={!loggedIn || loading} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
             <div className="flex items-end justify-between gap-3">
               <div className="relative">
-                <button className="flex items-center gap-2 rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-bold text-zinc-300" type="button" disabled={!models.length} onClick={() => setModelOpen((value) => !value)}><Sparkles size={14} /> {selected?.name || '模型未配置'} <ChevronDown size={14} /></button>
+                <button className="flex items-center gap-2 rounded-xl bg-white/[0.08] px-3 py-2 text-xs font-bold text-zinc-300" type="button" disabled={!models.length} onClick={() => setModelOpen((value) => !value)}><Sparkles size={14} /> {selected?.name || '模型未配置'} · {CHAT_CREDITS} 积分 <ChevronDown size={14} /></button>
                 {modelOpen ? <div className="absolute bottom-12 left-0 z-20 w-72 rounded-2xl border border-white/10 bg-[#202020] p-2 shadow-2xl">{models.map((model) => <button key={model.id} className={`block w-full rounded-xl px-4 py-3 text-left ${model.id === selectedModel ? 'bg-white/[0.12]' : 'hover:bg-white/[0.06]'}`} type="button" onClick={() => { setSelectedModel(model.id); setModelOpen(false); }}><strong className="block text-sm text-white">{model.name}</strong><span className="mt-1 block text-xs text-zinc-500">{model.description}</span></button>)}</div> : null}
               </div>
-              <button className="flex h-11 items-center gap-2 rounded-xl bg-white px-4 text-sm font-black text-black disabled:opacity-35" type="submit" disabled={!loggedIn || loading || !input.trim() || !selectedModel}>{loading ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}<span className="hidden sm:inline">发送</span></button>
+              <button className="flex h-11 items-center gap-2 rounded-xl bg-white px-4 text-sm font-black text-black disabled:opacity-35" type="submit" disabled={!loggedIn || loading || !input.trim() || !selectedModel || creditsRemaining < CHAT_CREDITS}>{loading ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}<span className="hidden sm:inline">发送</span></button>
             </div>
           </form>
           {error ? <p className="mx-auto mt-2 max-w-5xl px-2 text-xs text-rose-400">{error}</p> : null}
@@ -254,38 +260,38 @@ export default function ChatView({ loggedIn, username, onLogin }: ChatViewProps)
 
       {memoryOpen ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setMemoryOpen(false); }}>
-          <section className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-white/15 bg-[#171717] shadow-[0_30px_100px_rgba(0,0,0,0.7)]">
-            <header className="flex items-start gap-3 border-b border-white/10 px-5 py-5 sm:px-8 sm:py-7">
-              <Brain className="mt-0.5 shrink-0 text-white" size={24} />
+          <section className="flex max-h-[82dvh] w-full max-w-lg flex-col overflow-hidden rounded-[22px] border border-white/15 bg-[#171717] shadow-[0_30px_100px_rgba(0,0,0,0.7)]">
+            <header className="flex items-start gap-2.5 border-b border-white/10 px-4 py-4 sm:px-5">
+              <Brain className="mt-0.5 shrink-0 text-white" size={19} />
               <div className="min-w-0 flex-1">
-                <div className="text-xl font-black text-white">长期记忆</div>
-                <p className="mt-2 text-sm leading-6 text-zinc-500">仅在你开启后用于跨对话记住偏好。你可以随时查看、删除或关闭。</p>
+                <div className="text-base font-black text-white">长期记忆</div>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">仅在你开启后用于跨对话记住偏好。你可以随时查看、删除或关闭。</p>
               </div>
-              <button className="btn-ghost min-h-0 shrink-0 p-1.5 text-zinc-500 hover:text-white" type="button" aria-label="关闭" onClick={() => setMemoryOpen(false)}><X size={25} /></button>
+              <button className="btn-ghost min-h-0 shrink-0 p-1 text-zinc-500 hover:text-white" type="button" aria-label="关闭" onClick={() => setMemoryOpen(false)}><X size={20} /></button>
             </header>
 
-            <div className="custom-scrollbar min-h-0 overflow-y-auto px-5 py-5 sm:px-8 sm:py-7">
-              <button className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-[#101010] px-5 py-4 text-left transition hover:border-white/20" type="button" onClick={() => void toggleMemory()} disabled={memoryLoading}>
+            <div className="custom-scrollbar min-h-0 overflow-y-auto px-4 py-4 sm:px-5">
+              <button className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-[#101010] px-4 py-3 text-left transition hover:border-white/20" type="button" onClick={() => void toggleMemory()} disabled={memoryLoading}>
                 <div className="min-w-0 flex-1">
-                  <strong className="block text-base text-white">允许跨对话使用记忆</strong>
-                  <span className="mt-1 block text-sm text-zinc-500">关闭后，已保存内容不会发送给模型。</span>
+                  <strong className="block text-sm text-white">允许跨对话使用记忆</strong>
+                  <span className="mt-0.5 block text-xs leading-5 text-zinc-500">关闭后，已保存内容不会发送给模型。</span>
                 </div>
-                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${memory.enabled ? 'bg-emerald-400 text-black' : 'border border-white/15 bg-white/[0.05] text-transparent'}`}><Check size={22} strokeWidth={4} /></span>
+                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${memory.enabled ? 'bg-emerald-400 text-black' : 'border border-white/15 bg-white/[0.05] text-transparent'}`}><Check size={16} strokeWidth={4} /></span>
               </button>
 
-              <form className="mt-5 flex gap-3" onSubmit={(event) => void createMemory(event)}>
-                <input className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-[#101010] px-5 py-3.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-white/20" maxLength={500} placeholder="例如：我偏好简洁、中文回答" value={memoryInput} onChange={(event) => setMemoryInput(event.target.value)} />
-                <button className="flex shrink-0 items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-black disabled:opacity-40 sm:px-6" type="submit" disabled={!memoryInput.trim() || memoryLoading}>{memoryLoading ? <LoaderCircle className="animate-spin" size={18} /> : <Plus size={19} />}<span className="hidden sm:inline">添加</span></button>
+              <form className="mt-3.5 flex gap-2.5" onSubmit={(event) => void createMemory(event)}>
+                <input className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#101010] px-4 py-2.5 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-white/20" maxLength={500} placeholder="例如：我偏好简洁、中文回答" value={memoryInput} onChange={(event) => setMemoryInput(event.target.value)} />
+                <button className="flex shrink-0 items-center gap-1.5 rounded-xl bg-white px-3.5 py-2.5 text-xs font-black text-black disabled:opacity-40 sm:px-4" type="submit" disabled={!memoryInput.trim() || memoryLoading}>{memoryLoading ? <LoaderCircle className="animate-spin" size={15} /> : <Plus size={16} />}<span className="hidden sm:inline">添加</span></button>
               </form>
 
-              <div className="mt-6 space-y-2">
+              <div className="mt-4 space-y-1.5">
                 {memory.items.map((item) => (
-                  <div key={item.id} className="group flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3.5">
-                    <p className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{item.content}</p>
-                    <button className="shrink-0 rounded-lg p-2 text-zinc-600 transition hover:bg-white/[0.06] hover:text-rose-300" type="button" title="删除" aria-label="删除记忆" onClick={() => void removeMemory(item.id)}><Trash2 size={16} /></button>
+                  <div key={item.id} className="group flex items-center gap-2.5 rounded-xl border border-white/8 bg-white/[0.025] px-3.5 py-2.5">
+                    <p className="min-w-0 flex-1 text-xs leading-5 text-zinc-300">{item.content}</p>
+                    <button className="shrink-0 rounded-lg p-1.5 text-zinc-600 transition hover:bg-white/[0.06] hover:text-rose-300" type="button" title="删除" aria-label="删除记忆" onClick={() => void removeMemory(item.id)}><Trash2 size={14} /></button>
                   </div>
                 ))}
-                {!memoryLoading && memory.items.length === 0 ? <p className="py-8 text-center text-sm text-zinc-600">还没有长期记忆。也可以在对话中输入“记住：…”保存。</p> : null}
+                {!memoryLoading && memory.items.length === 0 ? <p className="py-6 text-center text-xs text-zinc-600">还没有长期记忆。也可以在对话中输入“记住：…”保存。</p> : null}
               </div>
             </div>
           </section>

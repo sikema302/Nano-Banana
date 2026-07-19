@@ -430,11 +430,12 @@ const SUPABASE_SERVICE_ROLE_KEY = normalizeEnvValue(process.env.SUPABASE_SERVICE
 const DATABASE_PROVIDER = normalizeEnvValue(process.env.DATABASE_PROVIDER || 'sqlite').toLowerCase();
 const USE_SUPABASE = DATABASE_PROVIDER === 'supabase';
 const GEMINI_API_KEY = normalizeEnvValue(process.env.GEMINI_API_KEY);
-const CHAT_MODEL = normalizeEnvValue(process.env.CHAT_MODEL || 'gemini-2.5-flash');
+const CHAT_MODEL = normalizeEnvValue(process.env.CHAT_MODEL || 'gemini-3.5-flash');
 const CHAT_MAX_CONVERSATIONS = 30;
 const CHAT_MAX_MESSAGES = 100;
+const CHAT_MESSAGE_CREDITS = 20;
 const CHAT_MODELS = [
-  { id: CHAT_MODEL, name: CHAT_MODEL, description: '快速响应，支持中文创意、写作与问答' },
+  { id: CHAT_MODEL, name: 'Gemini 3.5 Flash', description: '高质量推理，快速响应，支持中文创意、写作与问答' },
 ];
 const CORS_ORIGIN = normalizeEnvValue(process.env.CORS_ORIGIN);
 const supabaseAdmin =
@@ -619,6 +620,41 @@ async function saveChatMemory(userId: string, memory: ChatMemory) {
       setSetting(db, chatMemorySettingKey(userId), value);
     });
   }
+}
+
+async function reserveChatCredits(user: AuthUser) {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.ensureUserCredits(user.userId, user.username, 0);
+    const credits = await db.getUserCredits(user.userId);
+    if (credits.remainingCredits < CHAT_MESSAGE_CREDITS) return null;
+    await db.incrementUsedCredits(user.userId, CHAT_MESSAGE_CREDITS);
+    await db.syncInviteCodeBalanceForUser(user.userId);
+    return credits.remainingCredits - CHAT_MESSAGE_CREDITS;
+  }
+  return withWriteDb((db) => {
+    ensureSchema(db);
+    ensureUserCredits(db, user.userId, user.username, 0);
+    const credits = getUserCredits(db, user.userId);
+    if (credits.remainingCredits < CHAT_MESSAGE_CREDITS) return null;
+    db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [CHAT_MESSAGE_CREDITS, nowIso(), user.userId]);
+    syncInviteCodeBalanceForUser(db, user.userId);
+    return credits.remainingCredits - CHAT_MESSAGE_CREDITS;
+  });
+}
+
+async function refundChatCredits(userId: string) {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.incrementUsedCredits(userId, -CHAT_MESSAGE_CREDITS);
+    await db.syncInviteCodeBalanceForUser(userId);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    db.run('UPDATE user_credits SET used_credits = MAX(0, used_credits - ?), updated_at = ? WHERE user_id = ?', [CHAT_MESSAGE_CREDITS, nowIso(), userId]);
+    syncInviteCodeBalanceForUser(db, userId);
+  });
 }
 
 function normalizeChatConversations(value: unknown): ChatConversation[] {
@@ -4622,6 +4658,7 @@ async function start() {
       res.status(503).json({ error: '对话模型尚未配置，请先设置 GEMINI_API_KEY' });
       return;
     }
+    let creditsReserved = false;
     try {
       const conversations = await loadChatConversations(req.authUser!.userId);
       const conversation = conversations.find((item) => item.id === normalizeString(req.params.id));
@@ -4629,6 +4666,12 @@ async function start() {
         res.status(404).json({ error: '会话不存在' });
         return;
       }
+      const creditsRemaining = await reserveChatCredits(req.authUser!);
+      if (creditsRemaining === null) {
+        res.status(402).json({ error: `当前正式积分不足，本次对话需要 ${CHAT_MESSAGE_CREDITS} 积分。`, requiredCredits: CHAT_MESSAGE_CREDITS });
+        return;
+      }
+      creditsReserved = true;
       const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content, createdAt: nowIso() };
       const history = [...conversation.messages, userMessage].slice(-40);
       const memory = await loadChatMemory(req.authUser!.userId);
@@ -4656,8 +4699,11 @@ async function start() {
       conversation.title = conversation.messages.find((message) => message.role === 'user')?.content.slice(0, 24) || '新对话';
       conversation.updatedAt = assistantMessage.createdAt;
       await saveChatConversations(req.authUser!.userId, [conversation, ...conversations.filter((item) => item.id !== conversation.id)]);
-      res.json({ conversation });
+      res.json({ conversation, creditsUsed: CHAT_MESSAGE_CREDITS, creditsRemaining });
     } catch (error) {
+      if (creditsReserved) {
+        await refundChatCredits(req.authUser!.userId).catch((refundError) => console.error('[chat-credit-refund]', refundError));
+      }
       const message = error instanceof Error ? error.message : '消息发送失败';
       res.status(502).json({ error: message.includes('API key') ? '对话模型密钥无效或不可用' : message });
     }
