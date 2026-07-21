@@ -532,7 +532,7 @@ const SUPABASE_SYNC_TABLES = [
 const models = [
   {
     id: 'gpt-image-2',
-    name: 'GPT-image-2 Plus',
+    name: 'GPT-image-2',
     description: 'OpenAI最强生图模型！',
     creditsCost: 20,
   },
@@ -4705,7 +4705,16 @@ async function start() {
         await refundChatCredits(req.authUser!.userId).catch((refundError) => console.error('[chat-credit-refund]', refundError));
       }
       const message = error instanceof Error ? error.message : '消息发送失败';
-      res.status(502).json({ error: message.includes('API key') ? '对话模型密钥无效或不可用' : message });
+      const lowerMessage = message.toLowerCase();
+      const publicMessage = lowerMessage.includes('permission_denied') || lowerMessage.includes('denied access')
+        ? 'Gemini 服务项目当前无权访问该模型，请联系管理员检查 API Key 或项目权限。失败请求不会扣除积分。'
+        : lowerMessage.includes('api key') || lowerMessage.includes('api_key')
+          ? 'Gemini 服务密钥无效或不可用，请联系管理员。失败请求不会扣除积分。'
+          : lowerMessage.includes('resource_exhausted') || lowerMessage.includes('rate limit') || lowerMessage.includes('quota')
+            ? 'Gemini 服务当前额度或请求频率已达上限，请稍后重试。失败请求不会扣除积分。'
+            : 'Gemini 服务暂时不可用，请稍后重试。失败请求不会扣除积分。';
+      console.error('[chat-generation]', message);
+      res.status(502).json({ error: publicMessage });
     }
   });
 

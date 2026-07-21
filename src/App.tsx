@@ -3,6 +3,7 @@ import {
   BookOpen,
   Bookmark,
   Clock3,
+  ChevronDown,
   Code2 as CodeIcon,
   Copy,
   Download,
@@ -113,13 +114,13 @@ interface GenerationProgress {
 }
 
 const defaultModels: ModelInfo[] = [
-  { id: 'gpt-image-2', name: 'GPT-image-2 Plus', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
+  { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
 type ImageSizeOption = 'STANDARD' | '2K' | '4K';
-type GptQualityOption = 'low' | 'medium' | 'high';
+type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'chat' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
@@ -227,6 +228,7 @@ const gptImageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: 
 ];
 
 const gptQualityOptions: Array<{ value: GptQualityOption; label: string }> = [
+  { value: 'auto', label: 'auto' },
   { value: 'low', label: '\u4f4e' },
   { value: 'medium', label: '\u4e2d' },
   { value: 'high', label: '\u9ad8' },
@@ -434,7 +436,7 @@ function getModelSortOrder(modelId: string) {
 }
 
 function getModelSuccessRate(modelId: string) {
-  if (modelId === 'gpt-image-2') return '成功率 99%';
+  if (modelId === 'gpt-image-2') return '99%成功率';
   return '';
 }
 
@@ -960,12 +962,12 @@ function ApiDocsView({
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', 'HTTPS 参考图 URL 数组，最多 9 张。'],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
-    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 Plus 默认 STANDARD。'],
-    ['quality', 'string', '否', 'GPT-image-2 Plus 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
+    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 默认 STANDARD。'],
+    ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
   ];
   const modelRows = [
-    { model: 'gpt-image-2', name: 'GPT-image-2 Plus', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
   ];
   const gptPixelGroups = [
@@ -3250,10 +3252,11 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
   const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
-  const [imageSize, setImageSize] = useState<ImageSizeOption>('4K');
-  const [gptQuality, setGptQuality] = useState<GptQualityOption>('high');
+  const [imageSize, setImageSize] = useState<ImageSizeOption>('2K');
+  const [gptQuality, setGptQuality] = useState<GptQualityOption>('auto');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
   const [batchCount, setBatchCount] = useState(1);
   const [autoPlace] = useState(true);
@@ -3309,7 +3312,8 @@ export default function App() {
   const sideBackupItems = user ? backup : [];
   const sideDiscardedItems = user ? discarded : [];
   const isNanoBananaPro = selectedModel === 'Nano_Banana_Pro';
-  const showGptQuality = selectedModel === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K');
+  const showGptQuality = selectedModel === 'gpt-image-2';
+  const disableGptQuality = showGptQuality && imageSize === 'STANDARD';
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
   const selectedModelCredits = getModelCredits(selectedModelInfo, {
     imageSize,
@@ -3481,8 +3485,8 @@ export default function App() {
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
-      setImageSize('4K');
-      setGptQuality('high');
+      setImageSize('2K');
+      setGptQuality('auto');
       setOptimizeChineseText(false);
       return;
     }
@@ -4486,7 +4490,7 @@ export default function App() {
                 ))}
               </select>
               {selectedModelSuccessRate ? (
-                <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[11px] font-black leading-4 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.16)]">
                   {selectedModelSuccessRate}
                 </span>
               ) : null}
@@ -4835,22 +4839,52 @@ export default function App() {
             <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
               <section className="space-y-2">
                 <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
-                <div className="relative">
-                  <select
-                    className="input w-full pr-28 text-[13px] font-semibold"
-                    value={selectedModel}
-                    onChange={(event) => handleModelSelect(event.target.value)}
+                <div
+                  className="relative"
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) setModelMenuOpen(false);
+                  }}
+                >
+                  <button
+                    className="input flex w-full items-center pr-28 text-left"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded={modelMenuOpen}
+                    onClick={() => setModelMenuOpen((current) => !current)}
                   >
-                    {models.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
+                    <span className="text-[13px] font-semibold text-zinc-100">{selectedModelInfo?.name}</span>
+                    <span className="ml-2 text-[10px] font-medium text-zinc-500">{selectedModelInfo?.description}</span>
+                    <ChevronDown
+                      size={15}
+                      className={`absolute right-3 text-zinc-400 transition-transform ${modelMenuOpen ? 'rotate-180' : ''}`}
+                    />
+                  </button>
                   {selectedModelSuccessRate ? (
-                    <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                    <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[11px] font-black leading-4 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.16)]">
                       {selectedModelSuccessRate}
                     </span>
+                  ) : null}
+                  {modelMenuOpen ? (
+                    <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-white/10 bg-[#111111] p-1 shadow-2xl" role="listbox">
+                      {models.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selectedModel === item.id}
+                          className={`flex w-full items-center rounded-lg px-3 py-2.5 text-left transition ${
+                            selectedModel === item.id ? 'bg-white/10' : 'hover:bg-white/[0.06]'
+                          }`}
+                          onClick={() => {
+                            handleModelSelect(item.id);
+                            setModelMenuOpen(false);
+                          }}
+                        >
+                          <span className="text-[13px] font-semibold text-zinc-100">{item.name}</span>
+                          <span className="ml-2 text-[10px] font-medium text-zinc-500">{item.description}</span>
+                        </button>
+                      ))}
+                    </div>
                   ) : null}
                 </div>
               </section>
@@ -4936,20 +4970,23 @@ export default function App() {
                           key={item.value}
                           className={
                             active
-                              ? 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[16px] font-black text-black transition'
-                              : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[16px] font-black text-zinc-400'
+                              ? 'relative inline-flex h-12 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[16px] font-black text-black transition'
+                              : 'btn-secondary relative h-12 min-h-0 overflow-visible whitespace-nowrap px-3 py-0 text-[16px] font-black text-zinc-400'
                           }
                           type="button"
                           onClick={() => {
                             setImageSize(item.value);
-                            if (selectedModel === 'gpt-image-2') {
-                              if (item.value === '2K' || item.value === '4K') {
-                                setGptQuality('high');
-                              }
+                            if (selectedModel === 'gpt-image-2' && item.value === 'STANDARD') {
+                              setGptQuality('auto');
                             }
                           }}
                         >
                           <span className="block whitespace-nowrap leading-none">{item.label}</span>
+                          {item.value === 'STANDARD' ? (
+                            <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-emerald-400/80 bg-[linear-gradient(180deg,#087f5b_0%,#056044_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-emerald-100 shadow-[0_3px_10px_rgba(5,150,105,0.3)]">
+                              {'\u5feb\u901f'}
+                            </span>
+                          ) : null}
                         </button>
                       );
                     })}
@@ -4959,7 +4996,7 @@ export default function App() {
                 {showGptQuality ? (
                   <section className="space-y-2">
                     <div className="text-[12px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
-                    <div className="grid grid-cols-3 gap-2 overflow-visible">
+                    <div className="grid grid-cols-4 gap-2 overflow-visible">
                       {gptQualityOptions.map((item) => {
                         const active = gptQuality === item.value;
                         const isHighQuality = item.value === 'high';
@@ -4969,15 +5006,16 @@ export default function App() {
                             key={item.value}
                             className={`group relative flex h-12 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-3 py-0 text-[15px] font-black ${
                               active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
-                            }`}
+                            } ${disableGptQuality ? 'cursor-not-allowed opacity-45' : ''}`}
                             type="button"
+                            disabled={disableGptQuality}
                             aria-describedby={isHighQuality ? 'gpt-high-quality-tip' : undefined}
                             onClick={() => setGptQuality(item.value)}
                           >
                             <span className="block whitespace-nowrap leading-none">{item.label}</span>
                             {isHighQuality ? (
                               <>
-                                <span className="pointer-events-none absolute -right-2 -top-2 z-20 rounded-full border border-orange-400/80 bg-[linear-gradient(180deg,#b94f16_0%,#8f2f0c_100%)] px-2 py-0.5 text-[11px] font-black leading-5 text-orange-100 shadow-[0_4px_14px_rgba(194,65,12,0.38)]">
+                                <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-orange-400/80 bg-[linear-gradient(180deg,#b94f16_0%,#8f2f0c_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-orange-100 shadow-[0_3px_10px_rgba(194,65,12,0.32)]">
                                   {'\u9ad8\u8d28'}
                                 </span>
                                 <span
