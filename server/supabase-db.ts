@@ -961,14 +961,30 @@ export async function getGenerationSummaries(): Promise<
     last_generated_at: string;
   }>
 > {
-  // Supabase 不直接支持 GROUP BY，需要分两步：
-  // 1. 获取所有非 demo 的 generations
-  // 2. 在应用层聚合
-  const { data, error } = await getSupabase()
-    .from('generations')
-    .select('user_id, username, credits_used, created_at')
-    .neq('username', 'demo');
-  if (error) return [];
+  // Supabase/PostgREST 默认最多返回 1000 行，因此必须分页读取后再在应用层聚合。
+  // 按 id 稳定排序，避免并发新增记录时不同分页之间出现重复或遗漏。
+  const pageSize = 1000;
+  const rows: Array<{
+    id: string | number;
+    user_id: string | number;
+    username: string;
+    credits_used: number;
+    created_at: string;
+  }> = [];
+
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await getSupabase()
+      .from('generations')
+      .select('id, user_id, username, credits_used, created_at')
+      .neq('username', 'demo')
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) return [];
+
+    const page = (data || []) as typeof rows;
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
 
   const summaryMap = new Map<
     string,
@@ -981,13 +997,10 @@ export async function getGenerationSummaries(): Promise<
     }
   >();
 
-  for (const row of data as Array<{
-    user_id: string;
-    username: string;
-    credits_used: number;
-    created_at: string;
-  }>) {
-    const existing = summaryMap.get(row.user_id);
+  for (const row of rows) {
+    const userId = normalizeSupabaseId(row.user_id);
+    if (!userId) continue;
+    const existing = summaryMap.get(userId);
     if (existing) {
       existing.generations += 1;
       existing.credits_used += Number(row.credits_used || 0);
@@ -995,8 +1008,8 @@ export async function getGenerationSummaries(): Promise<
         existing.last_generated_at = row.created_at;
       }
     } else {
-      summaryMap.set(row.user_id, {
-        user_id: row.user_id,
+      summaryMap.set(userId, {
+        user_id: userId,
         username: row.username,
         generations: 1,
         credits_used: Number(row.credits_used || 0),
