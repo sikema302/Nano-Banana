@@ -623,7 +623,7 @@ export async function fetchAdminDashboard() {
   }>('/api/admin/dashboard', {}, true);
 }
 
-export async function cleanupAdminImages() {
+export async function cleanupAdminImages(retentionDays = 5) {
   return request<{
     cleanup: AdminImageCleanupResult;
     imageStorage: AdminImageStorageStats;
@@ -631,6 +631,7 @@ export async function cleanupAdminImages() {
     '/api/admin/image-cleanup',
     {
       method: 'POST',
+      body: JSON.stringify({ retentionDays }),
     },
     true,
   );

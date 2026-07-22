@@ -1951,7 +1951,7 @@ function AdminView({
   onRechargeUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
-  onCleanupImages: () => Promise<void>;
+  onCleanupImages: (retentionDays: number) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
     params?: {
@@ -1988,7 +1988,7 @@ function AdminView({
   const [generatedInviteCodes, setGeneratedInviteCodes] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
-  const [cleaningImages, setCleaningImages] = useState(false);
+  const [cleaningImages, setCleaningImages] = useState<number | null>(null);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
   const [inviteSearchDraft, setInviteSearchDraft] = useState('');
@@ -2388,18 +2388,18 @@ function AdminView({
     }
   }
 
-  async function handleCleanupImages() {
-    if (cleaningImages) return;
-    const confirmed = window.confirm('确认清理 5 天前的本地图片和相关图片记录吗？');
+  async function handleCleanupImages(retentionDays: 3 | 5) {
+    if (cleaningImages !== null) return;
+    const confirmed = window.confirm(`确认清理 ${retentionDays} 天前的本地图片和相关图片记录吗？`);
     if (!confirmed) return;
 
-    setCleaningImages(true);
+    setCleaningImages(retentionDays);
     try {
-      await onCleanupImages();
+      await onCleanupImages(retentionDays);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '图片清理失败');
     } finally {
-      setCleaningImages(false);
+      setCleaningImages(null);
     }
   }
 
@@ -2602,14 +2602,24 @@ function AdminView({
                     原图保留 {imageStorageStats.originalRetentionDays} 天，缩略图和记录保留 {imageStorageStats.thumbnailRetentionDays} 天，参考图任务结束立即删除。
                   </p>
                 </div>
-                <button
-                  className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  type="button"
-                  disabled={cleaningImages}
-                  onClick={() => void handleCleanupImages()}
-                >
-                  {cleaningImages ? '清理中...' : '清理5天前图片'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={cleaningImages !== null}
+                    onClick={() => void handleCleanupImages(5)}
+                  >
+                    {cleaningImages === 5 ? '清理中...' : '清理5天前图片'}
+                  </button>
+                  <button
+                    className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={cleaningImages !== null}
+                    onClick={() => void handleCleanupImages(3)}
+                  >
+                    {cleaningImages === 3 ? '清理中...' : '清理3天前图片'}
+                  </button>
+                </div>
                 <span
                   className={
                     imageStorageStats.referenceStorageEnabled
@@ -3927,15 +3937,15 @@ export default function App() {
     }
   }
 
-  async function handleCleanupImages() {
-    const payload = await cleanupAdminImages();
+  async function handleCleanupImages(retentionDays: number) {
+    const payload = await cleanupAdminImages(retentionDays);
     setAdminOverview((current) => ({
       ...current,
       imageStorageStats: payload.imageStorage,
     }));
     const cleanup = payload.cleanup;
     setNotice(
-      `已清理5天前图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
+      `已清理${cleanup.retentionDays}天前图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
     );
     void loadAdminSection('dashboard');
   }

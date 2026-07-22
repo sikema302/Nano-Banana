@@ -6476,12 +6476,13 @@ async function start() {
     }
   });
 
-  app.post('/api/admin/image-cleanup', requireAuth, requireAdmin, async (_req, res) => {
+  app.post('/api/admin/image-cleanup', requireAuth, requireAdmin, async (req, res) => {
     try {
-      const retentionDays = ORIGINAL_IMAGE_RETENTION_DAYS;
+      const requestedRetentionDays = Number(req.body?.retentionDays ?? ORIGINAL_IMAGE_RETENTION_DAYS);
+      const retentionDays = requestedRetentionDays === 3 ? 3 : ORIGINAL_IMAGE_RETENTION_DAYS;
       const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
       const deletedReferenceFiles = await purgeExpiredReferenceFiles(1);
-      const diskPressure = await enforceDiskPressure('manual-5d');
+      const diskPressure = await enforceDiskPressure(`manual-${retentionDays}d`);
       const result = {
         cutoffIso: subtractDaysIso(retentionDays),
         deletedGenerations: 0,
