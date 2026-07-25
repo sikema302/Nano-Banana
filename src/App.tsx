@@ -3265,7 +3265,7 @@ export default function App() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
-  const [imageSize, setImageSize] = useState<ImageSizeOption>('2K');
+  const [imageSize, setImageSize] = useState<ImageSizeOption>('STANDARD');
   const [gptQuality, setGptQuality] = useState<GptQualityOption>('auto');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
   const [batchCount, setBatchCount] = useState(1);
@@ -3495,7 +3495,7 @@ export default function App() {
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
-      setImageSize('2K');
+      setImageSize('STANDARD');
       setGptQuality('auto');
       setOptimizeChineseText(false);
       return;
