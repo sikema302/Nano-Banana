@@ -1,0 +1,12 @@
+services:
+  chat2api:
+    image: docker.1ms.run/lanqian528/chat2api:latest
+    container_name: pixory-chat2api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5005:5005"
+    environment:
+      AUTHORIZATION: "${CHAT2API_AUTHORIZATION:?CHAT2API_AUTHORIZATION is required}"
+      ENABLE_GATEWAY: "true"
+      HISTORY_DISABLED: "false"
+    mem_limit: 768m

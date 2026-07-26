@@ -27,6 +27,10 @@ import {
   getVisionaryDocSyncStatus,
   startVisionaryDocSyncScheduler,
 } from './visionary-doc-sync.js';
+import {
+  createImageProviderRouter,
+  type ImageGenerationInput,
+} from './image-provider-router.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -370,6 +374,23 @@ const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_K
 const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
 const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
 const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
+const CHAT2API_BASE_URL = normalizeEnvValue(process.env.CHAT2API_BASE_URL);
+const CHAT2API_AUTHORIZATION = normalizeEnvValue(process.env.CHAT2API_AUTHORIZATION);
+const CHAT2API_TIMEOUT_MS = Math.max(30_000, Number(process.env.CHAT2API_TIMEOUT_MS || 240_000));
+const CHAT2API_FAILURE_THRESHOLD = Math.max(1, Number(process.env.CHAT2API_FAILURE_THRESHOLD || 3));
+const CHAT2API_TRANSIENT_COOLDOWN_MS = Math.max(
+  60_000,
+  Number(process.env.CHAT2API_TRANSIENT_COOLDOWN_MS || 10 * 60_000),
+);
+const CHAT2API_QUOTA_COOLDOWN_MS = Math.max(
+  60_000,
+  Number(process.env.CHAT2API_QUOTA_COOLDOWN_MS || 60 * 60_000),
+);
+const CHAT2API_AUTH_COOLDOWN_MS = Math.max(
+  60_000,
+  Number(process.env.CHAT2API_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
+);
+const CHAT2API_CIRCUIT_SETTING_KEY = 'chat2api_circuit_state_v1';
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
@@ -1528,6 +1549,9 @@ function normalizeModelId(modelId: string) {
 function normalizePublicModelId(modelId: string) {
   const normalized = normalizeString(modelId).toLowerCase();
   if (!normalized) return null;
+  if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalized)) {
+    return 'gpt-image-2';
+  }
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
@@ -3545,6 +3569,15 @@ async function callVisionaryGeneration({
 
 // 鈹€鈹€鈹€ Visionary 寮傛鎺ュ彛璋冪敤 鈹€鈹€鈹€
 
+let imageProviderRouter: ReturnType<typeof createImageProviderRouter> | null = null;
+
+async function callImageGeneration(input: ImageGenerationInput) {
+  if (!imageProviderRouter) {
+    return callVisionaryGeneration(input);
+  }
+  return imageProviderRouter.generate(input);
+}
+
 async function callVisionaryAsyncGeneration({
   prompt,
   modelId,
@@ -4166,6 +4199,28 @@ async function start() {
       });
     },
   };
+  imageProviderRouter = createImageProviderRouter({
+    baseUrl: CHAT2API_BASE_URL,
+    authorization: CHAT2API_AUTHORIZATION,
+    timeoutMs: CHAT2API_TIMEOUT_MS,
+    failureThreshold: CHAT2API_FAILURE_THRESHOLD,
+    transientCooldownMs: CHAT2API_TRANSIENT_COOLDOWN_MS,
+    quotaCooldownMs: CHAT2API_QUOTA_COOLDOWN_MS,
+    authCooldownMs: CHAT2API_AUTH_COOLDOWN_MS,
+    store: {
+      get: async () => {
+        const raw = await visionaryDocSyncStore.get(CHAT2API_CIRCUIT_SETTING_KEY, '');
+        if (!raw) return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      },
+      set: (state) => visionaryDocSyncStore.set(CHAT2API_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
+    },
+    fallback: callVisionaryGeneration,
+  });
   await startVisionaryDocSyncScheduler(visionaryDocSyncStore, {
     baseUrl: VISIONARY_API_BASE_URL,
     intervalHours: Number(process.env.VISIONARY_DOC_SYNC_INTERVAL_HOURS || 72),
@@ -4772,7 +4827,7 @@ async function start() {
 
       const createdAt = nowIso();
       const apiRequestStartedAt = Date.now();
-      const generatedImageSource = await callVisionaryGeneration({
+      const generatedImageSource = await callImageGeneration({
         prompt,
         modelId,
         ratio,
@@ -5009,6 +5064,70 @@ async function start() {
     await publicGenerateHandler(req, res);
   };
 
+  const openAiImagesGenerationHandler = async (req: Request, res: Response) => {
+    const requestBody = asPlainObject(req.body);
+    const requestedN = Math.max(1, Number(requestBody.n || 1));
+    if (requestedN !== 1) {
+      res.status(400).json({ error: { message: 'This endpoint currently supports n=1', type: 'invalid_request_error' } });
+      return;
+    }
+    const size = normalizeString(requestBody.size);
+    const ratioBySize: Record<string, string> = {
+      '1024x1024': '1:1',
+      '1536x1024': '3:2',
+      '1024x1536': '2:3',
+    };
+    req.body = {
+      ...requestBody,
+      model: normalizeString(requestBody.model) || 'gpt-image-2',
+      dimensions:
+        normalizeString(requestBody.dimensions || requestBody.aspect_ratio || requestBody.aspectRatio) ||
+        ratioBySize[size] ||
+        '1:1',
+      imageSize: normalizeString(requestBody.imageSize || requestBody.image_size) || 'STANDARD',
+    };
+
+    const responseFormat = normalizeString(requestBody.response_format).toLowerCase() || 'url';
+    const originalJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      const payload = asPlainObject(body);
+      const image = asPlainObject(payload.image);
+      const imageUrl = normalizeString(image.imagePath);
+      if (!imageUrl) {
+        const message = normalizeString(payload.error) || 'Image generation failed';
+        return originalJson({ error: { message, type: 'image_generation_error' } });
+      }
+      if (responseFormat !== 'b64_json') {
+        return originalJson({
+          created: Math.floor(Date.now() / 1000),
+          data: [{ url: imageUrl, revised_prompt: normalizeString(image.prompt) || normalizeString(requestBody.prompt) }],
+        });
+      }
+
+      void (async () => {
+        const pathname = /^https?:\/\//i.test(imageUrl) ? new URL(imageUrl).pathname : imageUrl;
+        const localPath = path.resolve(ROOT_DIR, pathname.replace(/^\/+/, ''));
+        if (!localPath.startsWith(GENERATED_DIR)) {
+          throw new Error('Generated image path is outside the image directory');
+        }
+        const buffer = await fs.readFile(localPath);
+        originalJson({
+          created: Math.floor(Date.now() / 1000),
+          data: [{ b64_json: buffer.toString('base64'), revised_prompt: normalizeString(image.prompt) || normalizeString(requestBody.prompt) }],
+        });
+      })().catch((error) => {
+        console.error('[openai-images-response]', error);
+        if (!res.headersSent) {
+          res.status(500);
+          originalJson({ error: { message: 'Failed to encode generated image', type: 'server_error' } });
+        }
+      });
+      return res;
+    }) as Response['json'];
+
+    await publicGenerateHandler(req, res);
+  };
+
   const legacyPublicImageApiRemovedHandler = (_req: Request, res: Response) => {
     res.status(410).json({
       error: 'Legacy sync image generation endpoints are no longer supported. Use POST /v1/async/images/generations, then poll GET /v1/async/images/generations/:id.',
@@ -5020,13 +5139,13 @@ async function start() {
   [
     '/api/v1/generate',
     '/v1/api/generate',
-    '/v1/images/generations',
     '/openapi/v1/images/generations',
     '/v1/chat/completions',
     '/v1/api/nano-banana',
     '/v1beta/models/:modelAction',
     '/v1/api/nano-banana/v1beta/models/:modelAction',
   ].forEach((path) => app.post(path, legacyPublicImageApiRemovedHandler));
+  app.post('/v1/images/generations', openAiImagesGenerationHandler);
 
   // 鈹€鈹€鈹€ 寮傛鐢熸垚鎺ュ彛 鈹€鈹€鈹€
 
@@ -5244,7 +5363,16 @@ async function start() {
       if (!current || current.status === 'succeeded' || current.status === 'failed') return;
 
       if (!current.upstreamId) {
-        const upstream = await callVisionaryAsyncGeneration({
+        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, (latest) => ({
+          ...latest,
+          status: 'running',
+          generationStatus: 'running',
+          progress: Math.max(1, latest.progress),
+          retryAfterSeconds: 5,
+          updatedAt: nowIso(),
+        }));
+        if (!current) return;
+        const generatedImageSource = await callImageGeneration({
           prompt: current.prompt,
           modelId: current.modelId,
           ratio: current.dimensions,
@@ -5253,15 +5381,23 @@ async function start() {
           optimizeChineseText: Boolean(current.optimizeChineseText),
           images: current.referenceImages,
         });
-        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, (latest) => ({
-          ...latest,
-          upstreamId: upstream.id,
-          status: 'running',
-          generationStatus: normalizeString(upstream.generationStatus) || 'running',
-          progress: Math.max(1, Math.min(100, Number(upstream.progress || 1))),
-          retryAfterSeconds: Math.max(1, Number(upstream.retryAfterSeconds || 3)),
-          updatedAt: nowIso(),
-        }));
+        const imagePath = await persistGeneratedImage(generatedImageSource);
+        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, async (latest) => {
+          if (latest.status === 'succeeded' && latest.imagePath) return latest;
+          const completed: PublicAsyncGenerationTask = {
+            ...latest,
+            status: 'succeeded',
+            generationStatus: 'succeeded',
+            progress: 100,
+            retryAfterSeconds: 0,
+            imagePath,
+            updatedAt: nowIso(),
+          };
+          await persistPublicAsyncGeneration(completed, imagePath);
+          return completed;
+        });
+        await cleanupTemporaryReferenceImages(current?.temporaryReferenceImages || []);
+        return;
       }
 
       if (current) await monitorPublicAsyncTask(current.id, current.apiKeyHash);
@@ -5777,7 +5913,7 @@ async function start() {
       let apiRequestMs = 0;
       try {
         const apiRequestStartedAt = Date.now();
-        const generatedImageSource = await callVisionaryGeneration({
+        const generatedImageSource = await callImageGeneration({
           prompt,
           modelId,
           ratio,

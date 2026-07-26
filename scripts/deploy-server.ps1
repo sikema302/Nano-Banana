@@ -8,6 +8,7 @@ param(
   [string]$HealthUrl = 'http://154.9.24.91:3001/api/health',
   [string]$Password = '',
   [int]$KeepBackups = 2,
+  [switch]$DeployChat2Api,
   [switch]$SkipLint,
   [switch]$SkipInstall,
   [switch]$SkipBackup,
@@ -24,6 +25,8 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $archivePath = Join-Path $deployDir "deploy-$timestamp.tar.gz"
 $remoteArchivePath = "/tmp/$AppName-deploy-$timestamp.tar.gz"
 $askPassPath = Join-Path $deployDir 'ssh-askpass.bat'
+$chat2ApiEnvPath = Join-Path $deployDir 'chat2api.env'
+$remoteChat2ApiEnvPath = "/tmp/$AppName-chat2api.env"
 
 function ConvertTo-PlainText {
   param([Security.SecureString]$SecureString)
@@ -251,8 +254,23 @@ try {
 
   Invoke-SshCommand -Command "mkdir -p '$ProjectPath'"
   Invoke-ScpCopy -Source $archivePath -Destination "${User}@${ServerHost}:$remoteArchivePath"
+  if ($DeployChat2Api) {
+    $chat2ApiAuthorization = (& docker inspect chat2api --format '{{range .Config.Env}}{{println .}}{{end}}' |
+      Where-Object { $_ -like 'AUTHORIZATION=*' } |
+      Select-Object -First 1) -replace '^AUTHORIZATION=', ''
+    if (-not $chat2ApiAuthorization) {
+      throw 'Unable to read AUTHORIZATION from the local chat2api container.'
+    }
+    [IO.File]::WriteAllText(
+      $chat2ApiEnvPath,
+      "CHAT2API_BASE_URL=http://127.0.0.1:5005`nCHAT2API_AUTHORIZATION=$chat2ApiAuthorization`n",
+      [Text.UTF8Encoding]::new($false)
+    )
+    Invoke-ScpCopy -Source $chat2ApiEnvPath -Destination "${User}@${ServerHost}:$remoteChat2ApiEnvPath"
+  }
 
   $skipInstallFlag = if ($SkipInstall) { '1' } else { '0' }
+  $deployChat2ApiFlag = if ($DeployChat2Api) { '1' } else { '0' }
   $backupScript = New-RemoteBackupScript -RemoteProjectPath $ProjectPath -RemoteBackupsDir $BackupsDir -BackupTimestamp $timestamp -BackupsToKeep $KeepBackups -ShouldSkipBackup $SkipBackup.IsPresent
   $remoteCommand = @"
 set -e
@@ -261,6 +279,24 @@ cd '$ProjectPath'
 rm -rf dist server src scripts supabase api
 tar -xzf '$remoteArchivePath' -C '$ProjectPath'
 rm -f '$remoteArchivePath'
+if [ '$deployChat2ApiFlag' = '1' ]; then
+  chmod 600 '$remoteChat2ApiEnvPath'
+  touch .env.local
+  chmod 600 .env.local
+  sed -i '/^CHAT2API_BASE_URL=/d; /^CHAT2API_AUTHORIZATION=/d' .env.local
+  cat '$remoteChat2ApiEnvPath' >> .env.local
+  rm -f '$remoteChat2ApiEnvPath'
+  if ! command -v docker >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose apparmor
+    systemctl enable --now docker
+  fi
+  if docker compose version >/dev/null 2>&1; then
+    docker compose --env-file .env.local -f deploy/chat2api-compose.yml up -d
+  else
+    docker-compose --env-file .env.local -f deploy/chat2api-compose.yml up -d
+  fi
+fi
 if [ '$skipInstallFlag' = '0' ]; then
   npm ci
 fi
@@ -295,6 +331,9 @@ pm2 save >/dev/null
   }
   if (Test-Path -LiteralPath $askPassPath) {
     Remove-Item -LiteralPath $askPassPath -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $chat2ApiEnvPath) {
+    Remove-Item -LiteralPath $chat2ApiEnvPath -Force -ErrorAction SilentlyContinue
   }
   Remove-Item Env:SSH_ASKPASS -ErrorAction SilentlyContinue
   Remove-Item Env:SSH_ASKPASS_REQUIRE -ErrorAction SilentlyContinue
