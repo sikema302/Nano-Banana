@@ -24,12 +24,14 @@ function createStore() {
   };
 }
 
-test('uses the primary Chat2API image when it succeeds', async () => {
+test('uses the primary Junliai image when it succeeds', async () => {
   const store = createStore();
   let fallbackCalls = 0;
+  let request: { url: string; init?: RequestInit } | null = null;
   const router = createImageProviderRouter({
-    baseUrl: 'http://chat2api',
+    baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
     timeoutMs: 1_000,
     failureThreshold: 3,
     transientCooldownMs: 60_000,
@@ -40,13 +42,52 @@ test('uses the primary Chat2API image when it succeeds', async () => {
       fallbackCalls += 1;
       return 'fallback';
     },
-    fetchImpl: async () => new Response(JSON.stringify({
-      choices: [{ message: { content: '![generated](https://images.example/result.png)' } }],
-    })),
+    fetchImpl: async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
   });
 
-  assert.equal(await router.generate(input), 'https://images.example/result.png');
+  assert.equal(await router.generate(input), 'data:image/png;base64,aW1hZ2U=');
   assert.equal(fallbackCalls, 0);
+  assert.equal(request?.url, 'https://img.junliai.org/v1/images/generations');
+  assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+    model: 'firefly-gpt-image-2',
+    prompt: 'A lighthouse',
+    size: '1024x1024',
+    response_format: 'b64_json',
+  });
+});
+
+test('uses the Junliai edits endpoint when reference images are present', async () => {
+  const store = createStore();
+  let requestBody: FormData | null = null;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => 'fallback',
+    fetchImpl: async (_url, init) => {
+      requestBody = init?.body as FormData;
+      return new Response(JSON.stringify({ data: [{ url: 'https://images.example/edited.png' }] }));
+    },
+  });
+
+  const result = await router.generate({
+    ...input,
+    imageSize: '2K',
+    images: ['data:image/png;base64,aW1hZ2U='],
+  });
+  assert.equal(result, 'https://images.example/edited.png');
+  assert.equal(requestBody?.get('model'), 'firefly-gpt-image-2');
+  assert.equal(requestBody?.get('size'), '2048x2048');
+  assert.equal(requestBody?.getAll('image').length, 1);
 });
 
 test('opens the persistent circuit on quota errors and skips repeated primary calls', async () => {
@@ -54,8 +95,9 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
   let primaryCalls = 0;
   let fallbackCalls = 0;
   const router = createImageProviderRouter({
-    baseUrl: 'http://chat2api',
+    baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
     timeoutMs: 1_000,
     failureThreshold: 3,
     transientCooldownMs: 60_000,
@@ -84,8 +126,9 @@ test('keeps non-GPT models on the existing provider', async () => {
   const store = createStore();
   let primaryCalls = 0;
   const router = createImageProviderRouter({
-    baseUrl: 'http://chat2api',
+    baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
     timeoutMs: 1_000,
     failureThreshold: 3,
     transientCooldownMs: 60_000,

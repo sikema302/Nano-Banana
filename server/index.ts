@@ -374,29 +374,29 @@ const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_K
 const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
 const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
 const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
-// Chat2API primary routing is disabled by default. Keep the integration available
-// for a future server/proxy with a supported egress IP, while all current image
-// requests continue to use the existing Visionary provider.
-const CHAT2API_PRIMARY_ENABLED = ['1', 'true', 'yes', 'on'].includes(
-  normalizeEnvValue(process.env.CHAT2API_PRIMARY_ENABLED).toLowerCase(),
+// Previous Chat2API primary integration is intentionally disabled:
+// CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
+const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
+  normalizeEnvValue(process.env.JUNLIAI_PRIMARY_ENABLED || 'true').toLowerCase(),
 );
-const CHAT2API_BASE_URL = normalizeEnvValue(process.env.CHAT2API_BASE_URL);
-const CHAT2API_AUTHORIZATION = normalizeEnvValue(process.env.CHAT2API_AUTHORIZATION);
-const CHAT2API_TIMEOUT_MS = Math.max(30_000, Number(process.env.CHAT2API_TIMEOUT_MS || 240_000));
-const CHAT2API_FAILURE_THRESHOLD = Math.max(1, Number(process.env.CHAT2API_FAILURE_THRESHOLD || 3));
-const CHAT2API_TRANSIENT_COOLDOWN_MS = Math.max(
+const JUNLIAI_BASE_URL = normalizeEnvValue(process.env.JUNLIAI_BASE_URL || 'https://img.junliai.org');
+const JUNLIAI_API_KEY = normalizeEnvValue(process.env.JUNLIAI_API_KEY);
+const JUNLIAI_MODEL = normalizeEnvValue(process.env.JUNLIAI_MODEL || 'firefly-gpt-image-2');
+const JUNLIAI_TIMEOUT_MS = Math.max(30_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 240_000));
+const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 3));
+const JUNLIAI_TRANSIENT_COOLDOWN_MS = Math.max(
   60_000,
-  Number(process.env.CHAT2API_TRANSIENT_COOLDOWN_MS || 10 * 60_000),
+  Number(process.env.JUNLIAI_TRANSIENT_COOLDOWN_MS || 10 * 60_000),
 );
-const CHAT2API_QUOTA_COOLDOWN_MS = Math.max(
+const JUNLIAI_QUOTA_COOLDOWN_MS = Math.max(
   60_000,
-  Number(process.env.CHAT2API_QUOTA_COOLDOWN_MS || 60 * 60_000),
+  Number(process.env.JUNLIAI_QUOTA_COOLDOWN_MS || 60 * 60_000),
 );
-const CHAT2API_AUTH_COOLDOWN_MS = Math.max(
+const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
   60_000,
-  Number(process.env.CHAT2API_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
+  Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
 );
-const CHAT2API_CIRCUIT_SETTING_KEY = 'chat2api_circuit_state_v1';
+const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
@@ -4206,16 +4206,17 @@ async function start() {
     },
   };
   imageProviderRouter = createImageProviderRouter({
-    baseUrl: CHAT2API_PRIMARY_ENABLED ? CHAT2API_BASE_URL : '',
-    authorization: CHAT2API_AUTHORIZATION,
-    timeoutMs: CHAT2API_TIMEOUT_MS,
-    failureThreshold: CHAT2API_FAILURE_THRESHOLD,
-    transientCooldownMs: CHAT2API_TRANSIENT_COOLDOWN_MS,
-    quotaCooldownMs: CHAT2API_QUOTA_COOLDOWN_MS,
-    authCooldownMs: CHAT2API_AUTH_COOLDOWN_MS,
+    baseUrl: JUNLIAI_PRIMARY_ENABLED ? JUNLIAI_BASE_URL : '',
+    authorization: JUNLIAI_API_KEY,
+    primaryModel: JUNLIAI_MODEL,
+    timeoutMs: JUNLIAI_TIMEOUT_MS,
+    failureThreshold: JUNLIAI_FAILURE_THRESHOLD,
+    transientCooldownMs: JUNLIAI_TRANSIENT_COOLDOWN_MS,
+    quotaCooldownMs: JUNLIAI_QUOTA_COOLDOWN_MS,
+    authCooldownMs: JUNLIAI_AUTH_COOLDOWN_MS,
     store: {
       get: async () => {
-        const raw = await visionaryDocSyncStore.get(CHAT2API_CIRCUIT_SETTING_KEY, '');
+        const raw = await visionaryDocSyncStore.get(JUNLIAI_CIRCUIT_SETTING_KEY, '');
         if (!raw) return null;
         try {
           return JSON.parse(raw);
@@ -4223,7 +4224,7 @@ async function start() {
           return null;
         }
       },
-      set: (state) => visionaryDocSyncStore.set(CHAT2API_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
+      set: (state) => visionaryDocSyncStore.set(JUNLIAI_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
     },
     fallback: callVisionaryGeneration,
   });

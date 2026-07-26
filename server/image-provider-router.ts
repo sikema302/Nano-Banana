@@ -23,6 +23,7 @@ type StateStore = {
 type RouterOptions = {
   baseUrl: string;
   authorization: string;
+  primaryModel: string;
   timeoutMs: number;
   failureThreshold: number;
   transientCooldownMs: number;
@@ -35,13 +36,11 @@ type RouterOptions = {
   logger?: Pick<Console, 'info' | 'warn'>;
 };
 
-type ChatCompletionPayload = {
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{ type?: string; text?: string }>;
-    };
-  }>;
-  error?: { message?: string; type?: string; code?: string };
+type ImageApiPayload = {
+  data?: Array<{ url?: string; b64_json?: string }>;
+  error?: { message?: string; type?: string; code?: string } | string;
+  message?: string;
+  detail?: string;
 };
 
 const CLOSED_STATE: PrimaryCircuitState = {
@@ -57,33 +56,54 @@ function normalizeAuthorization(value: string) {
   return /^Bearer\s+/i.test(trimmed) ? trimmed : `Bearer ${trimmed}`;
 }
 
-function contentText(payload: ChatCompletionPayload) {
-  const content = payload.choices?.[0]?.message?.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map((item) => item.text || '').join('\n');
+export function extractGeneratedImageSource(payload: ImageApiPayload) {
+  const result = payload.data?.[0];
+  if (result?.url) return result.url;
+  if (result?.b64_json) return `data:image/png;base64,${result.b64_json.replace(/\s+/g, '')}`;
   return '';
 }
 
-export function extractGeneratedImageSource(payload: ChatCompletionPayload) {
-  const text = contentText(payload).trim();
-  if (!text) return '';
-  const markdown = text.match(/!\[[^\]]*]\((https?:\/\/[^)\s]+|data:image\/[^)]+)\)/i);
-  if (markdown?.[1]) return markdown[1];
-  const dataUrl = text.match(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/i);
-  if (dataUrl?.[0]) return dataUrl[0].replace(/\s+/g, '');
-  const url = text.match(/https?:\/\/[^\s<>"')\]]+/i);
-  return url?.[0] || '';
+const IMAGE_SIZES: Record<string, Record<string, string>> = {
+  STANDARD: {
+    '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280',
+    '4:3': '1024x768', '3:4': '768x1024', '3:2': '1200x800',
+    '2:3': '800x1200', '21:9': '1680x720',
+  },
+  '2K': {
+    '1:1': '2048x2048', '16:9': '2048x1152', '9:16': '1152x2048',
+    '4:3': '2048x1536', '3:4': '1536x2048', '3:2': '2400x1600',
+    '2:3': '1600x2400', '21:9': '2520x1080',
+  },
+  '4K': {
+    '1:1': '4096x4096', '16:9': '4096x2304', '9:16': '2304x4096',
+    '4:3': '4096x3072', '3:4': '3072x4096', '3:2': '3600x2400',
+    '2:3': '2400x3600', '21:9': '5040x2160',
+  },
+};
+
+function requestSize(input: ImageGenerationInput) {
+  const sizeKey = input.imageSize === '2K' || input.imageSize === '4K' ? input.imageSize : 'STANDARD';
+  const ratio = input.ratio === 'auto' ? '1:1' : input.ratio;
+  return IMAGE_SIZES[sizeKey][ratio] || (/^\d+x\d+$/i.test(ratio) ? ratio : IMAGE_SIZES[sizeKey]['1:1']);
 }
 
-function requestPrompt(input: ImageGenerationInput) {
-  const details = [
-    `Aspect ratio: ${input.ratio || '1:1'}.`,
-    `Resolution: ${input.imageSize || 'STANDARD'}.`,
-    input.quality ? `Quality: ${input.quality}.` : '',
-    input.optimizeChineseText ? 'Optimize the rendering of Chinese text.' : '',
-    'Generate exactly one image and return the resulting image.',
-  ].filter(Boolean);
-  return `${input.prompt}\n\n${details.join(' ')}`;
+function payloadError(payload: ImageApiPayload) {
+  if (typeof payload.error === 'string') return payload.error;
+  return payload.error?.message || payload.message || payload.detail || '';
+}
+
+async function imageBlob(source: string, signal: AbortSignal, fetchImpl: typeof fetch) {
+  if (source.startsWith('data:')) {
+    const match = source.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+    if (!match) throw new Error('Invalid reference image data URL');
+    const bytes = match[2]
+      ? Buffer.from(match[3].replace(/\s+/g, ''), 'base64')
+      : Buffer.from(decodeURIComponent(match[3]));
+    return new Blob([bytes], { type: match[1] || 'image/png' });
+  }
+  const response = await fetchImpl(source, { signal });
+  if (!response.ok) throw new Error(`Unable to load reference image (${response.status})`);
+  return response.blob();
 }
 
 function errorText(error: unknown) {
@@ -101,8 +121,9 @@ function classifyFailure(error: unknown) {
     return { kind: 'auth', immediate: true };
   }
   if (
+    status === 402 ||
     status === 429 ||
-    /quota|insufficient|credit|rate.?limit|too many requests|usage limit|额度|限额/.test(message)
+    /quota|insufficient|credit|balance|rate.?limit|too many requests|usage limit|额度|余额|限额/.test(message)
   ) {
     return { kind: 'quota', immediate: true };
   }
@@ -133,40 +154,56 @@ export function createImageProviderRouter(options: RouterOptions) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
     try {
-      const content: Array<Record<string, unknown>> = [{ type: 'text', text: requestPrompt(input) }];
-      for (const image of input.images.slice(0, 9)) {
-        content.push({ type: 'image_url', image_url: { url: image } });
+      const baseUrl = options.baseUrl.replace(/\/+$/, '');
+      const headers: Record<string, string> = {
+        Authorization: normalizeAuthorization(options.authorization),
+      };
+      let body: BodyInit;
+      let endpoint = '/v1/images/generations';
+      if (input.images.length) {
+        endpoint = '/v1/images/edits';
+        const form = new FormData();
+        form.set('model', options.primaryModel);
+        form.set('prompt', input.prompt);
+        form.set('size', requestSize(input));
+        form.set('response_format', 'b64_json');
+        const blobs = await Promise.all(
+          input.images.slice(0, 9).map((source) => imageBlob(source, controller.signal, fetchImpl)),
+        );
+        blobs.forEach((blob, index) => form.append('image', blob, `reference-${index + 1}.png`));
+        body = form;
+      } else {
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify({
+          model: options.primaryModel,
+          prompt: input.prompt,
+          size: requestSize(input),
+          response_format: 'b64_json',
+        });
       }
-      const response = await fetchImpl(`${options.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`, {
+      const response = await fetchImpl(`${baseUrl}${endpoint}`, {
         method: 'POST',
-        headers: {
-          Authorization: normalizeAuthorization(options.authorization),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-image-1',
-          messages: [{ role: 'user', content }],
-          stream: false,
-        }),
+        headers,
+        body,
         signal: controller.signal,
       });
       const raw = await response.text();
-      let payload: ChatCompletionPayload = {};
+      let payload: ImageApiPayload = {};
       try {
-        payload = raw ? JSON.parse(raw) as ChatCompletionPayload : {};
+        payload = raw ? JSON.parse(raw) as ImageApiPayload : {};
       } catch {
         // The status and a short response excerpt are sufficient for failover classification.
       }
       if (!response.ok) {
         const error = new Error(
-          payload.error?.message || `Primary image provider returned HTTP ${response.status}: ${raw.slice(0, 300)}`,
+          payloadError(payload) || `Primary image provider returned HTTP ${response.status}: ${raw.slice(0, 300)}`,
         ) as Error & { status: number };
         error.status = response.status;
         throw error;
       }
       const imageSource = extractGeneratedImageSource(payload);
       if (!imageSource) {
-        throw new Error(`Primary image provider returned no image: ${contentText(payload).slice(0, 300)}`);
+        throw new Error(`Primary image provider returned no image: ${raw.slice(0, 300)}`);
       }
       return imageSource;
     } finally {
