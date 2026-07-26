@@ -126,7 +126,9 @@ jobs:
             echo 'Frontend-only release; skipping PM2 restart.'
           fi
           pm2 save >/dev/null
-          for attempt in $(seq 1 45); do
+          # Startup includes database initialization and retention checks; allow
+          # up to four minutes before treating a healthy PM2 restart as failed.
+          for attempt in $(seq 1 120); do
             if curl -fsS http://127.0.0.1:3001/api/health; then
               echo
               echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
