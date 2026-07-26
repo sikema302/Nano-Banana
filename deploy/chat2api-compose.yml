@@ -10,3 +10,5 @@ services:
       ENABLE_GATEWAY: "true"
       HISTORY_DISABLED: "false"
     mem_limit: 768m
+    logging:
+      driver: "none"
