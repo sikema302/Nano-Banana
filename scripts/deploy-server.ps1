@@ -9,6 +9,7 @@ param(
   [string]$Password = '',
   [int]$KeepBackups = 2,
   [switch]$DeployChat2Api,
+  [switch]$DeployJunliai,
   [switch]$SkipLint,
   [switch]$SkipInstall,
   [switch]$SkipBackup,
@@ -27,6 +28,8 @@ $remoteArchivePath = "/tmp/$AppName-deploy-$timestamp.tar.gz"
 $askPassPath = Join-Path $deployDir 'ssh-askpass.bat'
 $chat2ApiEnvPath = Join-Path $deployDir 'chat2api.env'
 $remoteChat2ApiEnvPath = "/tmp/$AppName-chat2api.env"
+$junliaiEnvPath = Join-Path $deployDir 'junliai.env'
+$remoteJunliaiEnvPath = "/tmp/$AppName-junliai.env"
 
 function ConvertTo-PlainText {
   param([Security.SecureString]$SecureString)
@@ -268,9 +271,28 @@ try {
     )
     Invoke-ScpCopy -Source $chat2ApiEnvPath -Destination "${User}@${ServerHost}:$remoteChat2ApiEnvPath"
   }
+  if ($DeployJunliai) {
+    $localEnvPath = Join-Path $root '.env.local'
+    $junliaiValues = @{}
+    Get-Content -LiteralPath $localEnvPath | ForEach-Object {
+      if ($_ -match '^(JUNLIAI_[A-Z_]+)=(.*)$') {
+        $junliaiValues[$matches[1]] = $matches[2]
+      }
+    }
+    $requiredJunliaiValues = @('JUNLIAI_PRIMARY_ENABLED', 'JUNLIAI_BASE_URL', 'JUNLIAI_API_KEY', 'JUNLIAI_MODEL')
+    foreach ($name in $requiredJunliaiValues) {
+      if (-not $junliaiValues[$name]) {
+        throw "$name is missing from .env.local."
+      }
+    }
+    $junliaiText = ($requiredJunliaiValues | ForEach-Object { "$_=$($junliaiValues[$_])" }) -join "`n"
+    [IO.File]::WriteAllText($junliaiEnvPath, "$junliaiText`n", [Text.UTF8Encoding]::new($false))
+    Invoke-ScpCopy -Source $junliaiEnvPath -Destination "${User}@${ServerHost}:$remoteJunliaiEnvPath"
+  }
 
   $skipInstallFlag = if ($SkipInstall) { '1' } else { '0' }
   $deployChat2ApiFlag = if ($DeployChat2Api) { '1' } else { '0' }
+  $deployJunliaiFlag = if ($DeployJunliai) { '1' } else { '0' }
   $backupScript = New-RemoteBackupScript -RemoteProjectPath $ProjectPath -RemoteBackupsDir $BackupsDir -BackupTimestamp $timestamp -BackupsToKeep $KeepBackups -ShouldSkipBackup $SkipBackup.IsPresent
   $remoteCommand = @"
 set -e
@@ -296,6 +318,14 @@ if [ '$deployChat2ApiFlag' = '1' ]; then
   else
     docker-compose --env-file .env.local -f deploy/chat2api-compose.yml up -d
   fi
+fi
+if [ '$deployJunliaiFlag' = '1' ]; then
+  chmod 600 '$remoteJunliaiEnvPath'
+  touch .env.local
+  chmod 600 .env.local
+  sed -i '/^JUNLIAI_PRIMARY_ENABLED=/d; /^JUNLIAI_BASE_URL=/d; /^JUNLIAI_API_KEY=/d; /^JUNLIAI_MODEL=/d' .env.local
+  cat '$remoteJunliaiEnvPath' >> .env.local
+  rm -f '$remoteJunliaiEnvPath'
 fi
 if [ '$skipInstallFlag' = '0' ]; then
   npm ci
@@ -334,6 +364,9 @@ pm2 save >/dev/null
   }
   if (Test-Path -LiteralPath $chat2ApiEnvPath) {
     Remove-Item -LiteralPath $chat2ApiEnvPath -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $junliaiEnvPath) {
+    Remove-Item -LiteralPath $junliaiEnvPath -Force -ErrorAction SilentlyContinue
   }
   Remove-Item Env:SSH_ASKPASS -ErrorAction SilentlyContinue
   Remove-Item Env:SSH_ASKPASS_REQUIRE -ErrorAction SilentlyContinue
