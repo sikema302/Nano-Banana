@@ -374,6 +374,12 @@ const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_K
 const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
 const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
 const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
+// Chat2API primary routing is disabled by default. Keep the integration available
+// for a future server/proxy with a supported egress IP, while all current image
+// requests continue to use the existing Visionary provider.
+const CHAT2API_PRIMARY_ENABLED = ['1', 'true', 'yes', 'on'].includes(
+  normalizeEnvValue(process.env.CHAT2API_PRIMARY_ENABLED).toLowerCase(),
+);
 const CHAT2API_BASE_URL = normalizeEnvValue(process.env.CHAT2API_BASE_URL);
 const CHAT2API_AUTHORIZATION = normalizeEnvValue(process.env.CHAT2API_AUTHORIZATION);
 const CHAT2API_TIMEOUT_MS = Math.max(30_000, Number(process.env.CHAT2API_TIMEOUT_MS || 240_000));
@@ -4200,7 +4206,7 @@ async function start() {
     },
   };
   imageProviderRouter = createImageProviderRouter({
-    baseUrl: CHAT2API_BASE_URL,
+    baseUrl: CHAT2API_PRIMARY_ENABLED ? CHAT2API_BASE_URL : '',
     authorization: CHAT2API_AUTHORIZATION,
     timeoutMs: CHAT2API_TIMEOUT_MS,
     failureThreshold: CHAT2API_FAILURE_THRESHOLD,
