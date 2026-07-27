@@ -211,6 +211,17 @@ export interface PublicApiKeyInfo {
   revokedAt: string;
 }
 
+export interface UserApiKeyInfo {
+  id: string;
+  name: string;
+  keyPreview: string;
+  createdAt: string;
+  pausedAt: string;
+  revokedAt: string;
+  lastUsedAt: string;
+  status: 'active' | 'paused' | 'revoked';
+}
+
 export interface ReferenceUploadInput {
   name: string;
   mimeType: string;
@@ -777,6 +788,34 @@ export async function fetchAdminRecords(params: {
 
 export async function fetchPublicApiKeys() {
   return request<{ keys: PublicApiKeyInfo[] }>('/api/admin/api-keys', {}, true);
+}
+
+export async function fetchUserApiKeys() {
+  return request<{ keys: UserApiKeyInfo[] }>('/api/user/api-keys', {}, true);
+}
+
+export async function createUserApiKey(name: string) {
+  return request<{ apiKey: string; key: UserApiKeyInfo }>(
+    '/api/user/api-keys',
+    { method: 'POST', body: JSON.stringify({ name }) },
+    true,
+  );
+}
+
+export async function updateUserApiKey(id: string, action: 'pause' | 'resume' | 'revoke') {
+  return request<{ key: UserApiKeyInfo }>(
+    `/api/user/api-keys/${encodeURIComponent(id)}/${action}`,
+    { method: 'POST' },
+    true,
+  );
+}
+
+export async function rotateUserApiKey(id: string) {
+  return request<{ apiKey: string; key: UserApiKeyInfo }>(
+    `/api/user/api-keys/${encodeURIComponent(id)}/rotate`,
+    { method: 'POST' },
+    true,
+  );
 }
 
 export async function fetchPublicApiKeyBalance(apiKey: string) {

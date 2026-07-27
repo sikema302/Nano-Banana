@@ -30,6 +30,7 @@ import {
   clearSession,
   cleanupAdminImages,
   createPublicApiKey,
+  createUserApiKey,
   createInviteCode,
   createInviteCodesBatch,
   deleteAdminUser,
@@ -45,6 +46,7 @@ import {
   fetchAdminUsers,
   fetchPublicApiKeyBalance,
   fetchPublicApiKeys,
+  fetchUserApiKeys,
   deleteImage,
   acknowledgePromoCoupon,
   claimInvitePopup,
@@ -66,6 +68,8 @@ import {
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
   revokePublicApiKey,
+  rotateUserApiKey,
+  updateUserApiKey,
   startGenerateImageJob,
   type AdminDashboardStats,
   type AdminImageStorageStats,
@@ -85,6 +89,7 @@ import {
   type ReferenceUploadInput,
   type SavedImage,
   type UserInfo,
+  type UserApiKeyInfo,
   type VisionaryDocSyncStatus,
 } from './lib/api';
 import {
@@ -892,9 +897,13 @@ function HistoryView({
 function ApiDocsView({
   onNotice,
   gptImagePricing,
+  user,
+  onRequireLogin,
 }: {
   onNotice: (message: string) => void;
   gptImagePricing: GptImagePricing;
+  user: UserInfo | null;
+  onRequireLogin: () => void;
 }) {
   const [copiedText, setCopiedText] = useState('');
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
@@ -903,6 +912,10 @@ function ApiDocsView({
   const [balanceError, setBalanceError] = useState('');
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [activeDocSection, setActiveDocSection] = useState('quick-start');
+  const [userApiKeys, setUserApiKeys] = useState<UserApiKeyInfo[]>([]);
+  const [userKeyName, setUserKeyName] = useState('');
+  const [generatedUserKey, setGeneratedUserKey] = useState('');
+  const [userKeysLoading, setUserKeysLoading] = useState(false);
   const docsScrollRef = useRef<HTMLElement | null>(null);
   const baseUrl = typeof window === 'undefined' ? 'https://pixory.top' : window.location.origin;
   const apiKeyPlaceholder = 'px_your_api_key';
@@ -1078,6 +1091,7 @@ function ApiDocsView({
     ['4', 'Nano Banana 接口', 'nano-banana'],
     ['5', '价格指南', 'pricing'],
   ];
+  docNavigation.push(['6', '\u6211\u7684 API Keys', 'developer-center']);
 
   function handleDocsScroll() {
     const container = docsScrollRef.current;
@@ -1166,6 +1180,65 @@ function ApiDocsView({
     }
   }
 
+  async function refreshUserApiKeys() {
+    if (!user) {
+      setUserApiKeys([]);
+      return;
+    }
+    setUserKeysLoading(true);
+    try {
+      setUserApiKeys((await fetchUserApiKeys()).keys);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u52a0\u8f7d API Key \u5931\u8d25');
+    } finally {
+      setUserKeysLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshUserApiKeys();
+  }, [user?.id]);
+
+  async function handleCreateUserKey() {
+    if (!user) {
+      onRequireLogin();
+      return;
+    }
+    setUserKeysLoading(true);
+    try {
+      const payload = await createUserApiKey(userKeyName.trim() || '\u9ed8\u8ba4 Key');
+      setGeneratedUserKey(payload.apiKey);
+      setUserKeyName('');
+      await refreshUserApiKeys();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u521b\u5efa API Key \u5931\u8d25');
+    } finally {
+      setUserKeysLoading(false);
+    }
+  }
+
+  async function handleUserKeyAction(item: UserApiKeyInfo, action: 'pause' | 'resume' | 'revoke' | 'rotate') {
+    if ((action === 'revoke' || action === 'rotate') && !window.confirm(
+      action === 'rotate'
+        ? '\u8f6e\u6362\u540e\u65e7 Key \u4f1a\u7acb\u5373\u5931\u6548\uff0c\u786e\u8ba4\u7ee7\u7eed\uff1f'
+        : '\u6ce8\u9500\u540e\u65e0\u6cd5\u6062\u590d\uff0c\u786e\u8ba4\u7ee7\u7eed\uff1f',
+    )) return;
+    setUserKeysLoading(true);
+    try {
+      if (action === 'rotate') {
+        const payload = await rotateUserApiKey(item.id);
+        setGeneratedUserKey(payload.apiKey);
+      } else {
+        await updateUserApiKey(item.id, action);
+      }
+      await refreshUserApiKeys();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u66f4\u65b0 API Key \u5931\u8d25');
+    } finally {
+      setUserKeysLoading(false);
+    }
+  }
+
   return (
     <section ref={docsScrollRef} className="api-docs-view custom-scrollbar h-full overflow-auto bg-[#050505] px-4 pb-20 pt-8 text-zinc-200 md:px-6 md:pt-10" onScroll={handleDocsScroll}>
       <div className="mx-auto grid max-w-[1500px] gap-6">
@@ -1183,19 +1256,73 @@ function ApiDocsView({
                 );
               })}
             </div>
-            <div className="mt-4 border-t border-white/10 pt-4">
-              <button
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm font-black text-cyan-100 transition hover:border-cyan-300/35 hover:bg-cyan-300/15"
-                type="button"
-                onClick={openBalanceDialog}
-              >
-                <KeyRound size={16} />
-                {'\u67e5\u8be2 Key \u989d\u5ea6'}
-              </button>
-            </div>
           </aside>
 
-          <main className="min-w-0 space-y-8">
+          <main className="flex min-w-0 flex-col gap-8">
+            <section id="developer-center" className="order-last scroll-mt-28 overflow-hidden rounded-2xl border border-cyan-300/15 bg-[#11131a]">
+              <div className="flex flex-col gap-4 border-b border-white/10 px-5 py-5 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-cyan-300">{'\u5f00\u53d1\u8005\u4e2d\u5fc3'}</div>
+                  <h1 className="text-xl font-semibold text-white">{'\u6211\u7684 API Keys'}</h1>
+                  <p className="mt-2 text-xs leading-5 text-zinc-400">{'\u65b0 Key \u4e0e\u7f51\u7ad9\u8d26\u53f7\u5171\u4eab\u79ef\u5206\uff0c\u5bc6\u94a5\u53ea\u5728\u521b\u5efa\u6216\u8f6e\u6362\u65f6\u5c55\u793a\u4e00\u6b21\u3002'}</p>
+                </div>
+                {user ? <span className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">{user.username} · {user.creditsRemaining ?? 0} {'\u79ef\u5206'}</span> : null}
+              </div>
+              <div className="p-5">
+                {!user ? (
+                  <button className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-black" type="button" onClick={onRequireLogin}>{'\u767b\u5f55\u540e\u7ba1\u7406 API Key'}</button>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-300/35" maxLength={40} placeholder={'Key \u540d\u79f0\uff0c\u4f8b\u5982\uff1a\u751f\u4ea7\u670d\u52a1\u5668'} value={userKeyName} onChange={(event) => setUserKeyName(event.target.value)} />
+                      <button className="rounded-xl bg-cyan-200 px-4 py-2.5 text-sm font-black text-black disabled:opacity-50" disabled={userKeysLoading || userApiKeys.filter((item) => item.status !== 'revoked').length >= 5} type="button" onClick={() => void handleCreateUserKey()}>{userKeysLoading ? '\u5904\u7406\u4e2d...' : '\u521b\u5efa API Key'}</button>
+                    </div>
+                    {generatedUserKey ? (
+                      <div className="mt-4 rounded-xl border border-amber-300/25 bg-amber-300/10 p-4">
+                        <div className="text-xs font-bold text-amber-100">{'\u8bf7\u7acb\u5373\u590d\u5236\uff0c\u5173\u95ed\u540e\u65e0\u6cd5\u518d\u6b21\u67e5\u770b'}</div>
+                        <div className="mt-2 flex gap-2">
+                          <code className="min-w-0 flex-1 overflow-auto rounded-lg bg-black/30 px-3 py-2 text-xs text-amber-50">{generatedUserKey}</code>
+                          <button className="rounded-lg border border-amber-200/20 px-3 text-xs text-amber-50" type="button" onClick={() => void copyText(generatedUserKey, 'user-key')}>{copiedText === 'user-key' ? '\u5df2\u590d\u5236' : '\u590d\u5236'}</button>
+                          <button className="rounded-lg border border-white/10 px-3 text-xs text-zinc-300" type="button" onClick={() => setGeneratedUserKey('')}>{'\u5173\u95ed'}</button>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 grid gap-2">
+                      {userApiKeys.length === 0 ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-zinc-500">{userKeysLoading ? '\u52a0\u8f7d\u4e2d...' : '\u8fd8\u6ca1\u6709 API Key'}</div> : userApiKeys.map((item) => (
+                        <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-4 lg:flex-row lg:items-center">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2"><span className="font-semibold text-white">{item.name}</span><span className={`rounded px-2 py-0.5 text-[10px] ${item.status === 'active' ? 'bg-emerald-400/10 text-emerald-200' : item.status === 'paused' ? 'bg-amber-400/10 text-amber-200' : 'bg-zinc-500/10 text-zinc-500'}`}>{item.status === 'active' ? '\u4f7f\u7528\u4e2d' : item.status === 'paused' ? '\u5df2\u6682\u505c' : '\u5df2\u6ce8\u9500'}</span></div>
+                            <code className="mt-1 block text-xs text-zinc-400">{item.keyPreview}</code>
+                            <div className="mt-1 text-[11px] text-zinc-600">{'\u521b\u5efa\uff1a'}{new Date(item.createdAt).toLocaleString()}{item.lastUsedAt ? ` · \u6700\u540e\u8c03\u7528\uff1a${new Date(item.lastUsedAt).toLocaleString()}` : ''}</div>
+                          </div>
+                          {item.status !== 'revoked' ? <div className="flex flex-wrap gap-2 text-xs">
+                            <button className="rounded-lg border border-white/10 px-3 py-2 text-zinc-300" disabled={userKeysLoading} type="button" onClick={() => void handleUserKeyAction(item, item.status === 'paused' ? 'resume' : 'pause')}>{item.status === 'paused' ? '\u6062\u590d' : '\u6682\u505c'}</button>
+                            <button className="rounded-lg border border-sky-300/15 px-3 py-2 text-sky-200" disabled={userKeysLoading} type="button" onClick={() => void handleUserKeyAction(item, 'rotate')}>{'\u8f6e\u6362'}</button>
+                            <button className="rounded-lg border border-red-300/15 px-3 py-2 text-red-200" disabled={userKeysLoading} type="button" onClick={() => void handleUserKeyAction(item, 'revoke')}>{'\u6ce8\u9500'}</button>
+                          </div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <div className="mt-5 border-t border-white/10 pt-5">
+                  <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="text-sm font-semibold text-white">{'\u67e5\u8be2\u65e7\u7248 / \u5176\u4ed6 Key \u989d\u5ea6'}</h2>
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">{'\u9002\u7528\u4e8e\u539f\u6709\u72ec\u7acb\u989d\u5ea6 Key\uff0c\u4e5f\u53ef\u67e5\u8be2\u4efb\u610f\u6709\u6743\u4f7f\u7528\u7684 Key\u3002'}</p>
+                    </div>
+                    <button
+                      className="inline-flex flex-none items-center justify-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-2.5 text-sm font-bold text-cyan-100 transition hover:bg-cyan-300/15"
+                      type="button"
+                      onClick={openBalanceDialog}
+                    >
+                      <KeyRound size={15} />
+                      {'\u67e5\u8be2 Key \u989d\u5ea6'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
             <section id="quick-start" className="scroll-mt-28 space-y-5">
               <section className="rounded-2xl border border-white/10 bg-[#11131a] p-4 md:p-5">
                 <div className="border-b border-white/10 pb-4">
@@ -5336,7 +5463,15 @@ export default function App() {
               }}
             />
           ) : activeTab === 'apiDocs' ? (
-            <ApiDocsView onNotice={setNotice} gptImagePricing={gptImagePricing} />
+            <ApiDocsView
+              onNotice={setNotice}
+              gptImagePricing={gptImagePricing}
+              user={user}
+              onRequireLogin={() => {
+                setAuthMode('login');
+                setAuthOpen(true);
+              }}
+            />
           ) : (
             <AdminView
               users={adminOverview.users}

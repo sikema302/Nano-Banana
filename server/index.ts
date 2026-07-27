@@ -276,6 +276,12 @@ type PublicApiKeyRecord = {
   createdAt: string;
   createdBy: string;
   revokedAt?: string;
+  ownerUserId?: string;
+  ownerUsername?: string;
+  billingMode?: 'legacy' | 'account';
+  pausedAt?: string;
+  lastUsedAt?: string;
+  rotatedFromId?: string;
 };
 
 type PublicGenerateInput = {
@@ -2217,6 +2223,12 @@ function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKey
     createdAt: normalizeString(value.createdAt) || nowIso(),
     createdBy: normalizeString(value.createdBy) || 'admin',
     revokedAt: normalizeString(value.revokedAt) || undefined,
+    ownerUserId: normalizeString(value.ownerUserId) || undefined,
+    ownerUsername: normalizeString(value.ownerUsername) || undefined,
+    billingMode: value.billingMode === 'account' ? 'account' : 'legacy',
+    pausedAt: normalizeString(value.pausedAt) || undefined,
+    lastUsedAt: normalizeString(value.lastUsedAt) || undefined,
+    rotatedFromId: normalizeString(value.rotatedFromId) || undefined,
   };
 }
 
@@ -2245,11 +2257,31 @@ function publicApiKeyRecord(record: PublicApiKeyRecord) {
     createdAt: record.createdAt,
     createdBy: record.createdBy,
     revokedAt: record.revokedAt || '',
+    billingMode: record.billingMode || 'legacy',
+    pausedAt: record.pausedAt || '',
+    lastUsedAt: record.lastUsedAt || '',
+  };
+}
+
+function userApiKeyRecord(record: PublicApiKeyRecord) {
+  return {
+    id: record.id,
+    name: record.name,
+    keyPreview: record.keyPreview,
+    createdAt: record.createdAt,
+    pausedAt: record.pausedAt || '',
+    revokedAt: record.revokedAt || '',
+    lastUsedAt: record.lastUsedAt || '',
+    status: record.revokedAt ? 'revoked' : record.pausedAt ? 'paused' : 'active',
   };
 }
 
 function generatePublicApiKey() {
   return `px_${randomHex(24)}`;
+}
+
+function generateUserApiKey() {
+  return `px_live_${randomHex(24)}`;
 }
 
 function hashPublicApiKey(key: string) {
@@ -2360,6 +2392,64 @@ async function createPublicApiKeyUnlocked(name: string, totalCredits: number, cr
   return { plainKey, record };
 }
 
+async function createUserApiKeyUnlocked(
+  name: string,
+  ownerUserId: string,
+  ownerUsername: string,
+  rotatedFromId?: string,
+) {
+  const records = await readPublicApiKeyRecords();
+  const ownedActiveKeys = records.filter(
+    (record) => record.ownerUserId === ownerUserId && record.billingMode === 'account' && !record.revokedAt,
+  );
+  if (ownedActiveKeys.length >= 5) {
+    throw new Error('\u6bcf\u4e2a\u8d26\u53f7\u6700\u591a\u4fdd\u7559 5 \u4e2a\u672a\u6ce8\u9500\u7684 API Key');
+  }
+
+  const plainKey = generateUserApiKey();
+  const record: PublicApiKeyRecord = {
+    id: randomHex(8),
+    name: normalizeString(name).slice(0, 40) || 'API Key',
+    keyHash: hashPublicApiKey(plainKey),
+    keyPreview: previewPublicApiKey(plainKey),
+    totalCredits: 0,
+    usedCredits: 0,
+    createdAt: nowIso(),
+    createdBy: ownerUsername,
+    ownerUserId,
+    ownerUsername,
+    billingMode: 'account',
+    rotatedFromId,
+  };
+  await backupPublicApiKeyRecords(records);
+  await writePublicApiKeyRecords([record, ...records]);
+  return { plainKey, record };
+}
+
+async function updateOwnedUserApiKeyUnlocked(
+  id: string,
+  ownerUserId: string,
+  action: 'pause' | 'resume' | 'revoke',
+) {
+  const records = await readPublicApiKeyRecords();
+  const index = records.findIndex(
+    (record) => record.id === id && record.ownerUserId === ownerUserId && record.billingMode === 'account',
+  );
+  if (index < 0) return null;
+  const record = records[index];
+  if (record.revokedAt && action !== 'revoke') {
+    throw new Error('API Key \u5df2\u6ce8\u9500');
+  }
+  const timestamp = nowIso();
+  records[index] = action === 'pause'
+    ? { ...record, pausedAt: record.pausedAt || timestamp }
+    : action === 'resume'
+      ? { ...record, pausedAt: undefined }
+      : { ...record, pausedAt: undefined, revokedAt: record.revokedAt || timestamp };
+  await writePublicApiKeyRecords(records);
+  return records[index];
+}
+
 async function revokePublicApiKeyUnlocked(id: string) {
   const targetId = normalizeString(id);
   if (!targetId) return null;
@@ -2448,6 +2538,30 @@ async function deletePublicApiKeyUnlocked(id: string) {
   return true;
 }
 
+async function reserveAccountApiKeyCredits(record: PublicApiKeyRecord, credits: number) {
+  const ownerUserId = record.ownerUserId!;
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.ensureUserCredits(ownerUserId, record.ownerUsername || record.createdBy, 0);
+    const balance = await db.getUserCredits(ownerUserId);
+    if (balance.remainingCredits < credits) {
+      throw new Error(`API Key \u6240\u5c5e\u8d26\u53f7\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${credits}\uff0c\u5269\u4f59 ${balance.remainingCredits}`);
+    }
+    await db.incrementUsedCredits(ownerUserId, credits);
+    return { ...balance, usedCredits: balance.usedCredits + credits };
+  }
+  return withWriteDb((db) => {
+    ensureSchema(db);
+    ensureUserCredits(db, ownerUserId, record.ownerUsername || record.createdBy, 0);
+    const balance = getUserCredits(db, ownerUserId);
+    if (balance.remainingCredits < credits) {
+      throw new Error(`API Key \u6240\u5c5e\u8d26\u53f7\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${credits}\uff0c\u5269\u4f59 ${balance.remainingCredits}`);
+    }
+    incrementUserUsedCredits(db, ownerUserId, credits);
+    return { ...balance, usedCredits: balance.usedCredits + credits };
+  });
+}
+
 async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: number) {
   const keyHash = hashPublicApiKey(plainKey);
   const records = await readPublicApiKeyRecords();
@@ -2458,9 +2572,15 @@ async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: num
 
   const record = records[index];
   if (record.revokedAt) {
-    throw new Error('API Key 已停用');
+    throw new Error('API Key \u5df2\u6ce8\u9500');
   }
-
+  if (record.pausedAt) throw new Error('API Key \u5df2\u6682\u505c');
+  if (record.billingMode === 'account' && record.ownerUserId) {
+    const balance = await reserveAccountApiKeyCredits(record, credits);
+    records[index] = { ...record, lastUsedAt: nowIso() };
+    await writePublicApiKeyRecords(records);
+    return { ...records[index], totalCredits: balance.totalCredits, usedCredits: balance.usedCredits };
+  }
   const remainingCredits = Math.max(0, record.totalCredits - record.usedCredits);
   if (remainingCredits < credits) {
     throw new Error(`API Key 额度不足，需要 ${credits}，剩余 ${remainingCredits}`);
@@ -2469,6 +2589,7 @@ async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: num
   const nextRecord = {
     ...record,
     usedCredits: record.usedCredits + credits,
+    lastUsedAt: nowIso(),
   };
   records[index] = nextRecord;
   await writePublicApiKeyRecords(records);
@@ -2479,7 +2600,19 @@ async function getPublicApiKeyBalance(plainKey: string) {
   const keyHash = hashPublicApiKey(plainKey);
   const records = await readPublicApiKeyRecords();
   const record = records.find((item) => item.keyHash === keyHash);
-  if (!record || record.revokedAt) return null;
+  if (!record || record.revokedAt || record.pausedAt) return null;
+
+  if (record.billingMode === 'account' && record.ownerUserId) {
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      await db.ensureUserCredits(record.ownerUserId, record.ownerUsername || record.createdBy, 0);
+      return db.getUserCredits(record.ownerUserId);
+    }
+    return withReadDb((db) => {
+      ensureSchema(db);
+      return getUserCredits(db, record.ownerUserId!);
+    });
+  }
 
   return {
     totalCredits: record.totalCredits,
@@ -2582,6 +2715,23 @@ function withPublicAsyncTaskMutationLock<T>(operation: () => Promise<T>): Promis
 
 async function refundPublicApiKeyCreditsUnlocked(keyId: string, credits: number) {
   const records = await readPublicApiKeyRecords();
+  const target = records.find((record) => record.id === keyId);
+  if (target?.billingMode === 'account' && target.ownerUserId) {
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      const balance = await db.getUserCredits(target.ownerUserId);
+      await db.incrementUsedCredits(target.ownerUserId, -Math.min(balance.usedCredits, credits));
+    } else {
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          'UPDATE user_credits SET used_credits = MAX(0, used_credits - ?), updated_at = ? WHERE user_id = ?',
+          [Math.max(0, Math.floor(credits)), nowIso(), target.ownerUserId],
+        );
+      });
+    }
+    return;
+  }
   await writePublicApiKeyRecords(
     records.map((record) =>
       record.id === keyId ? { ...record, usedCredits: Math.max(0, record.usedCredits - credits) } : record,
@@ -6502,6 +6652,79 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鍒涘缓閭€璇风爜 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  app.get('/api/user/api-keys', requireAuth, async (req, res) => {
+    try {
+      const keys = (await readPublicApiKeyRecords())
+        .filter((record) => record.billingMode === 'account' && record.ownerUserId === req.authUser!.userId)
+        .map(userApiKeyRecord);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ keys });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch API keys failed' });
+    }
+  });
+
+  app.post('/api/user/api-keys', requireAuth, async (req, res) => {
+    try {
+      const payload = await withPublicApiKeyMutationLock(() =>
+        createUserApiKeyUnlocked(
+          normalizeString(req.body?.name),
+          req.authUser!.userId,
+          req.authUser!.username,
+        ),
+      );
+      res.status(201).json({ apiKey: payload.plainKey, key: userApiKeyRecord(payload.record) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Create API key failed' });
+    }
+  });
+
+  for (const action of ['pause', 'resume', 'revoke'] as const) {
+    app.post(`/api/user/api-keys/:id/${action}`, requireAuth, async (req, res) => {
+      try {
+        const record = await withPublicApiKeyMutationLock(() =>
+          updateOwnedUserApiKeyUnlocked(normalizeString(req.params.id), req.authUser!.userId, action),
+        );
+        if (!record) {
+          res.status(404).json({ error: 'API key not found' });
+          return;
+        }
+        res.json({ key: userApiKeyRecord(record) });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : 'Update API key failed' });
+      }
+    });
+  }
+
+  app.post('/api/user/api-keys/:id/rotate', requireAuth, async (req, res) => {
+    try {
+      const payload = await withPublicApiKeyMutationLock(async () => {
+        const records = await readPublicApiKeyRecords();
+        const oldRecord = records.find(
+          (record) =>
+            record.id === normalizeString(req.params.id) &&
+            record.ownerUserId === req.authUser!.userId &&
+            record.billingMode === 'account',
+        );
+        if (!oldRecord || oldRecord.revokedAt) return null;
+        await updateOwnedUserApiKeyUnlocked(oldRecord.id, req.authUser!.userId, 'revoke');
+        return createUserApiKeyUnlocked(
+          oldRecord.name,
+          req.authUser!.userId,
+          req.authUser!.username,
+          oldRecord.id,
+        );
+      });
+      if (!payload) {
+        res.status(404).json({ error: 'API key not found or already revoked' });
+        return;
+      }
+      res.status(201).json({ apiKey: payload.plainKey, key: userApiKeyRecord(payload.record) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Rotate API key failed' });
+    }
+  });
 
   app.get('/api/admin/api-keys', requireAuth, requireAdmin, async (_req, res) => {
     try {
