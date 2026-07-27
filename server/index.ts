@@ -32,6 +32,7 @@ import {
   type ImageGenerationInput,
 } from './image-provider-router.js';
 import { createProviderMetrics } from './provider-metrics.js';
+import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -4589,6 +4590,79 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鑾峰彇褰撳墠鐢ㄦ埛 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  let inviteRedemptionQueue: Promise<unknown> = Promise.resolve();
+  const withInviteRedemptionLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = inviteRedemptionQueue.then(operation, operation);
+    inviteRedemptionQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  app.post('/api/user/redeem-invite', requireAuth, async (req, res) => {
+    const inviteCode = normalizeString(req.body?.code).toUpperCase();
+    if (!inviteCode) {
+      res.status(400).json({ error: '请输入邀请码' });
+      return;
+    }
+
+    try {
+      const redeemedCredits = await withInviteRedemptionLock(async () => {
+        if (USE_SUPABASE) {
+          const db = await getSupabaseDb();
+          return db.claimInviteCodeForUser(
+            inviteCode,
+            req.authUser!.userId,
+            req.authUser!.username,
+          );
+        }
+
+        return withWriteDb((db) => {
+          ensureSchema(db);
+          db.run('BEGIN TRANSACTION');
+          try {
+            const invite = getOne<Record<string, unknown>>(
+              db,
+              'SELECT code, credits, redeemed_by FROM invite_codes WHERE code = ?',
+              [inviteCode],
+            );
+            const credits = getInviteRedemptionCredits(invite);
+
+            ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+            adjustUserTotalCredits(db, req.authUser!.userId, credits);
+            db.run(
+              'UPDATE invite_codes SET credits = 0, redeemed_by = ?, redeemed_at = ?, low_balance_since = NULL WHERE code = ? AND (redeemed_by IS NULL OR redeemed_by = "") AND credits = ?',
+              [req.authUser!.userId, nowIso(), inviteCode, credits],
+            );
+            db.run('COMMIT');
+            return credits;
+          } catch (error) {
+            db.run('ROLLBACK');
+            throw error;
+          }
+        });
+      });
+
+      res.json({
+        redeemedCredits,
+        user: await getPublicUser(req.authUser!),
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message : '';
+      if (errorCode === INVITE_REDEMPTION_ERRORS.notFound) {
+        res.status(404).json({ error: '邀请码不存在' });
+        return;
+      }
+      if (errorCode === INVITE_REDEMPTION_ERRORS.alreadyRedeemed) {
+        res.status(409).json({ error: '该邀请码已经兑换，不能重复使用' });
+        return;
+      }
+      if (errorCode === INVITE_REDEMPTION_ERRORS.noCredits) {
+        res.status(409).json({ error: '该邀请码没有可兑换积分' });
+        return;
+      }
+      res.status(500).json({ error: error instanceof Error ? error.message : '兑换邀请码失败' });
+    }
+  });
 
   app.get('/api/auth/me', requireAuth, async (req, res) => {
     if (USE_SUPABASE) {

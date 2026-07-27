@@ -14,6 +14,7 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
+  MessageCircle,
   Minus,
   Plus,
   RotateCw,
@@ -61,6 +62,7 @@ import {
   rechargeAdminUserCredits,
   rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
   rechargePublicApiKeyCredits,
+  redeemInviteCode,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
   revokePublicApiKey,
@@ -3386,6 +3388,10 @@ export default function App() {
   const [authInitialized, setAuthInitialized] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authForm, setAuthForm] = useState({ username: '', password: '', email: '', inviteCode: '' });
+  const [redeemInviteOpen, setRedeemInviteOpen] = useState(false);
+  const [redeemInviteValue, setRedeemInviteValue] = useState('');
+  const [redeemInviteError, setRedeemInviteError] = useState('');
+  const [redeemingInvite, setRedeemingInvite] = useState(false);
   const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
   const [promoCouponOpen, setPromoCouponOpen] = useState(false);
   const hasVisitedCreateRef = useRef(false);
@@ -4492,6 +4498,28 @@ export default function App() {
     }
   }
 
+  async function handleRedeemInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!redeemInviteValue.trim()) {
+      setRedeemInviteError('\u8bf7\u8f93\u5165\u9080\u8bf7\u7801');
+      return;
+    }
+
+    setRedeemingInvite(true);
+    setRedeemInviteError('');
+    try {
+      const payload = await redeemInviteCode({ code: redeemInviteValue.trim().toUpperCase() });
+      setUser(payload.user);
+      setRedeemInviteOpen(false);
+      setRedeemInviteValue('');
+      setNotice(`\u9080\u8bf7\u7801\u5151\u6362\u6210\u529f\uff0c\u5df2\u5145\u503c ${payload.redeemedCredits} \u79ef\u5206`);
+    } catch (error) {
+      setRedeemInviteError(error instanceof Error ? error.message : '\u5151\u6362\u79ef\u5206\u5931\u8d25');
+    } finally {
+      setRedeemingInvite(false);
+    }
+  }
+
   function logout() {
     hasVisitedCreateRef.current = true;
     clearSession();
@@ -4850,24 +4878,38 @@ export default function App() {
               })}
           </nav>
 
-          <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
+          <div className="flex w-full items-center justify-between gap-0.5 sm:w-auto sm:justify-end">
             <button
-              className="btn-ghost hidden min-h-0 items-center gap-1.5 px-2.5 py-2 text-xs text-zinc-400 md:inline-flex"
+              className="group hidden min-h-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-bold text-zinc-400 transition hover:bg-sky-400/10 hover:text-sky-200 md:inline-flex"
               type="button"
               title="复制客服微信 lzp983813676"
               onClick={() => void handleCopyWechat()}
             >
-              <Copy size={12} />
-              {wechatCopied ? '微信已复制' : '联系客服'}
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/10 text-sky-300 transition group-hover:bg-sky-400/20">
+                <MessageCircle size={10} strokeWidth={2.1} />
+              </span>
+              {wechatCopied ? '\u5df2\u590d\u5236\u5fae\u4fe1' : '\u5ba2\u670d'}
             </button>
             {/* 购买积分按钮 - 头部导航栏 */}
             <button
-              className="btn-primary hidden px-3.5 py-2 text-xs md:inline-flex"
+              className="hidden min-h-0 items-center rounded-md px-1.5 py-1 text-[11px] font-black text-orange-300 transition hover:bg-orange-400/10 hover:text-orange-200 md:inline-flex"
               type="button"
               onClick={openPurchasePage}
             >
               购买积分
             </button>
+            {user ? (
+              <button
+                className="inline-flex min-h-0 items-center rounded-md px-1.5 py-1 text-[11px] font-black text-amber-200 transition hover:bg-amber-400/10 hover:text-amber-100"
+                type="button"
+                onClick={() => {
+                  setRedeemInviteError('');
+                  setRedeemInviteOpen(true);
+                }}
+              >
+                {'\u5151\u6362\u79ef\u5206'}
+              </button>
+            ) : null}
             <div
               className="hidden"
               title={healthError || healthText}
@@ -4875,25 +4917,25 @@ export default function App() {
               <span className={healthError ? 'h-2.5 w-2.5 rounded-full bg-rose-400' : 'h-2.5 w-2.5 rounded-full bg-emerald-400'} />
             </div>
             {user ? (
-              <div className="flex min-w-0 items-center gap-2.5 border-l border-white/10 pl-3">
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
-                  <div className="absolute inset-x-1 bottom-0 h-4 rounded-t-full bg-[var(--primary)]/45" />
-                  <UserRound className="relative z-10" size={22} strokeWidth={1.8} />
+              <div className="flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
+                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
+                  <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
+                  <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
                 </div>
                 <div className="min-w-0 leading-tight">
-                  <p className="max-w-28 truncate text-sm font-semibold text-zinc-100">{user.username}</p>
-                  <p className="mt-1 whitespace-nowrap text-[11px] font-medium text-zinc-500">
+                  <p className="max-w-24 truncate text-[13px] font-semibold text-zinc-100">{user.username}</p>
+                  <p className="mt-0.5 whitespace-nowrap text-[10px] font-medium text-zinc-500">
                     {user.isAdmin ? '管理员' : '正式用户'} <span className="px-0.5">•</span> 积分{user.creditsRemaining ?? 0}
                   </p>
                 </div>
                 <button
-                  className="btn-ghost min-h-0 shrink-0 px-2 py-2 text-zinc-400 hover:text-white"
+                  className="btn-ghost min-h-0 shrink-0 px-1.5 py-1.5 text-zinc-500 hover:text-white"
                   type="button"
                   title="退出登录"
                   aria-label="退出登录"
                   onClick={logout}
                 >
-                  <LogOut size={19} />
+                  <LogOut size={16} />
                 </button>
               </div>
             ) : (
@@ -5493,6 +5535,53 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {redeemInviteOpen && user ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-4 backdrop-blur-sm">
+          <div className="card w-full max-w-md p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.24em] text-violet-300">{'\u79ef\u5206\u5145\u503c'}</p>
+                <h2 className="mt-2 text-2xl font-semibold text-white">{'\u5151\u6362\u79ef\u5206'}</h2>
+                <p className="mt-2 text-sm leading-6 text-zinc-500">
+                  {'\u5151\u6362\u540e\uff0c\u9080\u8bf7\u7801\u4e2d\u7684\u5168\u90e8\u79ef\u5206\u5c06\u8f6c\u5165\u5f53\u524d\u8d26\u53f7\uff0c\u8be5\u9080\u8bf7\u7801\u968f\u5373\u5931\u6548\u3002'}
+                </p>
+              </div>
+              <button
+                className="btn-secondary min-h-0 p-2"
+                type="button"
+                aria-label="Close redeem invite dialog"
+                onClick={() => setRedeemInviteOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <form className="mt-6 grid gap-4" onSubmit={handleRedeemInvite}>
+              <label className="grid gap-2 text-sm text-zinc-300">
+                <span>{'\u9080\u8bf7\u7801'}</span>
+                <div className="input flex items-center gap-3">
+                  <Sparkles size={16} className="text-violet-300" />
+                  <input
+                    autoFocus
+                    className="w-full bg-transparent uppercase tracking-[0.18em] outline-none placeholder:normal-case placeholder:tracking-normal"
+                    placeholder={'\u8bf7\u8f93\u5165\u8d2d\u4e70\u7684\u9080\u8bf7\u7801'}
+                    value={redeemInviteValue}
+                    onChange={(event) => setRedeemInviteValue(event.target.value.trim().toUpperCase())}
+                  />
+                </div>
+              </label>
+              {redeemInviteError ? <div className="app-alert app-alert-error">{redeemInviteError}</div> : null}
+              <button
+                className="btn-primary px-4 py-3 text-sm font-black disabled:opacity-60"
+                disabled={redeemingInvite}
+                type="submit"
+              >
+                {redeemingInvite ? '\u5151\u6362\u4e2d...' : '\u786e\u8ba4\u5151\u6362'}
+              </button>
+            </form>
           </div>
         </div>
       ) : null}

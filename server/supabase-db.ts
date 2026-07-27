@@ -5,6 +5,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
+import { getInviteRedemptionCredits } from './invite-redemption.js';
 
 // ─── 类型定义 ───────────────────────────────────────────────────────
 
@@ -620,6 +621,51 @@ export async function redeemInviteCode(code: string, userId: string): Promise<vo
     })
     .eq('code', code);
   if (error) throw new Error(`Redeem invite code failed: ${error.message}`);
+}
+
+export async function claimInviteCodeForUser(
+  code: string,
+  userId: string,
+  username: string,
+): Promise<number> {
+  await ensureUserCredits(userId, username, 0);
+  const invite = await getInviteCode(code);
+  const redeemedCredits = getInviteRedemptionCredits(invite);
+
+  const redeemedAt = nowIso();
+  const { data: claimedRows, error: claimError } = await getSupabase()
+    .from('invite_codes')
+    .update({
+      credits: 0,
+      redeemed_by: userId,
+      redeemed_at: redeemedAt,
+      low_balance_since: null,
+    })
+    .eq('code', code)
+    .is('redeemed_by', null)
+    .eq('credits', redeemedCredits)
+    .select('code');
+  if (claimError) throw new Error(`Redeem invite code failed: ${claimError.message}`);
+  if (!claimedRows?.length) throw new Error('INVITE_ALREADY_REDEEMED');
+
+  try {
+    await adjustUserTotalCredits(userId, redeemedCredits);
+  } catch (error) {
+    await getSupabase()
+      .from('invite_codes')
+      .update({
+        credits: redeemedCredits,
+        redeemed_by: null,
+        redeemed_at: null,
+        low_balance_since: invite.low_balance_since || null,
+      })
+      .eq('code', code)
+      .eq('redeemed_by', userId)
+      .eq('credits', 0);
+    throw error;
+  }
+
+  return redeemedCredits;
 }
 
 export async function migrateLegacyInviteUserId(

@@ -523,6 +523,17 @@ export async function loginWithInvite(payload: { code: string }) {
   return result.user;
 }
 
+export async function redeemInviteCode(payload: { code: string }) {
+  return request<{ redeemedCredits: number; user: UserInfo }>(
+    '/api/user/redeem-invite',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    true,
+  );
+}
+
 export async function fetchModels() {
   return request<{ models: ModelInfo[]; gptImagePricing: GptImagePricing }>('/api/models', {}, true);
 }
