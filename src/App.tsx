@@ -85,6 +85,7 @@ import {
   type PaginationInfo,
   type PromoCouponInfo,
   type ProviderMetricRow,
+  type ProviderRiskRecord,
   type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
@@ -164,6 +165,7 @@ interface AdminOverviewState {
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
   providerMetrics: ProviderMetricRow[];
+  providerRisks: ProviderRiskRecord[];
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
@@ -2043,6 +2045,7 @@ function AdminView({
   adminCredits,
   dashboardStats,
   providerMetrics,
+  providerRisks,
   visionaryDocSync,
   imageStorageStats,
   recordsStats,
@@ -2072,6 +2075,7 @@ function AdminView({
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
   providerMetrics: ProviderMetricRow[];
+  providerRisks: ProviderRiskRecord[];
   visionaryDocSync: VisionaryDocSyncStatus | null;
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
@@ -2741,6 +2745,53 @@ function AdminView({
                         </td>
                       </tr>
                     )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-white">{'\u4e0a\u6e38\u8ba1\u8d39\u98ce\u9669\u76d1\u63a7'}</h2>
+                  <p className="mt-1 text-xs text-zinc-500">{'\u6309\u5355\u6b21\u7528\u6237\u4efb\u52a1\u5173\u8054 Junliai \u548c Visionary\uff0c\u201c\u7591\u4f3c\u91cd\u590d\u201d\u9700\u7ed3\u5408\u4e0a\u6e38\u6d88\u8d39\u6d41\u6c34\u6700\u7ec8\u6838\u5bf9\u3002'}</p>
+                </div>
+                <div className="flex gap-2 text-xs font-bold">
+                  <span className="rounded-full border border-rose-400/25 bg-rose-500/10 px-3 py-1 text-rose-200">
+                    {`${providerRisks.filter((item) => item.riskLevel === 'suspected_duplicate').length} \u6761\u7591\u4f3c\u91cd\u590d`}
+                  </span>
+                  <span className="rounded-full border border-amber-400/25 bg-amber-500/10 px-3 py-1 text-amber-100">
+                    {`${providerRisks.filter((item) => item.riskLevel === 'review').length} \u6761\u5f85\u6838\u5bf9`}
+                  </span>
+                </div>
+              </div>
+              <div className="custom-scrollbar mt-4 overflow-x-auto rounded-[18px] border border-white/8">
+                <table className="w-full min-w-[1050px] text-left text-xs">
+                  <thead className="bg-white/[0.04] text-zinc-500">
+                    <tr>
+                      <th className="px-4 py-3">{'\u65f6\u95f4 / \u8ffd\u8e2a ID'}</th>
+                      <th className="px-4 py-3">{'\u6a21\u578b\u914d\u7f6e'}</th>
+                      <th className="px-4 py-3">{'Junliai'}</th>
+                      <th className="px-4 py-3">{'Visionary'}</th>
+                      <th className="px-4 py-3">{'\u98ce\u9669\u7ed3\u8bba'}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/8">
+                    {providerRisks.slice(0, 20).map((item) => (
+                      <tr key={item.traceId} className="text-zinc-300">
+                        <td className="px-4 py-3">
+                          <div>{new Date(item.createdAt).toLocaleString('zh-CN')}</div>
+                          <code className="mt-1 block text-[10px] text-zinc-600">{item.traceId.slice(0, 12)}</code>
+                        </td>
+                        <td className="px-4 py-3"><div className="font-bold text-white">{item.modelId}</div><div className="mt-1 font-mono text-[10px] text-zinc-500">{item.configuration}</div></td>
+                        <td className="px-4 py-3">{item.junliaiStatus === 'not_called' ? '\u672a\u8c03\u7528' : `${item.junliaiStatus === 'success' ? '\u6210\u529f' : item.junliaiStatus === 'uncertain' ? '\u7ed3\u679c\u672a\u77e5' : '\u660e\u786e\u5931\u8d25'} · ${(item.junliaiDurationMs / 1000).toFixed(1)}s`}</td>
+                        <td className="px-4 py-3">{item.visionaryStatus === 'not_called' ? '\u672a\u8c03\u7528' : `${item.visionaryStatus === 'success' ? '\u6210\u529f' : '\u5931\u8d25'} · ${(item.visionaryDurationMs / 1000).toFixed(1)}s`}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 font-bold ${item.riskLevel === 'suspected_duplicate' ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : item.riskLevel === 'review' ? 'border-amber-400/25 bg-amber-500/10 text-amber-100' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200'}`}>{item.riskLevel === 'suspected_duplicate' ? '\u7591\u4f3c\u91cd\u590d' : item.riskLevel === 'review' ? '\u5f85\u6838\u5bf9' : '\u6b63\u5e38'}</span>
+                          <div className="mt-1 max-w-[320px] text-[10px] leading-4 text-zinc-500">{item.riskReason}</div>
+                        </td>
+                      </tr>
+                    ))}
+                    {providerRisks.length === 0 ? <tr><td className="px-4 py-8 text-center text-zinc-500" colSpan={5}>{'\u4eca\u65e5\u6682\u65e0\u53ef\u6838\u5bf9\u7684\u4e0a\u6e38\u8c03\u7528'}</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -3488,6 +3539,7 @@ export default function App() {
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
     dashboardStats: emptyDashboardStats,
     providerMetrics: [],
+    providerRisks: [],
     imageStorageStats: emptyImageStorageStats,
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
@@ -3890,6 +3942,7 @@ export default function App() {
           ...current,
           dashboardStats: payload.stats,
           providerMetrics: payload.providerMetrics || [],
+          providerRisks: payload.providerRisks || [],
           imageStorageStats: payload.imageStorage,
           adminCredits: payload.adminCredits,
           visionaryDocSync: payload.visionaryDocSync,
@@ -4667,6 +4720,7 @@ export default function App() {
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
       dashboardStats: emptyDashboardStats,
       providerMetrics: [],
+      providerRisks: [],
       imageStorageStats: emptyImageStorageStats,
       recordsStats: emptyRecordsStats,
       recordModelOptions: [],
@@ -5483,6 +5537,7 @@ export default function App() {
               adminCredits={adminOverview.adminCredits}
               dashboardStats={adminOverview.dashboardStats}
               providerMetrics={adminOverview.providerMetrics}
+              providerRisks={adminOverview.providerRisks}
               visionaryDocSync={adminOverview.visionaryDocSync}
               imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}

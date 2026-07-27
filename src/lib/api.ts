@@ -149,6 +149,20 @@ export interface ProviderMetricRow {
   totalResponseMs: number;
 }
 
+export interface ProviderRiskRecord {
+  traceId: string;
+  modelId: string;
+  configuration: string;
+  createdAt: string;
+  updatedAt: string;
+  junliaiStatus: 'not_called' | 'success' | 'explicit_failure' | 'uncertain';
+  junliaiDurationMs: number;
+  visionaryStatus: 'not_called' | 'success' | 'failure';
+  visionaryDurationMs: number;
+  riskLevel: 'normal' | 'review' | 'suspected_duplicate';
+  riskReason: string;
+}
+
 export interface VisionaryDocSyncStatus {
   lastAttemptAt: string;
   lastCheckedAt: string;
@@ -651,6 +665,7 @@ export async function fetchAdminDashboard() {
   return request<{
     stats: AdminDashboardStats;
     providerMetrics: ProviderMetricRow[];
+    providerRisks: ProviderRiskRecord[];
     imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
     visionaryDocSync: VisionaryDocSyncStatus;

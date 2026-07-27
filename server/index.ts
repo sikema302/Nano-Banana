@@ -32,6 +32,7 @@ import {
   type ImageGenerationInput,
 } from './image-provider-router.js';
 import { createProviderMetrics } from './provider-metrics.js';
+import { createProviderRiskMonitor } from './provider-risk-monitor.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -390,7 +391,7 @@ const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
 const JUNLIAI_BASE_URL = normalizeEnvValue(process.env.JUNLIAI_BASE_URL || 'https://img.junliai.org');
 const JUNLIAI_API_KEY = normalizeEnvValue(process.env.JUNLIAI_API_KEY);
 const JUNLIAI_MODEL = normalizeEnvValue(process.env.JUNLIAI_MODEL || 'firefly-gpt-image-2');
-const JUNLIAI_TIMEOUT_MS = Math.max(30_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 240_000));
+const JUNLIAI_TIMEOUT_MS = Math.max(15 * 60_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 15 * 60_000));
 const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 3));
 const JUNLIAI_TRANSIENT_COOLDOWN_MS = Math.max(
   60_000,
@@ -3729,6 +3730,7 @@ async function callVisionaryGeneration({
 
 let imageProviderRouter: ReturnType<typeof createImageProviderRouter> | null = null;
 let providerMetrics: ReturnType<typeof createProviderMetrics> | null = null;
+let providerRiskMonitor: ReturnType<typeof createProviderRiskMonitor> | null = null;
 
 async function callImageGeneration(input: ImageGenerationInput) {
   if (!imageProviderRouter) {
@@ -4362,6 +4364,10 @@ async function start() {
     store: visionaryDocSyncStore,
     timeZone: ADMIN_STATS_TIME_ZONE,
   });
+  providerRiskMonitor = createProviderRiskMonitor({
+    store: visionaryDocSyncStore,
+    timeZone: ADMIN_STATS_TIME_ZONE,
+  });
   imageProviderRouter = createImageProviderRouter({
     baseUrl: JUNLIAI_PRIMARY_ENABLED ? JUNLIAI_BASE_URL : '',
     authorization: JUNLIAI_API_KEY,
@@ -4384,7 +4390,12 @@ async function start() {
       set: (state) => visionaryDocSyncStore.set(JUNLIAI_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
     },
     fallback: callVisionaryGeneration,
-    onAttempt: (attempt) => providerMetrics?.record(attempt),
+    onAttempt: async (attempt) => {
+      await Promise.all([
+        providerMetrics?.record(attempt),
+        providerRiskMonitor?.record(attempt),
+      ]);
+    },
   });
   await startVisionaryDocSyncScheduler(visionaryDocSyncStore, {
     baseUrl: VISIONARY_API_BASE_URL,
@@ -6854,9 +6865,10 @@ async function start() {
 
   app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const [imageStorage, providerMetricRows] = await Promise.all([
+      const [imageStorage, providerMetricRows, providerRiskRows] = await Promise.all([
         getImageStorageStats(),
         providerMetrics?.getToday() || Promise.resolve([]),
+        providerRiskMonitor?.getToday() || Promise.resolve([]),
       ]);
 
       if (USE_SUPABASE) {
@@ -6885,6 +6897,7 @@ async function start() {
           },
           imageStorage,
           providerMetrics: providerMetricRows,
+          providerRisks: providerRiskRows,
           adminCredits,
           visionaryDocSync: getVisionaryDocSyncStatus(),
         });
@@ -6917,6 +6930,7 @@ async function start() {
           },
           imageStorage,
           providerMetrics: providerMetricRows,
+          providerRisks: providerRiskRows,
           adminCredits: getAdminCreditSummary(db),
           visionaryDocSync: getVisionaryDocSyncStatus(),
         };

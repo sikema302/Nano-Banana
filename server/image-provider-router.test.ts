@@ -154,3 +154,85 @@ test('keeps non-GPT models on the existing provider', async () => {
   assert.equal(await router.generate({ ...input, modelId: 'Nano_Banana_Pro' }), 'visionary');
   assert.equal(primaryCalls, 0);
 });
+
+test('does not call the fallback when the primary request times out with an uncertain result', async () => {
+  const store = createStore();
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 10,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+    fetchImpl: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }),
+  });
+
+  await assert.rejects(
+    () => router.generate(input),
+    /为避免重复扣费/,
+  );
+  assert.equal(fallbackCalls, 0);
+  assert.equal(store.state()?.reason, 'uncertain');
+  assert.equal(store.state()?.openUntil, 0);
+});
+
+test('calls the fallback when Junliai explicitly returns a server error', async () => {
+  const store = createStore();
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+    fetchImpl: async () => new Response(
+      JSON.stringify({ error: { message: 'generation failed' } }),
+      { status: 500 },
+    ),
+  });
+
+  assert.equal(await router.generate(input), 'fallback');
+  assert.equal(fallbackCalls, 1);
+});
+
+test('calls the fallback when Junliai returns success without an image', async () => {
+  const store = createStore();
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+    fetchImpl: async () => new Response(JSON.stringify({ data: [] })),
+  });
+
+  assert.equal(await router.generate(input), 'fallback');
+  assert.equal(fallbackCalls, 1);
+});

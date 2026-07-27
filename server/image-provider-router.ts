@@ -35,11 +35,13 @@ type RouterOptions = {
   now?: () => number;
   logger?: Pick<Console, 'info' | 'warn'>;
   onAttempt?: (attempt: {
+    traceId: string;
     modelId: string;
     provider: string;
     configuration: string;
     durationMs: number;
     success: boolean;
+    failureReason?: string;
   }) => void | Promise<void>;
 };
 
@@ -120,28 +122,28 @@ function errorText(error: unknown) {
 function classifyFailure(error: unknown) {
   const message = errorText(error).toLowerCase();
   const status = Number((error as { status?: unknown })?.status || 0);
+  const safeToFallback = Boolean((error as { safeToFallback?: unknown })?.safeToFallback) || status >= 400;
   if (
     status === 401 ||
     status === 403 ||
     /unauthorized|forbidden|invalid token|token expired|authentication/.test(message)
   ) {
-    return { kind: 'auth', immediate: true };
+    return { kind: 'auth', immediate: true, safeToFallback };
   }
   if (
     status === 402 ||
     status === 429 ||
     /quota|insufficient|credit|balance|rate.?limit|too many requests|usage limit|额度|余额|限额/.test(message)
   ) {
-    return { kind: 'quota', immediate: true };
+    return { kind: 'quota', immediate: true, safeToFallback };
   }
-  return { kind: 'transient', immediate: false };
+  return { kind: 'transient', immediate: false, safeToFallback };
 }
 
 export function createImageProviderRouter(options: RouterOptions) {
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
   const logger = options.logger || console;
-  let probeInFlight = false;
   let cachedState: PrimaryCircuitState | null = null;
 
   function configuration(input: ImageGenerationInput) {
@@ -149,32 +151,36 @@ export function createImageProviderRouter(options: RouterOptions) {
   }
 
   async function reportAttempt(
+    traceId: string,
     input: ImageGenerationInput,
     provider: string,
     startedAt: number,
     success: boolean,
+    failureReason = '',
   ) {
     try {
       await options.onAttempt?.({
+        traceId,
         modelId: input.modelId,
         provider,
         configuration: configuration(input),
         durationMs: Math.max(0, now() - startedAt),
         success,
+        failureReason: failureReason || undefined,
       });
     } catch (error) {
       logger.warn('[image-provider] failed to record provider metrics:', errorText(error));
     }
   }
 
-  async function callFallback(input: ImageGenerationInput) {
+  async function callFallback(input: ImageGenerationInput, traceId: string) {
     const startedAt = now();
     try {
       const result = await options.fallback(input);
-      await reportAttempt(input, 'Visionary', startedAt, true);
+      await reportAttempt(traceId, input, 'Visionary', startedAt, true);
       return result;
     } catch (error) {
-      await reportAttempt(input, 'Visionary', startedAt, false);
+      await reportAttempt(traceId, input, 'Visionary', startedAt, false, 'explicit_failure');
       throw error;
     }
   }
@@ -195,6 +201,7 @@ export function createImageProviderRouter(options: RouterOptions) {
   async function callPrimary(input: ImageGenerationInput) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+    let requestSent = false;
     try {
       const baseUrl = options.baseUrl.replace(/\/+$/, '');
       const headers: Record<string, string> = {
@@ -223,6 +230,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           response_format: 'b64_json',
         });
       }
+      requestSent = true;
       const response = await fetchImpl(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers,
@@ -239,44 +247,73 @@ export function createImageProviderRouter(options: RouterOptions) {
       if (!response.ok) {
         const error = new Error(
           payloadError(payload) || `Primary image provider returned HTTP ${response.status}: ${raw.slice(0, 300)}`,
-        ) as Error & { status: number };
+        ) as Error & { status: number; safeToFallback: boolean };
         error.status = response.status;
+        error.safeToFallback = true;
         throw error;
       }
       const imageSource = extractGeneratedImageSource(payload);
       if (!imageSource) {
-        throw new Error(`Primary image provider returned no image: ${raw.slice(0, 300)}`);
+        const error = new Error(`Primary image provider returned no image: ${raw.slice(0, 300)}`) as Error & {
+          safeToFallback: boolean;
+        };
+        error.safeToFallback = true;
+        throw error;
       }
       return imageSource;
+    } catch (error) {
+      if (!requestSent && error && typeof error === 'object') {
+        (error as { safeToFallback?: boolean }).safeToFallback = true;
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
   }
 
   async function generate(input: ImageGenerationInput) {
+    const traceId = crypto.randomUUID();
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEligible = primaryConfigured && input.modelId === 'gpt-image-2';
-    if (!primaryEligible) return callFallback(input);
+    if (!primaryEligible) return callFallback(input, traceId);
 
     const state = await readState();
     const currentTime = now();
-    if (state.openUntil > currentTime || probeInFlight) {
-      return callFallback(input);
+    if (state.openUntil > currentTime) {
+      return callFallback(input, traceId);
     }
 
-    probeInFlight = true;
     const primaryStartedAt = now();
     try {
       const result = await callPrimary(input);
-      await reportAttempt(input, 'Junliai', primaryStartedAt, true);
+      await reportAttempt(traceId, input, 'Junliai', primaryStartedAt, true);
       if (state.consecutiveFailures || state.openUntil) {
         await writeState({ ...CLOSED_STATE, updatedAt: new Date(currentTime).toISOString() });
         logger.info('[image-provider] primary provider recovered; circuit closed');
       }
       return result;
     } catch (error) {
-      await reportAttempt(input, 'Junliai', primaryStartedAt, false);
       const failure = classifyFailure(error);
+      await reportAttempt(
+        traceId,
+        input,
+        'Junliai',
+        primaryStartedAt,
+        false,
+        failure.safeToFallback ? failure.kind : 'uncertain',
+      );
+      if (!failure.safeToFallback) {
+        await writeState({
+          consecutiveFailures: 0,
+          openUntil: 0,
+          reason: 'uncertain',
+          updatedAt: new Date(currentTime).toISOString(),
+        });
+        logger.warn('[image-provider] primary result is uncertain; fallback suppressed to avoid duplicate billing');
+        throw new Error(
+          '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试',
+        );
+      }
       const consecutiveFailures = state.consecutiveFailures + 1;
       const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
       const cooldownMs =
@@ -294,9 +331,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       logger.warn(
         `[image-provider] primary failed (${failure.kind}); using fallback${shouldOpen ? ` for ${Math.ceil(cooldownMs / 60000)}m` : ''}`,
       );
-      return callFallback(input);
-    } finally {
-      probeInFlight = false;
+      return callFallback(input, traceId);
     }
   }
 
