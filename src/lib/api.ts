@@ -138,6 +138,17 @@ export interface AdminDashboardStats {
   usedInviteCodeCount: number;
 }
 
+export interface ProviderMetricRow {
+  modelId: string;
+  provider: string;
+  configuration: string;
+  callCount: number;
+  successCount: number;
+  failureCount: number;
+  averageResponseMs: number;
+  totalResponseMs: number;
+}
+
 export interface VisionaryDocSyncStatus {
   lastAttemptAt: string;
   lastCheckedAt: string;
@@ -617,6 +628,7 @@ function appendOptionalParam(query: URLSearchParams, key: string, value: unknown
 export async function fetchAdminDashboard() {
   return request<{
     stats: AdminDashboardStats;
+    providerMetrics: ProviderMetricRow[];
     imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
     visionaryDocSync: VisionaryDocSyncStatus;

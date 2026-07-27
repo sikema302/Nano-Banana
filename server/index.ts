@@ -31,6 +31,7 @@ import {
   createImageProviderRouter,
   type ImageGenerationInput,
 } from './image-provider-router.js';
+import { createProviderMetrics } from './provider-metrics.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -3576,6 +3577,7 @@ async function callVisionaryGeneration({
 // 鈹€鈹€鈹€ Visionary 寮傛鎺ュ彛璋冪敤 鈹€鈹€鈹€
 
 let imageProviderRouter: ReturnType<typeof createImageProviderRouter> | null = null;
+let providerMetrics: ReturnType<typeof createProviderMetrics> | null = null;
 
 async function callImageGeneration(input: ImageGenerationInput) {
   if (!imageProviderRouter) {
@@ -4205,6 +4207,10 @@ async function start() {
       });
     },
   };
+  providerMetrics = createProviderMetrics({
+    store: visionaryDocSyncStore,
+    timeZone: ADMIN_STATS_TIME_ZONE,
+  });
   imageProviderRouter = createImageProviderRouter({
     baseUrl: JUNLIAI_PRIMARY_ENABLED ? JUNLIAI_BASE_URL : '',
     authorization: JUNLIAI_API_KEY,
@@ -4227,6 +4233,7 @@ async function start() {
       set: (state) => visionaryDocSyncStore.set(JUNLIAI_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
     },
     fallback: callVisionaryGeneration,
+    onAttempt: (attempt) => providerMetrics?.record(attempt),
   });
   await startVisionaryDocSyncScheduler(visionaryDocSyncStore, {
     baseUrl: VISIONARY_API_BASE_URL,
@@ -6550,7 +6557,10 @@ async function start() {
 
   app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const imageStorage = await getImageStorageStats();
+      const [imageStorage, providerMetricRows] = await Promise.all([
+        getImageStorageStats(),
+        providerMetrics?.getToday() || Promise.resolve([]),
+      ]);
 
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
@@ -6577,6 +6587,7 @@ async function start() {
             usedInviteCodeCount: dashboardCounts.usedInviteCodeCount,
           },
           imageStorage,
+          providerMetrics: providerMetricRows,
           adminCredits,
           visionaryDocSync: getVisionaryDocSyncStatus(),
         });
@@ -6608,6 +6619,7 @@ async function start() {
             usedInviteCodeCount: usedInviteCount,
           },
           imageStorage,
+          providerMetrics: providerMetricRows,
           adminCredits: getAdminCreditSummary(db),
           visionaryDocSync: getVisionaryDocSyncStatus(),
         };

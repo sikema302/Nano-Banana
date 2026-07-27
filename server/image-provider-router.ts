@@ -34,6 +34,13 @@ type RouterOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
   logger?: Pick<Console, 'info' | 'warn'>;
+  onAttempt?: (attempt: {
+    modelId: string;
+    provider: string;
+    configuration: string;
+    durationMs: number;
+    success: boolean;
+  }) => void | Promise<void>;
 };
 
 type ImageApiPayload = {
@@ -137,6 +144,41 @@ export function createImageProviderRouter(options: RouterOptions) {
   let probeInFlight = false;
   let cachedState: PrimaryCircuitState | null = null;
 
+  function configuration(input: ImageGenerationInput) {
+    return `${input.imageSize || 'STANDARD'} / ${input.quality || 'default'} / ${input.ratio || '1:1'}`;
+  }
+
+  async function reportAttempt(
+    input: ImageGenerationInput,
+    provider: string,
+    startedAt: number,
+    success: boolean,
+  ) {
+    try {
+      await options.onAttempt?.({
+        modelId: input.modelId,
+        provider,
+        configuration: configuration(input),
+        durationMs: Math.max(0, now() - startedAt),
+        success,
+      });
+    } catch (error) {
+      logger.warn('[image-provider] failed to record provider metrics:', errorText(error));
+    }
+  }
+
+  async function callFallback(input: ImageGenerationInput) {
+    const startedAt = now();
+    try {
+      const result = await options.fallback(input);
+      await reportAttempt(input, 'Visionary', startedAt, true);
+      return result;
+    } catch (error) {
+      await reportAttempt(input, 'Visionary', startedAt, false);
+      throw error;
+    }
+  }
+
   async function readState() {
     if (cachedState) return cachedState;
     cachedState = (await options.store.get().catch(() => null)) || { ...CLOSED_STATE };
@@ -214,23 +256,26 @@ export function createImageProviderRouter(options: RouterOptions) {
   async function generate(input: ImageGenerationInput) {
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEligible = primaryConfigured && input.modelId === 'gpt-image-2';
-    if (!primaryEligible) return options.fallback(input);
+    if (!primaryEligible) return callFallback(input);
 
     const state = await readState();
     const currentTime = now();
     if (state.openUntil > currentTime || probeInFlight) {
-      return options.fallback(input);
+      return callFallback(input);
     }
 
     probeInFlight = true;
+    const primaryStartedAt = now();
     try {
       const result = await callPrimary(input);
+      await reportAttempt(input, 'Junliai', primaryStartedAt, true);
       if (state.consecutiveFailures || state.openUntil) {
         await writeState({ ...CLOSED_STATE, updatedAt: new Date(currentTime).toISOString() });
         logger.info('[image-provider] primary provider recovered; circuit closed');
       }
       return result;
     } catch (error) {
+      await reportAttempt(input, 'Junliai', primaryStartedAt, false);
       const failure = classifyFailure(error);
       const consecutiveFailures = state.consecutiveFailures + 1;
       const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
@@ -249,7 +294,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       logger.warn(
         `[image-provider] primary failed (${failure.kind}); using fallback${shouldOpen ? ` for ${Math.ceil(cooldownMs / 60000)}m` : ''}`,
       );
-      return options.fallback(input);
+      return callFallback(input);
     } finally {
       probeInFlight = false;
     }

@@ -78,6 +78,7 @@ import {
   type ModelInfo,
   type PaginationInfo,
   type PromoCouponInfo,
+  type ProviderMetricRow,
   type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
@@ -155,6 +156,7 @@ interface AdminOverviewState {
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
+  providerMetrics: ProviderMetricRow[];
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
@@ -1905,6 +1907,7 @@ function AdminView({
   inviteCodesPage,
   adminCredits,
   dashboardStats,
+  providerMetrics,
   visionaryDocSync,
   imageStorageStats,
   recordsStats,
@@ -1933,6 +1936,7 @@ function AdminView({
   inviteCodesPage: PaginationInfo;
   adminCredits: CreditSummary;
   dashboardStats: AdminDashboardStats;
+  providerMetrics: ProviderMetricRow[];
   visionaryDocSync: VisionaryDocSyncStatus | null;
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
@@ -2544,6 +2548,67 @@ function AdminView({
                   <p className="mt-2 text-xs text-zinc-500">{card.hint}</p>
                 </div>
               ))}
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-white">{'\u4eca\u65e5\u6a21\u578b\u4e0e\u63a5\u53e3\u8c03\u7528'}</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {'\u6309\u6a21\u578b\u3001\u5b9e\u9645\u547d\u4e2d\u63a5\u53e3\u548c\u751f\u6210\u914d\u7f6e\u5206\u7ec4\uff0c\u54cd\u5e94\u65f6\u95f4\u4e3a\u5f53\u65e5\u5e73\u5747\u503c\u3002'}
+                  </p>
+                </div>
+                <span className="rounded-full border border-sky-400/20 bg-sky-500/10 px-3 py-1 text-xs font-bold text-sky-100">
+                  {`${providerMetrics.reduce((sum, item) => sum + item.callCount, 0)} \u6b21\u4e0a\u6e38\u8c03\u7528`}
+                </span>
+              </div>
+              <div className="custom-scrollbar mt-4 overflow-x-auto rounded-[18px] border border-white/8">
+                <table className="w-full min-w-[820px] text-left text-xs">
+                  <thead className="bg-white/[0.04] text-zinc-500">
+                    <tr>
+                      <th className="px-4 py-3 font-bold">{'\u6a21\u578b'}</th>
+                      <th className="px-4 py-3 font-bold">{'\u5b9e\u9645\u63a5\u53e3'}</th>
+                      <th className="px-4 py-3 font-bold">{'\u914d\u7f6e'}</th>
+                      <th className="px-4 py-3 text-right font-bold">{'\u8c03\u7528\u6b21\u6570'}</th>
+                      <th className="px-4 py-3 text-right font-bold">{'\u6210\u529f / \u5931\u8d25'}</th>
+                      <th className="px-4 py-3 text-right font-bold">{'\u5e73\u5747\u54cd\u5e94\u65f6\u95f4'}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/8">
+                    {providerMetrics.length > 0 ? providerMetrics.map((item) => (
+                      <tr key={`${item.modelId}:${item.provider}:${item.configuration}`} className="text-zinc-300">
+                        <td className="px-4 py-3 font-bold text-white">{item.modelId}</td>
+                        <td className="px-4 py-3">
+                          <span className={`rounded-full border px-2.5 py-1 font-bold ${
+                            item.provider === 'Junliai'
+                              ? 'border-violet-400/25 bg-violet-500/10 text-violet-100'
+                              : 'border-sky-400/25 bg-sky-500/10 text-sky-100'
+                          }`}>
+                            {item.provider}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-zinc-400">{item.configuration}</td>
+                        <td className="px-4 py-3 text-right text-base font-black text-white">{item.callCount}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="font-bold text-emerald-300">{item.successCount}</span>
+                          <span className="mx-1.5 text-zinc-600">/</span>
+                          <span className={item.failureCount > 0 ? 'font-bold text-rose-300' : 'text-zinc-500'}>{item.failureCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-black text-amber-100">
+                          {item.averageResponseMs >= 1000
+                            ? `${(item.averageResponseMs / 1000).toFixed(1)} s`
+                            : `${item.averageResponseMs} ms`}
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td className="px-4 py-8 text-center text-zinc-500" colSpan={6}>
+                          {'\u4eca\u65e5\u6682\u65e0\u4e0a\u6e38\u63a5\u53e3\u8c03\u7528\u8bb0\u5f55'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <h2 className="text-base font-black text-white">数据概览</h2>
@@ -3287,6 +3352,7 @@ export default function App() {
     inviteCodesPage: emptyPage,
     adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
     dashboardStats: emptyDashboardStats,
+    providerMetrics: [],
     imageStorageStats: emptyImageStorageStats,
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
@@ -3684,6 +3750,7 @@ export default function App() {
         setAdminOverview((current) => ({
           ...current,
           dashboardStats: payload.stats,
+          providerMetrics: payload.providerMetrics || [],
           imageStorageStats: payload.imageStorage,
           adminCredits: payload.adminCredits,
           visionaryDocSync: payload.visionaryDocSync,
@@ -4438,6 +4505,7 @@ export default function App() {
       inviteCodesPage: emptyPage,
       adminCredits: { totalCredits: 0, usedCredits: 0, remainingCredits: 0 },
       dashboardStats: emptyDashboardStats,
+      providerMetrics: [],
       imageStorageStats: emptyImageStorageStats,
       recordsStats: emptyRecordsStats,
       recordModelOptions: [],
@@ -5231,6 +5299,7 @@ export default function App() {
               inviteCodesPage={adminOverview.inviteCodesPage}
               adminCredits={adminOverview.adminCredits}
               dashboardStats={adminOverview.dashboardStats}
+              providerMetrics={adminOverview.providerMetrics}
               visionaryDocSync={adminOverview.visionaryDocSync}
               imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
