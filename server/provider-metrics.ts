@@ -32,6 +32,20 @@ type ProviderMetricsOptions = {
 
 type StoredMetricRow = Omit<ProviderMetricRow, 'averageResponseMs'>;
 
+function canonicalConfiguration(modelId: string, configuration: string) {
+  const normalizedModel = modelId.toLowerCase();
+  const imageSize = String(configuration || '').split('/')[0].trim().toUpperCase();
+  if (normalizedModel.includes('banana')) {
+    return imageSize === '4K' ? '4K' : '2K';
+  }
+  if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalizedModel)) {
+    if (imageSize === '4K') return '4K';
+    if (imageSize === '2K') return '2K';
+    return 'STANDARD';
+  }
+  return configuration || 'default';
+}
+
 function dateKey(date: Date, timeZone: string) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -61,7 +75,22 @@ function normalizeRows(raw: string): StoredMetricRow[] {
 }
 
 function publicRows(rows: StoredMetricRow[]): ProviderMetricRow[] {
-  return rows
+  const merged = new Map<string, StoredMetricRow>();
+  for (const row of rows) {
+    const configuration = canonicalConfiguration(row.modelId, row.configuration);
+    const key = `${row.modelId}\u0000${row.provider}\u0000${configuration}`;
+    const current = merged.get(key);
+    if (current) {
+      current.callCount += row.callCount;
+      current.successCount += row.successCount;
+      current.failureCount += row.failureCount;
+      current.totalResponseMs += row.totalResponseMs;
+    } else {
+      merged.set(key, { ...row, configuration });
+    }
+  }
+
+  return [...merged.values()]
     .map((row) => ({
       ...row,
       averageResponseMs: row.callCount > 0 ? Math.round(row.totalResponseMs / row.callCount) : 0,
@@ -99,7 +128,10 @@ export function createProviderMetrics(options: ProviderMetricsOptions) {
       const rows = await load(day);
       const modelId = String(attempt.modelId || 'unknown');
       const provider = String(attempt.provider || 'unknown');
-      const configuration = String(attempt.configuration || 'default');
+      const configuration = canonicalConfiguration(
+        modelId,
+        String(attempt.configuration || 'default'),
+      );
       let row = rows.find((item) =>
         item.modelId === modelId &&
         item.provider === provider &&
@@ -134,4 +166,3 @@ export function createProviderMetrics(options: ProviderMetricsOptions) {
 
   return { record, getToday };
 }
-
