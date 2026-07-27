@@ -175,7 +175,14 @@ npm run db:sync:supabase
 
 ## Public API (Async)
 
-Pixory submits generation to Visionary's async API and immediately returns Pixory's own task ID. Tasks are bound to the API key that created them, survive server restarts through the configured database, and persist the completed image locally before returning it. Failed tasks automatically refund reserved credits.
+Pixory submits generation through the same server-side model gateway used by the
+website and immediately returns Pixory's own task ID. GPT Image requests use the
+configured primary provider first and automatically fall back to Visionary when
+the primary provider is unavailable or quota-limited. Provider switching does
+not change public model names, request/response formats, task IDs, polling
+endpoints, or billing. Tasks are bound to the API key that created them, survive
+server restarts through the configured database, and persist the completed image
+locally before returning it. Failed tasks automatically refund reserved credits.
 
 ### Submit async task
 

@@ -58,7 +58,20 @@ POST /v1/async/images/generations
 GET  /v1/async/images/generations/{task_id}
 ```
 
-GPT Image requests use the configured Chat2API service first. PIXORY
-automatically falls back to the existing Visionary provider when the primary
-service fails or runs out of quota. The circuit state is persisted so quota
-failures are not retried on every user request.
+## Intelligent routing and compatibility
+
+All website and public API image requests use the same PIXORY model gateway.
+For `gpt-image-2`, PIXORY uses the current primary image provider first and
+automatically falls back to the standby provider when the primary provider is
+unavailable, times out, rejects authentication, or runs out of quota.
+
+Routing is entirely server-side. Existing integrations do not need to change:
+
+- endpoint URLs and authentication remain unchanged;
+- continue sending the public model name `gpt-image-2`;
+- request parameters, task IDs, polling endpoints, and response shapes remain unchanged;
+- a provider fallback never charges PIXORY credits twice;
+- failed asynchronous tasks continue to refund reserved credits.
+
+Do not send an upstream provider's internal model name. PIXORY may change its
+upstream providers without changing this public API contract.

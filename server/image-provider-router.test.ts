@@ -94,6 +94,7 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
   const store = createStore();
   let primaryCalls = 0;
   let fallbackCalls = 0;
+  const attempts: Array<{ provider: string; success: boolean; configuration: string }> = [];
   const router = createImageProviderRouter({
     baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
@@ -112,6 +113,9 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
       primaryCalls += 1;
       return new Response(JSON.stringify({ error: { message: 'quota exhausted' } }), { status: 429 });
     },
+    onAttempt: async ({ provider, success, configuration }) => {
+      attempts.push({ provider, success, configuration });
+    },
     now: () => 1_000,
   });
 
@@ -120,6 +124,11 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
   assert.equal(primaryCalls, 1);
   assert.equal(fallbackCalls, 2);
   assert.ok((store.state()?.openUntil || 0) > 1_000);
+  assert.deepEqual(attempts, [
+    { provider: 'Junliai', success: false, configuration: 'STANDARD / auto / 1:1' },
+    { provider: 'Visionary', success: true, configuration: 'STANDARD / auto / 1:1' },
+    { provider: 'Visionary', success: true, configuration: 'STANDARD / auto / 1:1' },
+  ]);
 });
 
 test('keeps non-GPT models on the existing provider', async () => {

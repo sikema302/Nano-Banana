@@ -1217,6 +1217,12 @@ function ApiDocsView({
                     </article>
                   ))}
                 </div>
+                <div className="mt-4 rounded-xl border border-sky-400/20 bg-sky-500/10 px-4 py-3">
+                  <h3 className="text-sm font-black text-sky-100">{'\u667a\u80fd\u8def\u7531\uff0c\u65e7\u63a5\u5165\u96f6\u6539\u52a8'}</h3>
+                  <p className="mt-1 text-xs leading-6 text-sky-100/70">
+                    {'GPT-image-2 \u4e0e\u7f51\u7ad9\u5171\u7528\u540c\u4e00\u5957\u4e3b\u5907\u63a5\u53e3\u8def\u7531\u3002\u4e3b\u63a5\u53e3\u989d\u5ea6\u4e0d\u8db3\u3001\u8d85\u65f6\u6216\u5f02\u5e38\u65f6\u4f1a\u81ea\u52a8\u5207\u6362\u5907\u7528\u63a5\u53e3\uff1b\u539f\u6709 API Key\u3001\u6a21\u578b\u540d\u3001\u8bf7\u6c42\u53c2\u6570\u3001\u4efb\u52a1 ID\u3001\u67e5\u8be2\u5730\u5740\u3001\u8fd4\u56de\u7ed3\u6784\u548c\u8ba1\u8d39\u65b9\u5f0f\u4fdd\u6301\u4e0d\u53d8\u3002'}
+                  </p>
+                </div>
               </section>
               <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
                 <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
