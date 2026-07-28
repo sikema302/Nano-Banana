@@ -5,6 +5,13 @@ import { createProviderMetrics } from './provider-metrics.js';
 
 test('aggregates GPT Image attempts into STANDARD, 2K, and 4K groups', async () => {
   const values = new Map<string, string>();
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const timestamp = new Date().toISOString();
   const metrics = createProviderMetrics({
     store: {
       get: async (key, fallback) => values.get(key) || fallback,
@@ -20,7 +27,7 @@ test('aggregates GPT Image attempts into STANDARD, 2K, and 4K groups', async () 
     configuration: 'STANDARD / auto / 1:1',
     durationMs: 100,
     success: true,
-    timestamp: '2026-07-27T01:00:00+08:00',
+    timestamp,
   });
   await metrics.record({
     modelId: 'gpt-image-2',
@@ -28,10 +35,10 @@ test('aggregates GPT Image attempts into STANDARD, 2K, and 4K groups', async () 
     configuration: '2K / high / 16:9',
     durationMs: 300,
     success: false,
-    timestamp: '2026-07-27T02:00:00+08:00',
+    timestamp,
   });
 
-  const rows = JSON.parse(values.get('provider_metrics_daily_v1:2026-07-27') || '[]');
+  const rows = JSON.parse(values.get(`provider_metrics_daily_v1:${today}`) || '[]');
   assert.deepEqual(rows, [
     {
       modelId: 'gpt-image-2',

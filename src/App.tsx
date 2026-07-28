@@ -2126,6 +2126,7 @@ function AdminView({
   const [deductingUserId, setDeductingUserId] = useState('');
   const [deletingUserId, setDeletingUserId] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
+  const [selectedProviderRisks, setSelectedProviderRisks] = useState<ProviderRiskRecord[]>([]);
   const [inviteBatchCount, setInviteBatchCount] = useState(1);
   const [batchCopied, setBatchCopied] = useState(false);
   const [generatedInviteCodes, setGeneratedInviteCodes] = useState<string[]>([]);
@@ -2701,7 +2702,7 @@ function AdminView({
                 </span>
               </div>
               <div className="custom-scrollbar mt-4 overflow-x-auto rounded-[18px] border border-white/8">
-                <table className="w-full min-w-[820px] text-left text-xs">
+                <table className="w-full min-w-[980px] text-left text-xs">
                   <thead className="bg-white/[0.04] text-zinc-500">
                     <tr>
                       <th className="px-4 py-3 font-bold">{'\u6a21\u578b'}</th>
@@ -2710,6 +2711,7 @@ function AdminView({
                       <th className="px-4 py-3 text-right font-bold">{'\u8c03\u7528\u6b21\u6570'}</th>
                       <th className="px-4 py-3 text-right font-bold">{'\u6210\u529f / \u5931\u8d25'}</th>
                       <th className="px-4 py-3 text-right font-bold">{'\u5e73\u5747\u54cd\u5e94\u65f6\u95f4'}</th>
+                      <th className="px-4 py-3 text-right font-bold">{'\u8ba1\u8d39\u98ce\u9669'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/8">
@@ -2737,10 +2739,37 @@ function AdminView({
                             ? `${(item.averageResponseMs / 1000).toFixed(1)} s`
                             : `${item.averageResponseMs} ms`}
                         </td>
+                        <td className="px-4 py-3 text-right">
+                          {(() => {
+                            const matches = providerRisks.filter((risk) => {
+                              const riskConfiguration = risk.configuration.split('/')[0].trim().toUpperCase() || 'STANDARD';
+                              const providerCalled = item.provider === 'Junliai'
+                                ? risk.junliaiStatus !== 'not_called'
+                                : risk.visionaryStatus !== 'not_called';
+                              return risk.modelId === item.modelId
+                                && riskConfiguration === item.configuration.toUpperCase()
+                                && providerCalled
+                                && risk.riskLevel !== 'normal';
+                            });
+                            const suspected = matches.filter((risk) => risk.riskLevel === 'suspected_duplicate').length;
+                            if (matches.length === 0) {
+                              return <span className="text-emerald-300">{'\u6b63\u5e38'}</span>;
+                            }
+                            return (
+                              <button
+                                className={`rounded-full border px-2.5 py-1 font-bold ${suspected > 0 ? 'border-rose-400/30 bg-rose-500/10 text-rose-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}
+                                type="button"
+                                onClick={() => setSelectedProviderRisks(matches)}
+                              >
+                                {suspected > 0 ? `\u7591\u4f3c ${suspected}` : `\u5f85\u6838\u5bf9 ${matches.length}`}
+                              </button>
+                            );
+                          })()}
+                        </td>
                       </tr>
                     )) : (
                       <tr>
-                        <td className="px-4 py-8 text-center text-zinc-500" colSpan={6}>
+                        <td className="px-4 py-8 text-center text-zinc-500" colSpan={7}>
                           {'\u4eca\u65e5\u6682\u65e0\u4e0a\u6e38\u63a5\u53e3\u8c03\u7528\u8bb0\u5f55'}
                         </td>
                       </tr>
@@ -2749,7 +2778,7 @@ function AdminView({
                 </table>
               </div>
             </div>
-            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+            <div className="hidden">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h2 className="text-base font-black text-white">{'\u4e0a\u6e38\u8ba1\u8d39\u98ce\u9669\u76d1\u63a7'}</h2>
@@ -3501,6 +3530,47 @@ function AdminView({
               <Copy size={15} />
               {batchCopied ? '\u5df2\u590d\u5236' : '\u590d\u5236\u5168\u90e8'}
             </button>
+          </div>
+        </div>
+      ) : null}
+      {selectedProviderRisks.length > 0 ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <button aria-label="Close" className="absolute inset-0" type="button" onClick={() => setSelectedProviderRisks([])} />
+          <div className="relative max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-[26px] border border-white/10 bg-[#0d0f17] shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-black text-white">{'\u8ba1\u8d39\u98ce\u9669\u8be6\u60c5'}</h2>
+                <p className="mt-1 text-xs text-zinc-500">{'\u8bf7\u4f7f\u7528\u8ffd\u8e2a ID \u5bf9\u7167\u4e24\u4e2a\u4e0a\u6e38\u7684\u8bf7\u6c42\u6216\u6d88\u8d39\u6d41\u6c34\u3002'}</p>
+              </div>
+              <button className="rounded-full border border-white/10 p-2 text-zinc-400 hover:text-white" type="button" onClick={() => setSelectedProviderRisks([])}><X size={16} /></button>
+            </div>
+            <div className="custom-scrollbar max-h-[65vh] space-y-3 overflow-y-auto p-5">
+              {selectedProviderRisks.map((risk) => (
+                <article key={risk.traceId} className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-bold text-white">{risk.modelId} · {risk.configuration}</div>
+                      <div className="mt-1 text-[11px] text-zinc-500">{new Date(risk.createdAt).toLocaleString('zh-CN')}</div>
+                    </div>
+                    <span className={`rounded-full border px-2.5 py-1 text-xs font-bold ${risk.riskLevel === 'suspected_duplicate' ? 'border-rose-400/30 bg-rose-500/10 text-rose-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                      {risk.riskLevel === 'suspected_duplicate' ? '\u7591\u4f3c\u91cd\u590d\u8ba1\u8d39' : '\u5f85\u6838\u5bf9'}
+                    </span>
+                  </div>
+                  <code className="mt-3 block break-all rounded-lg bg-white/[0.04] px-3 py-2 text-[11px] text-sky-200">{risk.traceId}</code>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-xl border border-violet-400/15 bg-violet-500/[0.06] p-3 text-xs text-zinc-300">
+                      <div className="font-bold text-violet-200">Junliai</div>
+                      <div className="mt-1">{risk.junliaiStatus} · {(risk.junliaiDurationMs / 1000).toFixed(1)} s</div>
+                    </div>
+                    <div className="rounded-xl border border-sky-400/15 bg-sky-500/[0.06] p-3 text-xs text-zinc-300">
+                      <div className="font-bold text-sky-200">Visionary</div>
+                      <div className="mt-1">{risk.visionaryStatus} · {(risk.visionaryDurationMs / 1000).toFixed(1)} s</div>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-zinc-400">{risk.riskReason}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </div>
       ) : null}
