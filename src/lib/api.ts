@@ -6,6 +6,7 @@ export interface UserInfo {
   id: string;
   username: string;
   isAdmin?: boolean;
+  canRedeemInvite?: boolean;
   creditsRemaining?: number;
 }
 
@@ -39,6 +40,19 @@ export interface GenerationJobInfo {
   completedAt?: string;
   image?: GeneratedImagePayload;
   error?: string;
+}
+
+export interface VideoGenerationJobInfo {
+  id: string;
+  status: 'queued' | 'processing' | 'succeeded' | 'failed';
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  videoUrl?: string;
+  error?: string;
+  creditsUsed?: number;
+  creditsRemaining?: number;
 }
 
 export interface SavedImage {
@@ -84,6 +98,13 @@ export interface AdminUserSummary {
   apiKeyId?: string;
   lastGeneratedAt: string;
   usageTrend?: number[];
+}
+
+export interface InviteRedemptionRecord {
+  code: string;
+  credits: number;
+  redeemedAt: string;
+  createdAt: string;
 }
 
 export interface CreditSummary {
@@ -618,6 +639,28 @@ export async function fetchGenerateImageJob(jobId: string) {
   };
 }
 
+export async function startGenerateVideoJob(payload: {
+  prompt: string;
+  ratio: '16:9' | '1:1' | '9:16';
+  resolution: '720p' | '1080p';
+  seconds: 5;
+  referenceImages: Array<{ name: string; mimeType: string; data: string }>;
+}) {
+  return request<{ job: VideoGenerationJobInfo }>(
+    '/api/generate/video/jobs',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  );
+}
+
+export async function fetchGenerateVideoJob(jobId: string) {
+  return request<{ job: VideoGenerationJobInfo }>(
+    `/api/generate/video/jobs/${encodeURIComponent(jobId)}`,
+    {},
+    true,
+  );
+}
+
 export async function fetchUserImages(category?: ImageCategory) {
   const query = category ? `?category=${category}` : '';
   const result = await request<{ images: SavedImage[] }>(`/api/user/images${query}`, {}, true);
@@ -725,6 +768,14 @@ export async function fetchAdminUsers(params: {
     users: AdminUserSummary[];
     usersPage: PaginationInfo;
   }>(`/api/admin/users${suffix}`, {}, true);
+}
+
+export async function fetchAdminUserInviteRedemptions(userId: string) {
+  return request<{ redemptions: InviteRedemptionRecord[] }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/invite-redemptions`,
+    {},
+    true,
+  );
 }
 
 export async function rechargeAdminUserCredits(userId: string, credits: number) {

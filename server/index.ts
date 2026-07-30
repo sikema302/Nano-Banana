@@ -22,6 +22,7 @@ import {
   isValidImageBuffer,
 } from './generated-image-download.js';
 import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
+import { getVideoGenerationCredits, type VideoResolution } from '../src/lib/video-pricing.js';
 import {
   getActiveGptImagePricing,
   getVisionaryDocSyncStatus,
@@ -85,6 +86,7 @@ type PublicUser = {
   id: string;
   username: string;
   isAdmin: boolean;
+  canRedeemInvite: boolean;
   creditsRemaining?: number;
 };
 
@@ -405,6 +407,8 @@ const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
   60_000,
   Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
 );
+const VIDEO_MODEL_ID = 'firefly-video';
+const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -1446,11 +1450,16 @@ function isAdminUser(user: AuthUser) {
   return adminUsernames().includes(user.username.toLowerCase());
 }
 
+function isInviteLoginUser(user: AuthUser) {
+  return user.username.toLowerCase().startsWith('invite-');
+}
+
 function toPublicUser(user: AuthUser): PublicUser {
   return {
     id: user.userId,
     username: user.username,
     isAdmin: isAdminUser(user),
+    canRedeemInvite: !isInviteLoginUser(user),
   };
 }
 
@@ -3739,6 +3748,127 @@ async function callImageGeneration(input: ImageGenerationInput) {
   return imageProviderRouter.generate(input);
 }
 
+function videoSize(ratio: string, resolution: string) {
+  const sizes: Record<string, Record<string, string>> = {
+    '720p': { '16:9': '1280x720', '1:1': '720x720', '9:16': '720x1280' },
+    '1080p': { '16:9': '1920x1080', '1:1': '1080x1080', '9:16': '1080x1920' },
+  };
+  return sizes[resolution]?.[ratio] || sizes['720p']['16:9'];
+}
+
+function dataUrlBlob(value: string) {
+  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) throw new Error('Invalid video reference image');
+  const bytes = match[2]
+    ? Buffer.from(match[3].replace(/\s+/g, ''), 'base64')
+    : Buffer.from(decodeURIComponent(match[3]));
+  return new Blob([bytes], { type: match[1] || 'image/png' });
+}
+
+async function parseJunliaiVideoResponse(response: globalThis.Response) {
+  const text = await response.text();
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    throw new Error(
+      stringifyApiErrorValue(payload) ||
+      `Video provider returned HTTP ${response.status}: ${text.slice(0, 240)}`,
+    );
+  }
+  return payload;
+}
+
+async function createJunliaiVideoTask(input: {
+  prompt: string;
+  ratio: string;
+  resolution: string;
+  referenceImages: ReferenceUploadInput[];
+}) {
+  const url = `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos`;
+  const headers: Record<string, string> = {
+    Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}`,
+  };
+  let body: BodyInit;
+  if (input.referenceImages.length > 0) {
+    const form = new FormData();
+    form.set('model', VIDEO_MODEL_ID);
+    form.set('prompt', input.prompt);
+    form.set('seconds', '5');
+    form.set('size', videoSize(input.ratio, input.resolution));
+    form.set('response_format', 'url');
+    input.referenceImages.slice(0, 1).forEach((item, index) => {
+      form.append('input_reference', dataUrlBlob(item.data), item.name || `reference-${index + 1}.png`);
+    });
+    body = form;
+  } else {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify({
+      model: VIDEO_MODEL_ID,
+      prompt: input.prompt,
+      seconds: '5',
+      size: videoSize(input.ratio, input.resolution),
+      response_format: 'url',
+    });
+  }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body,
+    signal: AbortSignal.timeout(60_000),
+  });
+  const payload = await parseJunliaiVideoResponse(response);
+  const taskId = normalizeString(payload.id);
+  if (!taskId) throw new Error('Video provider returned no task id');
+  return { taskId, payload };
+}
+
+async function archiveJunliaiVideo(taskId: string, videoUrl: string) {
+  const headers = videoUrl
+    ? undefined
+    : { Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}` };
+  const source = videoUrl || `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos/${encodeURIComponent(taskId)}/content`;
+  const response = await fetch(source, { headers, signal: AbortSignal.timeout(5 * 60_000) });
+  if (!response.ok) throw new Error(`Video download failed (${response.status})`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.byteLength < 1_024) throw new Error('Video provider returned an empty video');
+  const fileName = `generated-video-${Date.now()}-${randomHex(4)}.mp4`;
+  await fs.writeFile(path.join(GENERATED_DIR, fileName), buffer);
+  return `/uploads/generated/${fileName}`;
+}
+
+async function waitForJunliaiVideo(taskId: string, onProgress: (progress: number) => void) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < VIDEO_JOB_TIMEOUT_MS) {
+    const response = await fetch(
+      `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos/${encodeURIComponent(taskId)}`,
+      {
+        headers: {
+          Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}`,
+        },
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    const payload = await parseJunliaiVideoResponse(response);
+    const status = normalizeString(payload.status).toLowerCase();
+    const progress = Math.max(12, Math.min(95, Number(payload.progress || 0)));
+    onProgress(Number.isFinite(progress) ? progress : 20);
+    if (status === 'completed' || status === 'succeeded') {
+      const data = Array.isArray(payload.data) ? payload.data[0] as Record<string, unknown> | undefined : undefined;
+      const url = normalizeString(payload.url || payload.video_url || data?.url);
+      return archiveJunliaiVideo(taskId, url);
+    }
+    if (status === 'failed' || status === 'cancelled') {
+      throw new Error(stringifyApiErrorValue(payload) || 'Video generation failed');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error('Video generation timed out');
+}
+
 async function callVisionaryAsyncGeneration({
   prompt,
   modelId,
@@ -4760,6 +4890,11 @@ async function start() {
   };
 
   app.post('/api/user/redeem-invite', requireAuth, async (req, res) => {
+    if (isInviteLoginUser(req.authUser!)) {
+      res.status(403).json({ error: '邀请码登录账号不能再次兑换邀请码' });
+      return;
+    }
+
     const inviteCode = normalizeString(req.body?.code).toUpperCase();
     if (!inviteCode) {
       res.status(400).json({ error: '请输入邀请码' });
@@ -6090,6 +6225,227 @@ async function start() {
     res.json({ job: publicGenerationJob(job) });
   });
 
+  type VideoGenerationJob = {
+    id: string;
+    userId: string;
+    username: string;
+    status: 'queued' | 'processing' | 'succeeded' | 'failed';
+    progress: number;
+    prompt: string;
+    ratio: '16:9' | '1:1' | '9:16';
+    resolution: VideoResolution;
+    referenceImages: ReferenceUploadInput[];
+    createdAt: string;
+    updatedAt: string;
+    completedAt?: string;
+    videoPath?: string;
+    error?: string;
+    creditsRemaining?: number;
+  };
+
+  const videoJobs = new Map<string, VideoGenerationJob>();
+  const pruneVideoJobs = () => {
+    const cutoff = Date.now() - 4 * 60 * 60_000;
+    for (const [id, job] of videoJobs) {
+      if (new Date(job.updatedAt).getTime() < cutoff) videoJobs.delete(id);
+    }
+  };
+
+  function publicVideoJob(req: Request, job: VideoGenerationJob) {
+    const creditsUsed = getVideoGenerationCredits(job.resolution);
+    return {
+      id: job.id,
+      status: job.status,
+      progress: job.status === 'succeeded' ? 100 : job.progress,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      completedAt: job.completedAt,
+      videoUrl: job.videoPath ? toPublicAssetUrl(req, job.videoPath) : undefined,
+      error: job.error,
+      creditsUsed: job.status === 'succeeded' ? creditsUsed : 0,
+      creditsRemaining: job.creditsRemaining,
+    };
+  }
+
+  async function runVideoJob(jobId: string) {
+    const job = videoJobs.get(jobId);
+    if (!job) return;
+    const requestStartedAt = Date.now();
+    const metricConfiguration = `${job.resolution} / 5s / ${job.ratio}`;
+    const creditsUsed = getVideoGenerationCredits(job.resolution);
+    const update = (patch: Partial<VideoGenerationJob>) => {
+      Object.assign(job, patch, { updatedAt: nowIso() });
+    };
+    update({ status: 'processing', progress: 8 });
+    try {
+      const created = await createJunliaiVideoTask(job);
+      update({ progress: 12 });
+      const videoPath = await waitForJunliaiVideo(created.taskId, (progress) => update({ progress }));
+      let creditsRemaining = 0;
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.incrementUsedCredits(job.userId, creditsUsed);
+        await db.syncInviteCodeBalanceForUser(job.userId);
+        creditsRemaining = (await db.getUserCredits(job.userId)).remainingCredits;
+      } else {
+        creditsRemaining = await withWriteDb((db) => {
+          ensureSchema(db);
+          db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
+            creditsUsed,
+            nowIso(),
+            job.userId,
+          ]);
+          syncInviteCodeBalanceForUser(db, job.userId);
+          return getUserCredits(db, job.userId).remainingCredits;
+        });
+      }
+
+      const apiRequestMs = Math.max(0, Date.now() - requestStartedAt);
+      try {
+        if (USE_SUPABASE) {
+          const db = await getSupabaseDb();
+          await db.insertGeneration({
+            userId: job.userId,
+            username: job.username,
+            prompt: job.prompt,
+            modelId: VIDEO_MODEL_ID,
+            modelName: 'Firefly Video',
+            dimensions: job.ratio,
+            imageSize: job.resolution,
+            imagePath: videoPath,
+            creditsUsed,
+            apiRequestMs,
+            referenceImages: [],
+            createdAt: job.createdAt,
+          });
+        } else {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            db.run(
+              `
+                INSERT INTO generations (
+                  user_id, username, prompt, model_id, model_name, dimensions,
+                  image_size, image_path, credits_used, api_request_ms, reference_images, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `,
+              [
+                job.userId,
+                job.username,
+                job.prompt,
+                VIDEO_MODEL_ID,
+                'Firefly Video',
+                job.ratio,
+                job.resolution,
+                videoPath,
+                creditsUsed,
+                apiRequestMs,
+                '[]',
+                job.createdAt,
+              ],
+            );
+          });
+        }
+      } catch (historyError) {
+        console.warn('[video-generation] failed to save history:', historyError);
+      }
+      void providerMetrics?.record({
+        modelId: VIDEO_MODEL_ID,
+        provider: 'Junliai',
+        configuration: metricConfiguration,
+        durationMs: apiRequestMs,
+        success: true,
+      });
+      update({ status: 'succeeded', progress: 100, videoPath, creditsRemaining, completedAt: nowIso() });
+    } catch (error) {
+      console.error('[video-generation]', error);
+      void providerMetrics?.record({
+        modelId: VIDEO_MODEL_ID,
+        provider: 'Junliai',
+        configuration: metricConfiguration,
+        durationMs: Math.max(0, Date.now() - requestStartedAt),
+        success: false,
+      });
+      update({
+        status: 'failed',
+        error: sanitizeExternalErrorMessage(
+          error instanceof Error ? error.message : 'Video generation failed',
+          '视频生成失败，本次不会扣除积分',
+        ),
+        completedAt: nowIso(),
+      });
+    }
+  }
+
+  app.post('/api/generate/video/jobs', requireAuth, async (req, res) => {
+    pruneVideoJobs();
+    const prompt = normalizeString(req.body?.prompt).slice(0, 8_000);
+    const ratio = normalizeString(req.body?.ratio) as VideoGenerationJob['ratio'];
+    const resolution = normalizeString(req.body?.resolution) as VideoGenerationJob['resolution'];
+    const rawReferences = Array.isArray(req.body?.referenceImages) ? req.body.referenceImages : [];
+    const referenceImages = rawReferences.slice(0, 1).map((item: unknown, index: number) => {
+      const value = asPlainObject(item);
+      return {
+        name: normalizeString(value.name) || `video-reference-${index + 1}.png`,
+        mimeType: normalizeString(value.mimeType) || 'image/png',
+        data: normalizeString(value.data),
+      };
+    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:image/') && item.data.length <= 28_000_000);
+    if (!prompt) {
+      res.status(400).json({ error: '请输入视频提示词' });
+      return;
+    }
+    if (!['16:9', '1:1', '9:16'].includes(ratio) || !['720p', '1080p'].includes(resolution)) {
+      res.status(400).json({ error: '不支持的视频比例或分辨率' });
+      return;
+    }
+    if (!JUNLIAI_API_KEY) {
+      res.status(503).json({ error: '视频生成接口尚未配置' });
+      return;
+    }
+    try {
+      const credits = USE_SUPABASE
+        ? await (await getSupabaseDb()).getUserCredits(req.authUser!.userId)
+        : await withReadDb((db) => {
+            ensureSchema(db);
+            return getUserCredits(db, req.authUser!.userId);
+          });
+      const creditsUsed = getVideoGenerationCredits(resolution);
+      if (credits.remainingCredits < creditsUsed) {
+        res.status(402).json({ error: `当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分` });
+        return;
+      }
+      const now = nowIso();
+      const job: VideoGenerationJob = {
+        id: `video_${Date.now()}_${randomHex(6)}`,
+        userId: req.authUser!.userId,
+        username: req.authUser!.username,
+        status: 'queued',
+        progress: 3,
+        prompt,
+        ratio,
+        resolution,
+        referenceImages,
+        createdAt: now,
+        updatedAt: now,
+      };
+      videoJobs.set(job.id, job);
+      void runVideoJob(job.id);
+      res.status(202).json({ job: publicVideoJob(req, job) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '创建视频任务失败' });
+    }
+  });
+
+  app.get('/api/generate/video/jobs/:id', requireAuth, (req, res) => {
+    pruneVideoJobs();
+    const job = videoJobs.get(normalizeString(req.params.id));
+    if (!job || job.userId !== req.authUser!.userId) {
+      res.status(404).json({ error: '视频任务不存在' });
+      return;
+    }
+    res.json({ job: publicVideoJob(req, job) });
+  });
+
   app.post('/api/generate', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
     const model = normalizeString(req.body?.model);
@@ -7099,6 +7455,42 @@ async function start() {
       res.json({ users: [], usersPage: toPagination(page, pageSize, 0) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch users failed' });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/invite-redemptions', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+
+    try {
+      const rows = USE_SUPABASE
+        ? await (await getSupabaseDb()).getInviteRedemptionsForUser(userId)
+        : await withReadDb((db) => {
+            ensureSchema(db);
+            return runQuery<Record<string, unknown>>(
+              db,
+              `SELECT code, credits, issued_credits, created_at, redeemed_at
+               FROM invite_codes
+               WHERE redeemed_by = ? AND redeemed_at IS NOT NULL
+               ORDER BY datetime(redeemed_at) DESC, datetime(created_at) DESC`,
+              [userId],
+            );
+          });
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        redemptions: rows.map((row) => ({
+          code: String(row.code || ''),
+          credits: Math.max(0, Number(row.issued_credits || row.credits || 0)),
+          redeemedAt: String(row.redeemed_at || ''),
+          createdAt: String(row.created_at || ''),
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch invite redemptions failed' });
     }
   });
 

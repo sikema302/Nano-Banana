@@ -875,6 +875,18 @@ export async function getRedeemedInviteCodeForUser(
   return data as unknown as InviteCodeRow;
 }
 
+export async function getInviteRedemptionsForUser(userId: string): Promise<InviteCodeRow[]> {
+  const { data, error } = await getSupabase()
+    .from('invite_codes')
+    .select('*')
+    .eq('redeemed_by', userId)
+    .not('redeemed_at', 'is', null)
+    .order('redeemed_at', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(`Fetch invite redemptions failed: ${error.message}`);
+  return (data || []) as unknown as InviteCodeRow[];
+}
+
 export async function getAllRedeemedUserIds(): Promise<string[]> {
   const { data, error } = await getSupabase()
     .from('invite_codes')

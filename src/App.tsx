@@ -7,6 +7,7 @@ import {
   Code2 as CodeIcon,
   Copy,
   Download,
+  Film,
   ImagePlus,
   Info,
   Home,
@@ -43,6 +44,7 @@ import {
   fetchAdminInviteCodes,
   fetchAdminOverview,
   fetchAdminRecords,
+  fetchAdminUserInviteRedemptions,
   fetchAdminUsers,
   fetchPublicApiKeyBalance,
   fetchPublicApiKeys,
@@ -57,6 +59,7 @@ import {
   fetchUserHistory,
   fetchUserImages,
   fetchGenerateImageJob,
+  fetchGenerateVideoJob,
   getStoredUser,
   login,
   loginWithInvite,
@@ -71,6 +74,7 @@ import {
   rotateUserApiKey,
   updateUserApiKey,
   startGenerateImageJob,
+  startGenerateVideoJob,
   type AdminDashboardStats,
   type AdminImageStorageStats,
   type AdminRecordsStats,
@@ -78,9 +82,11 @@ import {
   type CreditSummary,
   type GeneratedImagePayload,
   type GenerationJobInfo,
+  type VideoGenerationJobInfo,
   type GenerationRecord,
   type ImageCategory,
   type InviteCodeInfo,
+  type InviteRedemptionRecord,
   type ModelInfo,
   type PaginationInfo,
   type PromoCouponInfo,
@@ -98,6 +104,10 @@ import {
   getGptImageCredits,
   type GptImagePricing,
 } from './lib/model-pricing';
+import {
+  getVideoGenerationCredits,
+  type VideoResolution,
+} from './lib/video-pricing';
 import ChatView from './ChatView';
 
 interface UploadPreview {
@@ -148,7 +158,7 @@ function getTabPath(tab: AppTab) {
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
-  if (pathname === '/chat') return 'chat';
+  if (pathname === '/chat') return 'home';
   if (pathname === '/history') return 'history';
   if (pathname === '/apidoc') return 'apiDocs';
   if (pathname === '/manage') return canAccessAdmin ? 'admin' : 'home';
@@ -306,6 +316,10 @@ const ORIGINAL_IMAGE_RETENTION_MS = 5 * 24 * 60 * 60 * 1000;
 function isOriginalImageExpired(createdAt: string) {
   const createdTime = new Date(createdAt).getTime();
   return Number.isFinite(createdTime) && Date.now() - createdTime >= ORIGINAL_IMAGE_RETENTION_MS;
+}
+
+function isVideoAssetUrl(value: string) {
+  return /\.mp4(?:$|[?#])/i.test(value);
 }
 
 function fallbackToOriginal(event: SyntheticEvent<HTMLImageElement>, originalUrl: string) {
@@ -714,6 +728,354 @@ function SidePanel({
   );
 }
 
+type VideoRatio = '16:9' | '1:1' | '9:16';
+
+function VideoCreateView({
+  user,
+  onSwitchImage,
+  onLogin,
+  onPurchase,
+  onCreditsChange,
+}: {
+  user: UserInfo | null;
+  onSwitchImage: () => void;
+  onLogin: () => void;
+  onPurchase: () => void;
+  onCreditsChange: (creditsRemaining: number) => void;
+}) {
+  const [prompt, setPrompt] = useState('');
+  const [ratio, setRatio] = useState<VideoRatio>('16:9');
+  const [resolution, setResolution] = useState<VideoResolution>('1080p');
+  const creditsNeeded = getVideoGenerationCredits(resolution);
+  const [references, setReferences] = useState<UploadPreview[]>([]);
+  const [job, setJob] = useState<VideoGenerationJobInfo | null>(null);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [recentVideos, setRecentVideos] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const pollingRunRef = useRef(0);
+
+  useEffect(() => () => {
+    pollingRunRef.current += 1;
+  }, []);
+
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const files: File[] = event.target.files ? Array.from(event.target.files) : [];
+    event.target.value = '';
+    setError('');
+
+    const remaining = Math.max(0, 1 - references.length);
+    if (remaining === 0) {
+      setError('最多上传 1 张参考图');
+      return;
+    }
+
+    const selected = files.slice(0, remaining);
+    const oversized = selected.find((file) => file.size > 20 * 1024 * 1024);
+    if (oversized) {
+      setError(`${oversized.name} 超过 20MB，请压缩后再上传`);
+      return;
+    }
+
+    try {
+      const next = await Promise.all(selected.map(fileToBase64));
+      setReferences((current) => [...current, ...next].slice(0, 1));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '参考图读取失败');
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!user) {
+      onLogin();
+      return;
+    }
+
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt) {
+      setError('请先填写视频提示词');
+      return;
+    }
+
+    if ((user.creditsRemaining ?? 0) < creditsNeeded) {
+      setError(`积分不足，${resolution} 视频需要 ${creditsNeeded} 积分`);
+      return;
+    }
+
+    const runId = pollingRunRef.current + 1;
+    pollingRunRef.current = runId;
+    setError('');
+    setVideoUrl('');
+    setGenerating(true);
+
+    try {
+      const started = await startGenerateVideoJob({
+        prompt: normalizedPrompt,
+        ratio,
+        resolution,
+        seconds: 5,
+        referenceImages: references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+      });
+      setJob(started.job);
+
+      let currentJob = started.job;
+      while (pollingRunRef.current === runId && currentJob.status !== 'succeeded' && currentJob.status !== 'failed') {
+        await new Promise((resolve) => window.setTimeout(resolve, 4_000));
+        if (pollingRunRef.current !== runId) return;
+        const result = await fetchGenerateVideoJob(currentJob.id);
+        currentJob = result.job;
+        setJob(currentJob);
+      }
+
+      if (pollingRunRef.current !== runId) return;
+      if (currentJob.status === 'failed') {
+        throw new Error(currentJob.error || '视频生成失败，请稍后重试');
+      }
+      if (!currentJob.videoUrl) {
+        throw new Error('视频已生成，但暂时无法读取结果');
+      }
+
+      setVideoUrl(currentJob.videoUrl);
+      setRecentVideos((current) => [currentJob.videoUrl!, ...current.filter((item) => item !== currentJob.videoUrl)].slice(0, 6));
+      if (typeof currentJob.creditsRemaining === 'number') {
+        onCreditsChange(currentJob.creditsRemaining);
+      }
+    } catch (generationError) {
+      setError(generationError instanceof Error ? generationError.message : '视频生成失败，请稍后重试');
+    } finally {
+      if (pollingRunRef.current === runId) setGenerating(false);
+    }
+  }
+
+  const progress = Math.max(0, Math.min(100, Math.round(job?.progress || 0)));
+  const videoFrameClass = ratio === '9:16'
+    ? 'aspect-[9/16] max-h-full'
+    : ratio === '1:1'
+      ? 'aspect-square max-h-full'
+      : 'aspect-video w-full';
+
+  return (
+    <div className="col-span-full grid min-h-0 grid-cols-1 space-y-4 lg:h-full lg:grid-cols-[2fr_3fr_2fr] lg:space-y-0">
+      <aside className="app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2">
+        <form className="flex min-h-full flex-col gap-2" onSubmit={handleSubmit}>
+          <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
+            <button
+              className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
+              type="button"
+              onClick={onSwitchImage}
+            >
+              <ImagePlus size={13} />
+              生图
+            </button>
+            <button
+              className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
+              type="button"
+            >
+              <Film size={13} />
+              生视频
+            </button>
+          </div>
+
+          <section className="space-y-1.5">
+            <div className="px-0.5 text-[11px] font-extrabold text-zinc-400">模型</div>
+            <div className="input flex min-h-[40px] items-center px-3 py-2">
+              <div>
+                <div className="font-mono text-[12px] font-bold text-zinc-100">firefly-video</div>
+                <div className="text-[9px] text-zinc-500">Adobe Firefly 视频生成</div>
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
+              <span>视频提示词</span>
+              <span className="text-[10px] text-zinc-500">{prompt.length} / 8000</span>
+            </div>
+            <textarea
+              className="input h-[92px] resize-none px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
+              placeholder="描述想要的画面、镜头运动、光线与氛围..."
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value.slice(0, 8000))}
+            />
+          </section>
+
+          <div className="grid grid-cols-2 gap-2">
+            <section className="space-y-1.5">
+              <div className="text-[11px] font-extrabold text-zinc-400">画面比例</div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['16:9', '1:1', '9:16'] as VideoRatio[]).map((item) => (
+                  <button
+                    key={item}
+                    className={ratio === item
+                      ? 'min-h-0 rounded-lg border border-white bg-white px-1.5 py-2 text-[11px] font-black text-black'
+                      : 'btn-secondary min-h-0 rounded-lg px-1.5 py-2 text-[11px] font-black text-zinc-400'}
+                    type="button"
+                    onClick={() => setRatio(item)}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </section>
+            <section className="space-y-1.5">
+              <div className="text-[11px] font-extrabold text-zinc-400">分辨率</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(['720p', '1080p'] as VideoResolution[]).map((item) => (
+                  <button
+                    key={item}
+                    className={resolution === item
+                      ? 'min-h-0 rounded-lg border border-white bg-white px-1.5 py-1.5 text-[11px] font-black text-black'
+                      : 'btn-secondary min-h-0 rounded-lg px-1.5 py-1.5 text-[11px] font-black text-zinc-400'}
+                    type="button"
+                    onClick={() => setResolution(item)}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <section className="space-y-1.5">
+            <div className="text-[11px] font-extrabold text-zinc-400">时长</div>
+            <button
+              className="inline-flex min-h-0 w-fit items-center justify-center rounded-lg border border-white bg-white px-3.5 py-2 text-[12px] font-black text-black"
+              type="button"
+              aria-pressed="true"
+            >
+              5s
+            </button>
+          </section>
+
+          <section className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
+              <span>参考图（最多 1 张 · 首帧 · 单张 ≤20MB）</span>
+              <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 1</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {references.length < 1 ? (
+                <label className="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
+                  <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
+                  <Plus size={20} />
+                </label>
+              ) : null}
+              {references.map((item) => (
+                <button
+                  key={item.id}
+                  className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-white/10"
+                  type="button"
+                  title="点击删除"
+                  onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
+                >
+                  <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
+                  <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">首帧</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <div className="mt-auto space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
+              <span>使用积分：<span className="text-white">{creditsNeeded}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span></span>
+              <button className="btn-ghost min-h-0 px-0 py-0 text-[11px] text-[var(--primary-hover)]" type="button" onClick={onPurchase}>在线购买积分</button>
+            </div>
+            {error ? <div className="app-alert app-alert-error">{error}</div> : null}
+            <button
+              className="btn-primary flex w-full items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={generating || !user || (user.creditsRemaining ?? 0) < creditsNeeded}
+              type="submit"
+            >
+              {generating ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
+              {generating ? '生成中...' : user ? `生成 · ${creditsNeeded} 积分` : '登录后生成'}
+            </button>
+          </div>
+        </form>
+      </aside>
+
+      <section className="min-h-[520px] overflow-hidden border-r border-white/8 px-4 py-4 lg:min-h-0">
+        <div className="flex h-full min-h-0 flex-col rounded-[24px] border border-white/8 bg-[radial-gradient(circle_at_top,rgba(124,58,237,0.08),transparent_42%),rgba(255,255,255,0.012)] p-4">
+          <div className="flex items-center justify-between gap-3 border-b border-white/8 pb-3">
+            <div>
+              <h2 className="text-[15px] font-black text-white">视频结果</h2>
+              <p className="mt-1 text-[11px] text-zinc-500">生成完成后自动保存到本站，避免临时链接失效。</p>
+            </div>
+            {videoUrl ? (
+              <a className="btn-secondary min-h-0 px-3 py-2 text-[12px] font-bold" href={videoUrl} download target="_blank" rel="noreferrer">
+                <Download size={14} />
+                下载
+              </a>
+            ) : null}
+          </div>
+
+          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden py-4">
+            {videoUrl ? (
+              <video className={`${videoFrameClass} rounded-2xl bg-black object-contain shadow-[0_24px_70px_rgba(0,0,0,0.45)]`} src={videoUrl} controls playsInline />
+            ) : (
+              <div className="flex max-w-sm flex-col items-center text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-violet-400/20 bg-violet-500/10 text-violet-200">
+                  {generating ? <LoaderCircle className="animate-spin" size={28} /> : <Film size={28} />}
+                </div>
+                <div className="mt-5 text-[16px] font-black text-zinc-200">{generating ? '正在生成你的视频' : '等待你的下一段灵感'}</div>
+                <p className="mt-2 text-[12px] leading-6 text-zinc-500">
+                  {generating ? 'Firefly 正在渲染，通常需要几分钟，请保持页面打开。' : '填写提示词并选择画幅，生成结果会在这里播放。'}
+                </p>
+              </div>
+            )}
+
+            {generating ? (
+              <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
+                <div className="flex items-center justify-between text-[11px] font-bold text-zinc-300">
+                  <span>{job?.status === 'processing' ? '正在渲染' : '正在排队'}</span>
+                  <span>{progress > 0 ? `${progress}%` : '请稍候'}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#7c3aed,#a855f7)] transition-all duration-500" style={{ width: `${progress || 6}%` }} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <aside className="custom-scrollbar overflow-y-auto px-3 py-3 sm:px-4 lg:h-full lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        <div className="space-y-4">
+          <section>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-violet-200"><Film size={15} /></div>
+                <h2 className="text-[15px] font-black text-white">本次作品</h2>
+              </div>
+              <span className="text-[11px] text-zinc-500">{recentVideos.length}</span>
+            </div>
+            <div className="mt-3 min-h-[180px] rounded-[22px] border border-white/8 bg-white/[0.025] p-3">
+              {recentVideos.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {recentVideos.map((item, index) => (
+                    <button className="group relative aspect-video overflow-hidden rounded-xl border border-white/10 bg-black" type="button" key={item} onClick={() => setVideoUrl(item)}>
+                      <video className="h-full w-full object-cover opacity-80 transition group-hover:opacity-100" src={item} muted preload="metadata" />
+                      <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-bold text-white">作品 {recentVideos.length - index}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex min-h-[154px] items-center justify-center px-5 text-center text-[12px] leading-6 text-zinc-500">生成的视频会集中显示在这里。</div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[22px] border border-white/8 bg-white/[0.025] p-4">
+            <h3 className="text-[13px] font-black text-zinc-200">提示词建议</h3>
+            <p className="mt-2 text-[11px] leading-6 text-zinc-500">按“主体 + 动作 + 镜头运动 + 光线 + 风格”描述，生成效果通常更稳定。</p>
+            <div className="mt-3 rounded-xl bg-black/25 px-3 py-2.5 text-[11px] leading-5 text-zinc-400">示例：金色麦田里的橘猫向镜头奔跑，低机位跟拍，黄昏逆光，电影感。</div>
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => void }) {
   const features = [
     {
@@ -865,7 +1227,11 @@ function HistoryView({
                 <tr key={item.id} className="h-14 text-zinc-300">
                   <td className="px-4 py-2">
                     <button className="h-10 w-10 overflow-hidden rounded-lg bg-black" type="button" onClick={() => onPreview(item)}>
-                      <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                      {isVideoAssetUrl(item.imageUrl) ? (
+                        <video className="h-full w-full object-cover" src={item.imageUrl} muted preload="metadata" />
+                      ) : (
+                        <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                      )}
                     </button>
                   </td>
                   <td className="max-w-[520px] truncate px-4 py-2 text-white">{item.prompt}</td>
@@ -2125,6 +2491,10 @@ function AdminView({
   const [rechargingUserId, setRechargingUserId] = useState('');
   const [deductingUserId, setDeductingUserId] = useState('');
   const [deletingUserId, setDeletingUserId] = useState('');
+  const [redemptionUser, setRedemptionUser] = useState<AdminUserSummary | null>(null);
+  const [redemptionRecords, setRedemptionRecords] = useState<InviteRedemptionRecord[]>([]);
+  const [redemptionLoading, setRedemptionLoading] = useState(false);
+  const [redemptionError, setRedemptionError] = useState('');
   const [copiedCode, setCopiedCode] = useState('');
   const [selectedProviderRisks, setSelectedProviderRisks] = useState<ProviderRiskRecord[]>([]);
   const [inviteBatchCount, setInviteBatchCount] = useState(1);
@@ -2226,6 +2596,21 @@ function AdminView({
       await onDeleteUser(user);
     } finally {
       setDeletingUserId('');
+    }
+  }
+
+  async function handleViewRedemptions(user: AdminUserSummary) {
+    setRedemptionUser(user);
+    setRedemptionRecords([]);
+    setRedemptionError('');
+    setRedemptionLoading(true);
+    try {
+      const payload = await fetchAdminUserInviteRedemptions(user.userId);
+      setRedemptionRecords(payload.redemptions);
+    } catch (error) {
+      setRedemptionError(error instanceof Error ? error.message : '积分兑换记录加载失败');
+    } finally {
+      setRedemptionLoading(false);
     }
   }
 
@@ -3209,7 +3594,7 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1260px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1360px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -3230,7 +3615,7 @@ function AdminView({
                               最近生成 {userSortMode === 'recent-desc' ? '↓' : '↑'}
                             </button>
                           </th>
-                          <th className="sticky right-0 z-20 w-[230px] border-l border-white/8 bg-[#0a0a0a] px-3 py-2 text-right font-medium shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">{'\u64cd\u4f5c'}</th>
+                          <th className="sticky right-0 z-20 w-[330px] border-l border-white/8 bg-[#0a0a0a] px-3 py-2 text-right font-medium shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">{'\u64cd\u4f5c'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
@@ -3269,8 +3654,17 @@ function AdminView({
                                 </div>
                               </td>
                               <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
-                              <td className="sticky right-0 z-[5] w-[230px] border-l border-white/8 bg-[#0d0d15] px-3 py-3 text-right shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">
+                              <td className="sticky right-0 z-[5] w-[330px] border-l border-white/8 bg-[#0d0d15] px-3 py-3 text-right shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">
                                 <div className="flex items-center justify-end gap-1.5">
+                                  {!isApiKeyUsage && !item.username.toLowerCase().startsWith('invite-') ? (
+                                    <button
+                                      className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-100 transition hover:bg-sky-500/20"
+                                      type="button"
+                                      onClick={() => void handleViewRedemptions(item)}
+                                    >
+                                      兑换记录
+                                    </button>
+                                  ) : null}
                                   <button
                                     className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                                     disabled={isApiKeyUsage || (item.username.toLowerCase() !== 'admin' && adminCredits.remainingCredits <= 0) || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
@@ -3574,12 +3968,82 @@ function AdminView({
           </div>
         </div>
       ) : null}
+      {redemptionUser ? (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <button
+            aria-label="关闭积分兑换记录"
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setRedemptionUser(null)}
+          />
+          <div className="relative max-h-[82vh] w-full max-w-2xl overflow-hidden rounded-[26px] border border-white/10 bg-[#0d0f17] shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-black text-white">积分兑换记录</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {redemptionUser.username} · 用户 ID {redemptionUser.userId}
+                </p>
+              </div>
+              <button
+                className="rounded-full border border-white/10 p-2 text-zinc-400 hover:text-white"
+                type="button"
+                onClick={() => setRedemptionUser(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="border-b border-white/8 px-5 py-3 text-xs text-zinc-400">
+              共 {redemptionRecords.length} 条，累计兑换{' '}
+              <span className="font-bold text-sky-200">
+                {redemptionRecords.reduce((sum, record) => sum + record.credits, 0)}
+              </span>{' '}
+              积分
+            </div>
+            <div className="custom-scrollbar max-h-[58vh] overflow-y-auto p-5">
+              {redemptionLoading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-zinc-400">
+                  <LoaderCircle className="animate-spin" size={18} />
+                  正在加载兑换记录...
+                </div>
+              ) : redemptionError ? (
+                <div className="app-alert app-alert-error">{redemptionError}</div>
+              ) : redemptionRecords.length > 0 ? (
+                <div className="overflow-hidden rounded-2xl border border-white/8">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-black/35 text-zinc-500">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">邀请码</th>
+                        <th className="px-4 py-3 text-right font-medium">兑换积分</th>
+                        <th className="px-4 py-3 text-right font-medium">兑换时间</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/6">
+                      {redemptionRecords.map((record) => (
+                        <tr key={`${record.code}-${record.redeemedAt}`} className="text-zinc-300">
+                          <td className="break-all px-4 py-3 font-mono text-white">{record.code}</td>
+                          <td className="px-4 py-3 text-right font-bold text-sky-200">+{record.credits}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right text-zinc-400">
+                            {formatTime(record.redeemedAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-sm text-zinc-500">该用户暂无积分兑换记录</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
+  const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
   const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
@@ -4750,6 +5214,11 @@ export default function App() {
 
   async function handleRedeemInvite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!user || user.canRedeemInvite === false || user.username.toLowerCase().startsWith('invite-')) {
+      setRedeemInviteOpen(false);
+      setRedeemInviteError('');
+      return;
+    }
     if (!redeemInviteValue.trim()) {
       setRedeemInviteError('\u8bf7\u8f93\u5165\u9080\u8bf7\u7801');
       return;
@@ -4823,7 +5292,6 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
-    { id: 'chat', label: '对话', icon: <Sparkles size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
     { id: 'admin', label: '后台管理', icon: <ShieldCheck size={15} />, hidden: !user?.isAdmin },
@@ -5149,7 +5617,7 @@ export default function App() {
             >
               购买积分
             </button>
-            {user ? (
+            {user && user.canRedeemInvite !== false && !user.username.toLowerCase().startsWith('invite-') ? (
               <button
                 className="inline-flex min-h-0 items-center rounded-md px-1.5 py-1 text-[11px] font-black text-amber-200 transition hover:bg-amber-400/10 hover:text-amber-100"
                 type="button"
@@ -5212,10 +5680,43 @@ export default function App() {
               : 'min-h-0 flex-1 overflow-auto lg:overflow-hidden'
           }
         >
-          <aside className={activeTab === 'create' ? 'app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
-            <form className="flex min-h-0 flex-col gap-2.5 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
-              <section className="space-y-2">
-                <div className="px-0.5 text-[13px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
+          {activeTab === 'create' && creationMode === 'video' ? (
+            <VideoCreateView
+              user={user}
+              onSwitchImage={() => setCreationMode('image')}
+              onLogin={() => {
+                setAuthMode('login');
+                setAuthOpen(true);
+              }}
+              onPurchase={openPurchasePage}
+              onCreditsChange={(creditsRemaining) => {
+                setUser((current) => current ? { ...current, creditsRemaining } : current);
+              }}
+            />
+          ) : null}
+
+          <aside className={activeTab === 'create' && creationMode === 'image' ? 'app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
+            <form className="flex min-h-0 flex-col gap-2 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
+              <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
+                <button
+                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
+                  type="button"
+                >
+                  <ImagePlus size={13} />
+                  生图
+                </button>
+                <button
+                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
+                  type="button"
+                  onClick={() => setCreationMode('video')}
+                >
+                  <Film size={13} />
+                  生视频
+                </button>
+              </div>
+
+              <section className="space-y-1.5">
+                <div className="px-0.5 text-[11px] font-extrabold text-zinc-400">{'\u6a21\u578b\u9009\u62e9'}</div>
                 <div
                   className="relative"
                   onBlur={(event) => {
@@ -5223,14 +5724,14 @@ export default function App() {
                   }}
                 >
                   <button
-                    className="input flex w-full items-center pr-28 text-left"
+                    className="input flex min-h-[40px] w-full items-center py-2 pl-3 pr-28 text-left"
                     type="button"
                     aria-haspopup="listbox"
                     aria-expanded={modelMenuOpen}
                     onClick={() => setModelMenuOpen((current) => !current)}
                   >
-                    <span className="text-[13px] font-semibold text-zinc-100">{selectedModelInfo?.name}</span>
-                    <span className="ml-2 text-[10px] font-medium text-zinc-500">{selectedModelInfo?.description}</span>
+                    <span className="text-[12px] font-semibold text-zinc-100">{selectedModelInfo?.name}</span>
+                    <span className="ml-2 text-[9px] font-medium text-zinc-500">{selectedModelInfo?.description}</span>
                     <ChevronDown
                       size={15}
                       className={`absolute right-3 text-zinc-400 transition-transform ${modelMenuOpen ? 'rotate-180' : ''}`}
@@ -5266,16 +5767,16 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="space-y-2">
-                <div className="flex items-center justify-between gap-3 text-[12px] font-extrabold text-zinc-400">
+              <section className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
-                  <span className="shrink-0 text-[11px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
                 </div>
                 <div
                   className={
                     draggingReferences
-                      ? 'card p-2 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
-                      : 'card p-2'
+                      ? 'card p-1.5 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
+                      : 'card p-1.5'
                   }
                   onDragEnter={(event) => {
                     event.preventDefault();
@@ -5297,16 +5798,16 @@ export default function App() {
                   }}
                 >
                   <div className="flex flex-wrap gap-2">
-                    <label className="btn-secondary flex h-[56px] w-[56px] cursor-pointer flex-col items-center justify-center border-dashed p-0 text-zinc-500 hover:text-white">
+                    <label className="btn-secondary flex h-[48px] w-[48px] cursor-pointer flex-col items-center justify-center rounded-xl border-dashed p-0 text-zinc-500 hover:text-white">
                       <input className="hidden" type="file" accept="image/*" multiple onChange={handleReferenceUpload} />
-                      <ImagePlus size={18} />
-                      <span className="mt-1 text-[11px] font-bold">{'\u6dfb\u52a0'}</span>
+                      <ImagePlus size={15} />
+                      <span className="mt-0.5 text-[9px] font-bold">{'\u6dfb\u52a0'}</span>
                     </label>
 
                     {references.map((item) => (
                       <button
                         key={item.id}
-                        className="group relative h-[56px] w-[56px] overflow-hidden rounded-2xl border border-white/10 bg-[#101010]"
+                        className="group relative h-[48px] w-[48px] overflow-hidden rounded-xl border border-white/10 bg-[#101010]"
                         type="button"
                         onClick={() => removeReference(item.id)}
                       >
@@ -5320,14 +5821,14 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="space-y-2">
-                <div className="flex items-center justify-between text-[12px] font-extrabold text-zinc-400">
+              <section className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
-                  <span className="text-[11px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
+                  <span className="text-[10px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
                 </div>
                 <div>
                   <textarea
-                    className="input h-[96px] resize-none text-[13px] leading-5 placeholder:text-zinc-600"
+                    className="input h-[82px] resize-none px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
                     placeholder="请详细描述您想生成的画面..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
@@ -5335,9 +5836,9 @@ export default function App() {
                 </div>
               </section>
 
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
-                <section className="space-y-2">
-                  <div className="text-[12px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
+              <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
+                <section className="space-y-1.5">
+                  <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
                   <div className={`grid gap-2 ${isNanoBananaPro ? 'grid-cols-2' : 'grid-cols-3'}`}>
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
@@ -5347,8 +5848,8 @@ export default function App() {
                           key={item.value}
                           className={
                             active
-                              ? 'relative inline-flex h-12 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[16px] font-black text-black transition'
-                              : 'btn-secondary relative h-12 min-h-0 overflow-visible whitespace-nowrap px-3 py-0 text-[16px] font-black text-zinc-400'
+                              ? 'relative inline-flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
+                              : 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
                           }
                           type="button"
                           onClick={() => {
@@ -5371,8 +5872,8 @@ export default function App() {
                 </section>
 
                 {showGptQuality ? (
-                  <section className="space-y-2">
-                    <div className="text-[12px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
+                  <section className="space-y-1.5">
+                    <div className="text-[11px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
                     <div className="grid grid-cols-4 gap-2 overflow-visible">
                       {gptQualityOptions.map((item) => {
                         const active = gptQuality === item.value;
@@ -5381,7 +5882,7 @@ export default function App() {
                         return (
                           <button
                             key={item.value}
-                            className={`group relative flex h-12 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-3 py-0 text-[15px] font-black ${
+                            className={`group relative flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-2 py-0 text-[13px] font-black ${
                               active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
                             } ${disableGptQuality ? 'cursor-not-allowed opacity-45' : ''}`}
                             type="button"
@@ -5415,8 +5916,8 @@ export default function App() {
                 ) : null}
 
                 {isNanoBananaPro ? (
-                  <section className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-[12px] font-extrabold text-zinc-400">
+                  <section className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-zinc-400">
                       <span>{'AI\u589e\u5f3a'}</span>
                       <Info size={13} className="text-zinc-500" />
                     </div>
@@ -5424,8 +5925,8 @@ export default function App() {
                       <button
                         className={
                           optimizeChineseText
-                            ? 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
-                            : 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[15px] font-black text-black transition'
+                            ? 'btn-secondary h-10 min-h-0 whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
+                            : 'inline-flex h-10 min-h-0 items-center justify-center whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(false)}
@@ -5435,8 +5936,8 @@ export default function App() {
                       <button
                         className={
                           optimizeChineseText
-                            ? 'inline-flex h-12 min-h-0 items-center justify-center whitespace-nowrap rounded-xl border border-white bg-white px-3 py-0 text-[15px] font-black text-black transition'
-                            : 'btn-secondary h-12 min-h-0 whitespace-nowrap px-3 py-0 text-[15px] font-black text-zinc-400'
+                            ? 'inline-flex h-10 min-h-0 items-center justify-center whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
+                            : 'btn-secondary h-10 min-h-0 whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
                         }
                         type="button"
                         onClick={() => setOptimizeChineseText(true)}
@@ -5448,8 +5949,8 @@ export default function App() {
                 ) : null}
               </div>
 
-              <section className="space-y-2">
-                <div className="text-[12px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
+              <section className="space-y-1.5">
+                <div className="text-[11px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
                 <div className="grid grid-cols-4 gap-1.5 md:grid-cols-8">
                   {dimensionOptions.map(({ value, label }) => {
                     const active = value === dimensions;
@@ -5459,8 +5960,8 @@ export default function App() {
                         key={value}
                           className={
                             active
-                              ? 'inline-flex min-h-0 items-center justify-center rounded-xl border border-white bg-white px-2.5 py-2 text-[12px] font-black text-black transition'
-                              : 'btn-secondary min-h-0 px-2.5 py-2 text-[12px] font-black text-zinc-400'
+                              ? 'inline-flex min-h-0 items-center justify-center rounded-lg border border-white bg-white px-2 py-1.5 text-[11px] font-black text-black transition'
+                              : 'btn-secondary min-h-0 rounded-lg px-2 py-1.5 text-[11px] font-black text-zinc-400'
                           }
                         type="button"
                         onClick={() => setDimensions(value)}
@@ -5473,11 +5974,11 @@ export default function App() {
               </section>
 
               <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] font-extrabold text-zinc-400">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
                   </span>
-                  <button className="btn-ghost min-h-0 px-0 py-0 text-[13px] text-[var(--primary-hover)]" type="button" onClick={openPurchasePage}>
+                  <button className="btn-ghost min-h-0 px-0 py-0 text-[11px] text-[var(--primary-hover)]" type="button" onClick={openPurchasePage}>
                     {activePromoCoupon ? '使用 9 折券购买积分' : '\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206'}
                   </button>
                 </div>
@@ -5514,22 +6015,22 @@ export default function App() {
                 <div className="app-alert">{notice}</div>
               ) : null}
 
-              <div className="grid gap-2.5 pt-1 xl:mt-auto xl:grid-cols-[200px_minmax(0,1fr)]">
-                <div className="card p-2.5">
+              <div className="grid gap-2 pt-0.5 xl:mt-auto xl:grid-cols-[180px_minmax(0,1fr)]">
+                <div className="card p-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[13px] font-black text-white">{'\u6570\u91cf'}</span>
-                    <div className="flex items-center overflow-hidden rounded-xl border border-[#db5ca8] bg-[#341625]">
+                    <span className="text-[11px] font-black text-white">{'\u6570\u91cf'}</span>
+                    <div className="flex items-center overflow-hidden rounded-lg border border-[#db5ca8] bg-[#341625]">
                       <button
-                        className="flex h-9 w-9 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
                         type="button"
                         disabled={batchCount <= 1}
                         onClick={() => setBatchCount((current) => Math.max(1, current - 1))}
                       >
                         <Minus size={15} />
                       </button>
-                      <span className="flex h-9 w-10 items-center justify-center border-x border-[#db5ca8] text-[14px] font-black text-white">{batchCount}</span>
+                      <span className="flex h-8 w-9 items-center justify-center border-x border-[#db5ca8] text-[12px] font-black text-white">{batchCount}</span>
                       <button
-                        className="flex h-9 w-9 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center text-[#ffd9ef] transition hover:bg-white/5 disabled:opacity-40"
                         type="button"
                         disabled={batchCount >= MAX_BATCH_COUNT}
                         onClick={() => setBatchCount((current) => Math.min(MAX_BATCH_COUNT, current + 1))}
@@ -5541,18 +6042,18 @@ export default function App() {
                 </div>
 
                 <button
-                  className="btn-primary flex min-h-[76px] items-center justify-center gap-2.5 px-5 py-3.5 text-[16px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-primary flex min-h-[56px] items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={loading || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
-                  {loading ? <LoaderCircle className="animate-spin" size={20} /> : <Sparkles size={19} />}
+                  {loading ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
                   {loading ? '\u4e0b\u5355\u4e2d...' : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
                 </button>
               </div>
             </form>
           </aside>
 
-          {activeTab === 'home' ? (
+          {activeTab === 'create' && creationMode === 'video' ? null : activeTab === 'home' ? (
             <HomeView onNavigate={handleTabChange} />
           ) : activeTab === 'create' ? (
             <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
@@ -5630,7 +6131,7 @@ export default function App() {
             />
           )}
 
-          <aside className={activeTab === 'create' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
+          <aside className={activeTab === 'create' && creationMode === 'image' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
             <div className="grid content-start gap-5 lg:h-full">
             <SidePanel
               title="收藏区"
@@ -5730,12 +6231,22 @@ export default function App() {
               </div>
             </div>
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3 sm:p-4">
-              <img
-                alt={previewImage.prompt}
-                className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]"
-                src={isOriginalImageExpired(previewImage.createdAt) ? previewImage.thumbnailUrl || previewImage.imageUrl : previewImage.imageUrl}
-                onError={(event) => fallbackToThumbnail(event, previewImage.thumbnailUrl)}
-              />
+              {isVideoAssetUrl(previewImage.imageUrl) ? (
+                <video
+                  className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]"
+                  src={previewImage.imageUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                />
+              ) : (
+                <img
+                  alt={previewImage.prompt}
+                  className="max-h-[calc(100dvh-11rem)] max-w-full object-contain sm:max-h-[78vh]"
+                  src={isOriginalImageExpired(previewImage.createdAt) ? previewImage.thumbnailUrl || previewImage.imageUrl : previewImage.imageUrl}
+                  onError={(event) => fallbackToThumbnail(event, previewImage.thumbnailUrl)}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -5799,7 +6310,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {redeemInviteOpen && user ? (
+      {redeemInviteOpen && user && user.canRedeemInvite !== false && !user.username.toLowerCase().startsWith('invite-') ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-4 backdrop-blur-sm">
           <div className="card w-full max-w-md p-5 sm:p-6">
             <div className="flex items-start justify-between gap-4">
