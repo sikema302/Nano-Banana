@@ -498,11 +498,11 @@ function CreditsSummary({
           使用积分: <span className="text-white">{creditsCost}</span>/<span className="text-white">{creditsRemaining ?? '--'}</span>
         </span>
         <button
-          className="font-semibold text-sky-400 transition hover:text-sky-300"
+          className="min-h-0 p-0 text-[12px] font-black text-cyan-400 transition hover:text-cyan-300"
           type="button"
           onClick={onOpenPurchase}
         >
-          在线购买积分
+          点击在线购买积分(25%优惠)
         </button>
       </div>
       {selectedModel ? (
@@ -990,9 +990,15 @@ function VideoCreateView({
           </section>
 
           <div className="mt-auto space-y-2">
-            <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
               <span>使用积分：<span className="text-white">{creditsNeeded}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span></span>
-              <button className="btn-ghost min-h-0 px-0 py-0 text-[11px] text-[var(--primary-hover)]" type="button" onClick={onPurchase}>在线购买积分</button>
+              <button
+                className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
+                type="button"
+                onClick={onPurchase}
+              >
+                点击在线购买积分(25%优惠)
+              </button>
             </div>
             {error ? <div className="app-alert app-alert-error">{error}</div> : null}
             <button
@@ -6138,8 +6144,12 @@ export default function App() {
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
                   </span>
-                  <button className="btn-ghost min-h-0 px-0 py-0 text-[11px] text-[var(--primary-hover)]" type="button" onClick={openPurchasePage}>
-                    {activePromoCoupon ? '使用 9 折券购买积分' : '\u5728\u7ebf\u8d2d\u4e70\u79ef\u5206'}
+                  <button
+                    className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
+                    type="button"
+                    onClick={openPurchasePage}
+                  >
+                    点击在线购买积分(25%优惠)
                   </button>
                 </div>
                 {user && activePromoCoupon ? (
