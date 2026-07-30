@@ -138,7 +138,7 @@ const defaultModels: ModelInfo[] = [
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
-type ImageSizeOption = 'STANDARD' | '2K' | '4K';
+type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'chat' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
@@ -262,6 +262,7 @@ const gptHighQualityTips = [
 ];
 
 const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
+  { value: '1K', label: '1K', hint: '\u5feb\u901f\u8f93\u51fa' },
   { value: '2K', label: '2K', hint: '\u7a33\u5b9a\u9ad8\u6e05\u8f93\u51fa' },
   { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
 ];
@@ -447,7 +448,11 @@ function getModelCredits(
     );
   }
   if (model.id === 'Nano_Banana_Pro') {
-    const baseCredits = typeof model.creditsCost === 'number' ? model.creditsCost : 24;
+    const baseCredits = options?.imageSize === '1K'
+      ? 20
+      : typeof model.creditsCost === 'number'
+        ? model.creditsCost
+        : 24;
     return baseCredits + (options?.optimizeChineseText ? 8 : 0);
   }
   if (typeof model.creditsCost === 'number') return model.creditsCost;
@@ -1347,13 +1352,13 @@ function ApiDocsView({
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', 'HTTPS 参考图 URL 数组，最多 9 张。'],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
-    ['imageSize', 'string', '否', 'STANDARD、2K、4K。Nano Banana Pro 默认 2K，GPT-image-2 默认 STANDARD。'],
+    ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K。'],
     ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
-    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro 中文增强，开启后额外消耗 8 积分。'],
+    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强：真实优化提示词与中文文字要求，回退线路同时启用原生增强；额外消耗 8 积分。'],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '2K 24 / 4K 24，中文增强 +8', note: '适合参考图重绘、融合、商品图和中文场景增强。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 24，AI 增强 +8', note: 'Junliai 优先；1K 失败回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。' },
   ];
   const gptPixelGroups = [
     {
@@ -1414,8 +1419,9 @@ function ApiDocsView({
     {
       model: 'nano-banana-pro',
       rows: [
-        ['基础生成', '24 点 / 张', '支持 2K / 4K 与参考图生成'],
-        ['AI 增强', '额外 +8 点 / 张', '开启 optimizeChineseText 时计费'],
+        ['1K 基础生成', '20 点 / 张', '支持文生图与参考图生成'],
+        ['2K / 4K 基础生成', '24 点 / 张', '保持原有计费'],
+        ['AI 增强', '额外 +8 点 / 张', '真实增强提示词；回退线路同时启用原生 optimizeChineseText'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
     },
@@ -1449,7 +1455,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-      bullets: ['参考图建议使用 HTTPS 图片 URL，最多 9 张。', '开启 optimizeChineseText 会额外消耗 8 积分。'],
+      bullets: ['支持 1K / 2K / 4K；1K 主线路失败时回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；开启 optimizeChineseText 会真实增强提示词，并额外消耗 8 积分。'],
     },
   ];
   const docNavigation = [
@@ -4293,7 +4299,7 @@ export default function App() {
     }
     setImageSize((current) => {
       if (modelId === 'Nano_Banana_Pro') {
-        return current === '4K' ? '4K' : '2K';
+        return current === '1K' || current === '2K' || current === '4K' ? current : '2K';
       }
       return current === '2K' || current === '4K' ? current : 'STANDARD';
     });
@@ -5839,7 +5845,7 @@ export default function App() {
               <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
                 <section className="space-y-1.5">
                   <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
-                  <div className={`grid gap-2 ${isNanoBananaPro ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                  <div className="grid grid-cols-3 gap-2">
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
 

@@ -36,6 +36,7 @@ function canonicalConfiguration(modelId: string, configuration: string) {
   const normalizedModel = modelId.toLowerCase();
   const imageSize = String(configuration || '').split('/')[0].trim().toUpperCase();
   if (normalizedModel.includes('banana')) {
+    if (imageSize === '1K') return '1K';
     return imageSize === '4K' ? '4K' : '2K';
   }
   if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalizedModel)) {

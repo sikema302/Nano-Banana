@@ -24,6 +24,7 @@ type RouterOptions = {
   baseUrl: string;
   authorization: string;
   primaryModel: string;
+  primaryModels?: Record<string, string>;
   timeoutMs: number;
   failureThreshold: number;
   transientCooldownMs: number;
@@ -72,12 +73,15 @@ export function extractGeneratedImageSource(payload: ImageApiPayload) {
   return '';
 }
 
+const ONE_K_IMAGE_SIZES = {
+  '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280',
+  '4:3': '1024x768', '3:4': '768x1024', '3:2': '1200x800',
+  '2:3': '800x1200', '21:9': '1680x720',
+};
+
 const IMAGE_SIZES: Record<string, Record<string, string>> = {
-  STANDARD: {
-    '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280',
-    '4:3': '1024x768', '3:4': '768x1024', '3:2': '1200x800',
-    '2:3': '800x1200', '21:9': '1680x720',
-  },
+  STANDARD: ONE_K_IMAGE_SIZES,
+  '1K': ONE_K_IMAGE_SIZES,
   '2K': {
     '1:1': '2048x2048', '16:9': '2048x1152', '9:16': '1152x2048',
     '4:3': '2048x1536', '3:4': '1536x2048', '3:2': '2400x1600',
@@ -91,7 +95,7 @@ const IMAGE_SIZES: Record<string, Record<string, string>> = {
 };
 
 function requestSize(input: ImageGenerationInput) {
-  const sizeKey = input.imageSize === '2K' || input.imageSize === '4K' ? input.imageSize : 'STANDARD';
+  const sizeKey = ['1K', '2K', '4K'].includes(input.imageSize) ? input.imageSize : 'STANDARD';
   const ratio = input.ratio === 'auto' ? '1:1' : input.ratio;
   return IMAGE_SIZES[sizeKey][ratio] || (/^\d+x\d+$/i.test(ratio) ? ratio : IMAGE_SIZES[sizeKey]['1:1']);
 }
@@ -209,10 +213,11 @@ export function createImageProviderRouter(options: RouterOptions) {
       };
       let body: BodyInit;
       let endpoint = '/v1/images/generations';
+      const primaryModel = options.primaryModels?.[input.modelId] || options.primaryModel;
       if (input.images.length) {
         endpoint = '/v1/images/edits';
         const form = new FormData();
-        form.set('model', options.primaryModel);
+        form.set('model', primaryModel);
         form.set('prompt', input.prompt);
         form.set('size', requestSize(input));
         form.set('response_format', 'b64_json');
@@ -224,7 +229,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       } else {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
-          model: options.primaryModel,
+          model: primaryModel,
           prompt: input.prompt,
           size: requestSize(input),
           response_format: 'b64_json',
@@ -274,7 +279,9 @@ export function createImageProviderRouter(options: RouterOptions) {
   async function generate(input: ImageGenerationInput) {
     const traceId = crypto.randomUUID();
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
-    const primaryEligible = primaryConfigured && input.modelId === 'gpt-image-2';
+    const primaryEligible =
+      primaryConfigured &&
+      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro');
     if (!primaryEligible) return callFallback(input, traceId);
 
     const state = await readState();

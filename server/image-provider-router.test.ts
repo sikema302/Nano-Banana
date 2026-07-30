@@ -131,13 +131,62 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
   ]);
 });
 
-test('keeps non-GPT models on the existing provider', async () => {
+test('uses the mapped Junliai nano-banana-pro model at 1K', async () => {
   const store = createStore();
   let primaryCalls = 0;
+  let fallbackCalls = 0;
+  let request: { url: string; init?: RequestInit } | null = null;
   const router = createImageProviderRouter({
     baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
     primaryModel: 'firefly-gpt-image-2',
+    primaryModels: {
+      'gpt-image-2': 'firefly-gpt-image-2',
+      Nano_Banana_Pro: 'nano-banana-pro',
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'visionary';
+    },
+    fetchImpl: async (url, init) => {
+      primaryCalls += 1;
+      request = { url: String(url), init };
+      return new Response(JSON.stringify({ data: [{ url: 'https://images.example/nano.png' }] }));
+    },
+  });
+
+  assert.equal(
+    await router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
+    'https://images.example/nano.png',
+  );
+  assert.equal(primaryCalls, 1);
+  assert.equal(fallbackCalls, 0);
+  assert.equal(request?.url, 'https://img.junliai.org/v1/images/generations');
+  assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+    model: 'nano-banana-pro',
+    prompt: 'A lighthouse',
+    size: '1024x1024',
+    response_format: 'b64_json',
+  });
+});
+
+test('uses the mapped Junliai nano-banana-pro edits endpoint for reference images', async () => {
+  const store = createStore();
+  let requestUrl = '';
+  let requestBody: FormData | null = null;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModels: {
+      Nano_Banana_Pro: 'nano-banana-pro',
+    },
     timeoutMs: 1_000,
     failureThreshold: 3,
     transientCooldownMs: 60_000,
@@ -145,14 +194,27 @@ test('keeps non-GPT models on the existing provider', async () => {
     authCooldownMs: 60_000,
     store,
     fallback: async () => 'visionary',
-    fetchImpl: async () => {
-      primaryCalls += 1;
-      return new Response();
+    fetchImpl: async (url, init) => {
+      requestUrl = String(url);
+      requestBody = init?.body as FormData;
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
     },
   });
 
-  assert.equal(await router.generate({ ...input, modelId: 'Nano_Banana_Pro' }), 'visionary');
-  assert.equal(primaryCalls, 0);
+  assert.equal(
+    await router.generate({
+      ...input,
+      modelId: 'Nano_Banana_Pro',
+      imageSize: '1K',
+      ratio: '16:9',
+      images: ['data:image/png;base64,aW1hZ2U='],
+    }),
+    'data:image/png;base64,aW1hZ2U=',
+  );
+  assert.equal(requestUrl, 'https://img.junliai.org/v1/images/edits');
+  assert.equal(requestBody?.get('model'), 'nano-banana-pro');
+  assert.equal(requestBody?.get('size'), '1280x720');
+  assert.equal(requestBody?.getAll('image').length, 1);
 });
 
 test('does not call the fallback when the primary request times out with an uncertain result', async () => {

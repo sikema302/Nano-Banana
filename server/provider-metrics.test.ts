@@ -84,7 +84,7 @@ test('aggregates GPT Image attempts into STANDARD, 2K, and 4K groups', async () 
   ]);
 });
 
-test('combines Nano Banana metrics by 2K and 4K only', async () => {
+test('combines Nano Banana metrics by 1K, 2K, and 4K', async () => {
   const values = new Map<string, string>();
   const metrics = createProviderMetrics({
     store: {
@@ -95,6 +95,13 @@ test('combines Nano Banana metrics by 2K and 4K only', async () => {
     },
   });
 
+  await metrics.record({
+    modelId: 'Nano_Banana_Pro',
+    provider: 'Junliai',
+    configuration: '1K / default / 1:1',
+    durationMs: 40_000,
+    success: true,
+  });
   await metrics.record({
     modelId: 'Nano_Banana_Pro',
     provider: 'Visionary',
@@ -127,6 +134,16 @@ test('combines Nano Banana metrics by 2K and 4K only', async () => {
       failureCount: 0,
       totalResponseMs: 150_000,
       averageResponseMs: 75_000,
+    },
+    {
+      modelId: 'Nano_Banana_Pro',
+      provider: 'Junliai',
+      configuration: '1K',
+      callCount: 1,
+      successCount: 1,
+      failureCount: 0,
+      totalResponseMs: 40_000,
+      averageResponseMs: 40_000,
     },
     {
       modelId: 'Nano_Banana_Pro',
