@@ -184,6 +184,12 @@ export interface ProviderRiskRecord {
   riskReason: string;
 }
 
+export interface ProviderRoutingConfig {
+  junliaiGptImage2: boolean;
+  junliaiNanoBanana: boolean;
+  junliaiFireflyVideo: boolean;
+}
+
 export interface VisionaryDocSyncStatus {
   lastAttemptAt: string;
   lastCheckedAt: string;
@@ -581,7 +587,11 @@ export async function redeemInviteCode(payload: { code: string }) {
 }
 
 export async function fetchModels() {
-  return request<{ models: ModelInfo[]; gptImagePricing: GptImagePricing }>('/api/models', {}, true);
+  return request<{
+    models: ModelInfo[];
+    gptImagePricing: GptImagePricing;
+    providerRouting: ProviderRoutingConfig;
+  }>('/api/models', {}, true);
 }
 
 export async function generateImage(payload: {
@@ -709,10 +719,22 @@ export async function fetchAdminDashboard() {
     stats: AdminDashboardStats;
     providerMetrics: ProviderMetricRow[];
     providerRisks: ProviderRiskRecord[];
+    providerRouting: ProviderRoutingConfig;
     imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
     visionaryDocSync: VisionaryDocSyncStatus;
   }>('/api/admin/dashboard', {}, true);
+}
+
+export async function updateAdminProviderRouting(patch: Partial<ProviderRoutingConfig>) {
+  return request<{ providerRouting: ProviderRoutingConfig }>(
+    '/api/admin/provider-routing',
+    {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    },
+    true,
+  );
 }
 
 export async function cleanupAdminImages(retentionDays = 5) {

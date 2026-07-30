@@ -25,6 +25,7 @@ type RouterOptions = {
   authorization: string;
   primaryModel: string;
   primaryModels?: Record<string, string>;
+  isPrimaryEnabled?: (input: ImageGenerationInput) => boolean | Promise<boolean>;
   timeoutMs: number;
   failureThreshold: number;
   transientCooldownMs: number;
@@ -279,8 +280,10 @@ export function createImageProviderRouter(options: RouterOptions) {
   async function generate(input: ImageGenerationInput) {
     const traceId = crypto.randomUUID();
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
+    const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
     const primaryEligible =
       primaryConfigured &&
+      primaryEnabled &&
       (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro');
     if (!primaryEligible) return callFallback(input, traceId);
 
@@ -342,5 +345,9 @@ export function createImageProviderRouter(options: RouterOptions) {
     }
   }
 
-  return { generate };
+  async function resetCircuit() {
+    await writeState({ ...CLOSED_STATE, updatedAt: new Date(now()).toISOString() });
+  }
+
+  return { generate, resetCircuit };
 }

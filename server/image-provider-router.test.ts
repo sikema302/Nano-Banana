@@ -217,6 +217,39 @@ test('uses the mapped Junliai nano-banana-pro edits endpoint for reference image
   assert.equal(requestBody?.getAll('image').length, 1);
 });
 
+test('bypasses Junliai when the selected model route is disabled', async () => {
+  const store = createStore();
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModels: {
+      Nano_Banana_Pro: 'nano-banana-pro',
+    },
+    isPrimaryEnabled: async (request) => request.modelId !== 'Nano_Banana_Pro',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'visionary';
+    },
+    fetchImpl: async () => {
+      primaryCalls += 1;
+      return new Response(JSON.stringify({ data: [{ url: 'https://images.example/nano.png' }] }));
+    },
+  });
+
+  assert.equal(await router.generate({ ...input, modelId: 'Nano_Banana_Pro' }), 'visionary');
+  assert.equal(primaryCalls, 0);
+  assert.equal(fallbackCalls, 1);
+});
+
 test('does not call the fallback when the primary request times out with an uncertain result', async () => {
   const store = createStore();
   let fallbackCalls = 0;

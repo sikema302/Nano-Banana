@@ -73,6 +73,7 @@ import {
   revokePublicApiKey,
   rotateUserApiKey,
   updateUserApiKey,
+  updateAdminProviderRouting,
   startGenerateImageJob,
   startGenerateVideoJob,
   type AdminDashboardStats,
@@ -92,6 +93,7 @@ import {
   type PromoCouponInfo,
   type ProviderMetricRow,
   type ProviderRiskRecord,
+  type ProviderRoutingConfig,
   type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
@@ -199,6 +201,12 @@ const emptyDashboardStats: AdminDashboardStats = {
   inviteCodeCount: 0,
   recordCount: 0,
   usedInviteCodeCount: 0,
+};
+
+const defaultProviderRouting: ProviderRoutingConfig = {
+  junliaiGptImage2: true,
+  junliaiNanoBanana: true,
+  junliaiFireflyVideo: true,
 };
 
 const emptyImageStorageStats: AdminImageStorageStats = {
@@ -2418,6 +2426,7 @@ function AdminView({
   dashboardStats,
   providerMetrics,
   providerRisks,
+  providerRouting,
   visionaryDocSync,
   imageStorageStats,
   recordsStats,
@@ -2434,6 +2443,7 @@ function AdminView({
   onDeductUser,
   onDeleteUser,
   onCleanupImages,
+  onUpdateProviderRouting,
   onLoadSection,
   onPreview,
   onNotice,
@@ -2448,6 +2458,7 @@ function AdminView({
   dashboardStats: AdminDashboardStats;
   providerMetrics: ProviderMetricRow[];
   providerRisks: ProviderRiskRecord[];
+  providerRouting: ProviderRoutingConfig;
   visionaryDocSync: VisionaryDocSyncStatus | null;
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
@@ -2467,6 +2478,10 @@ function AdminView({
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
   onCleanupImages: (retentionDays: number) => Promise<void>;
+  onUpdateProviderRouting: (
+    key: keyof ProviderRoutingConfig,
+    enabled: boolean,
+  ) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
     params?: {
@@ -2509,6 +2524,7 @@ function AdminView({
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [cleaningImages, setCleaningImages] = useState<number | null>(null);
+  const [updatingProviderRoute, setUpdatingProviderRoute] = useState<keyof ProviderRoutingConfig | null>(null);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
   const [inviteSearchDraft, setInviteSearchDraft] = useState('');
@@ -3079,6 +3095,90 @@ function AdminView({
                   <p className="mt-2 text-xs text-zinc-500">{card.hint}</p>
                 </div>
               ))}
+            </div>
+            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+              <div>
+                <h2 className="text-base font-black text-white">Junliai 接口开关</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  关闭生图线路后会直接使用原 Visionary 流程，不再请求 Junliai。
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                {([
+                  {
+                    key: 'junliaiGptImage2',
+                    title: 'GPT-Image-2',
+                    enabledText: 'Junliai 优先，失败回退 Visionary',
+                    disabledText: '直接使用 Visionary GPT-Image-2',
+                  },
+                  {
+                    key: 'junliaiNanoBanana',
+                    title: 'Nano Banana',
+                    enabledText: 'Junliai 优先，开放 1K / 2K / 4K',
+                    disabledText: '直接使用 Visionary Pro，仅保留 2K / 4K',
+                  },
+                  {
+                    key: 'junliaiFireflyVideo',
+                    title: 'Firefly Video',
+                    enabledText: 'Junliai 视频生成可用',
+                    disabledText: '生视频接口暂停使用',
+                  },
+                ] as Array<{
+                  key: keyof ProviderRoutingConfig;
+                  title: string;
+                  enabledText: string;
+                  disabledText: string;
+                }>).map((route) => {
+                  const enabled = providerRouting[route.key];
+                  const updating = updatingProviderRoute === route.key;
+                  return (
+                    <article
+                      className={`rounded-[18px] border p-4 ${
+                        enabled
+                          ? 'border-emerald-400/20 bg-emerald-500/[0.06]'
+                          : 'border-white/8 bg-white/[0.025]'
+                      }`}
+                      key={route.key}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-black text-white">{route.title}</div>
+                          <div className={`mt-1 text-[11px] ${enabled ? 'text-emerald-200/75' : 'text-zinc-500'}`}>
+                            {enabled ? route.enabledText : route.disabledText}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={enabled}
+                          disabled={updatingProviderRoute !== null}
+                          className={`relative h-7 w-12 flex-none rounded-full border transition ${
+                            enabled
+                              ? 'border-emerald-300/40 bg-emerald-500'
+                              : 'border-white/15 bg-zinc-800'
+                          } ${updating ? 'opacity-50' : ''}`}
+                          onClick={async () => {
+                            setUpdatingProviderRoute(route.key);
+                            try {
+                              await onUpdateProviderRouting(route.key, !enabled);
+                            } catch (error) {
+                              onNotice(error instanceof Error ? error.message : '接口开关更新失败');
+                            } finally {
+                              setUpdatingProviderRoute(null);
+                            }
+                          }}
+                        >
+                          <span
+                            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
+                              enabled ? 'left-[22px]' : 'left-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
@@ -4052,6 +4152,7 @@ export default function App() {
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
   const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
+  const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -4128,7 +4229,11 @@ export default function App() {
     optimizeChineseText,
     pricing: gptImagePricing,
   });
-  const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
+  const selectedResolutionOptions = isNanoBananaPro
+    ? providerRouting.junliaiNanoBanana
+      ? imageSizeOptions
+      : imageSizeOptions.filter((item) => item.value !== '1K')
+    : gptImageSizeOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
@@ -4214,6 +4319,7 @@ export default function App() {
         .then((payload) => {
           setModels([...payload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
           setGptImagePricing(payload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
+          setProviderRouting(payload.providerRouting || defaultProviderRouting);
         })
         .catch(() => undefined);
     };
@@ -4247,6 +4353,21 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [loading]);
+
+  useEffect(() => {
+    if (!providerRouting.junliaiNanoBanana && selectedModel === 'Nano_Banana_Pro' && imageSize === '1K') {
+      setImageSize('2K');
+    }
+    if (!providerRouting.junliaiFireflyVideo && creationMode === 'video') {
+      setCreationMode('image');
+    }
+  }, [
+    creationMode,
+    imageSize,
+    providerRouting.junliaiFireflyVideo,
+    providerRouting.junliaiNanoBanana,
+    selectedModel,
+  ]);
 
   useEffect(() => {
     if (activeTab === 'history') {
@@ -4298,9 +4419,7 @@ export default function App() {
       return;
     }
     setImageSize((current) => {
-      if (modelId === 'Nano_Banana_Pro') {
-        return current === '1K' || current === '2K' || current === '4K' ? current : '2K';
-      }
+      if (modelId === 'Nano_Banana_Pro') return providerRouting.junliaiNanoBanana ? '1K' : '2K';
       return current === '2K' || current === '4K' ? current : 'STANDARD';
     });
   }
@@ -4346,6 +4465,7 @@ export default function App() {
 
       setModels([...modelPayload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
       setGptImagePricing(modelPayload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
+      setProviderRouting(modelPayload.providerRouting || defaultProviderRouting);
       setSelectedModel((current) => {
         const exists = modelPayload.models.some((item) => item.id === current);
         if (exists) return current;
@@ -4478,6 +4598,7 @@ export default function App() {
 
       if (section === 'dashboard') {
         const payload = await fetchAdminDashboard();
+        setProviderRouting(payload.providerRouting || defaultProviderRouting);
         setAdminOverview((current) => ({
           ...current,
           dashboardStats: payload.stats,
@@ -4749,6 +4870,21 @@ export default function App() {
     void loadAdminSection('dashboard');
   }
 
+  async function handleUpdateProviderRouting(
+    key: keyof ProviderRoutingConfig,
+    enabled: boolean,
+  ) {
+    const payload = await updateAdminProviderRouting({ [key]: enabled });
+    setProviderRouting(payload.providerRouting);
+    setNotice(`${enabled ? '已开启' : '已关闭'} ${
+      key === 'junliaiNanoBanana'
+        ? 'Junliai Nano Banana'
+        : key === 'junliaiGptImage2'
+          ? 'Junliai GPT-Image-2'
+          : 'Junliai Firefly Video'
+    }`);
+  }
+
   async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []) as File[];
     if (files.length === 0) return;
@@ -4916,6 +5052,16 @@ export default function App() {
     const generatedImages: DisplayImage[] = [];
 
     try {
+      let requestImageSize = imageSize;
+      if (isNanoBananaPro) {
+        const latestModels = await fetchModels();
+        const latestRouting = latestModels.providerRouting || defaultProviderRouting;
+        setProviderRouting(latestRouting);
+        if (!latestRouting.junliaiNanoBanana && requestImageSize === '1K') {
+          requestImageSize = '2K';
+          setImageSize('2K');
+        }
+      }
       const referenceImages: ReferenceUploadInput[] = references.map((item) => ({
         name: item.name,
         mimeType: item.mimeType,
@@ -4938,7 +5084,7 @@ export default function App() {
           prompt,
           model: selectedModel,
           dimensions,
-          imageSize,
+          imageSize: requestImageSize,
           quality: showGptQuality ? gptQuality : undefined,
           optimizeChineseText: isNanoBananaPro ? optimizeChineseText : false,
           reference_images: referenceImages,
@@ -5712,8 +5858,14 @@ export default function App() {
                   生图
                 </button>
                 <button
-                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
+                  className={`flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black transition ${
+                    providerRouting.junliaiFireflyVideo
+                      ? 'text-zinc-500 hover:text-zinc-200'
+                      : 'cursor-not-allowed text-zinc-700'
+                  }`}
                   type="button"
+                  disabled={!providerRouting.junliaiFireflyVideo}
+                  title={providerRouting.junliaiFireflyVideo ? undefined : '管理员已关闭生视频接口'}
                   onClick={() => setCreationMode('video')}
                 >
                   <Film size={13} />
@@ -5845,7 +5997,9 @@ export default function App() {
               <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
                 <section className="space-y-1.5">
                   <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className={`grid gap-2 ${
+                    isNanoBananaPro && !providerRouting.junliaiNanoBanana ? 'grid-cols-2' : 'grid-cols-3'
+                  }`}>
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
 
@@ -6115,6 +6269,7 @@ export default function App() {
               dashboardStats={adminOverview.dashboardStats}
               providerMetrics={adminOverview.providerMetrics}
               providerRisks={adminOverview.providerRisks}
+              providerRouting={providerRouting}
               visionaryDocSync={adminOverview.visionaryDocSync}
               imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
@@ -6131,6 +6286,7 @@ export default function App() {
               onDeductUser={handleDeductUserCredits}
               onDeleteUser={handleDeleteAdminUser}
               onCleanupImages={handleCleanupImages}
+              onUpdateProviderRouting={handleUpdateProviderRouting}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
               onNotice={setNotice}

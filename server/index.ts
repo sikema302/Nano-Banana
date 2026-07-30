@@ -34,6 +34,11 @@ import {
 } from './image-provider-router.js';
 import { createProviderMetrics } from './provider-metrics.js';
 import { createProviderRiskMonitor } from './provider-risk-monitor.js';
+import {
+  applyProviderRoutingToImageSize,
+  createProviderRouting,
+  type ProviderRoutingConfig,
+} from './provider-routing.js';
 import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 
@@ -411,6 +416,11 @@ const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
 const VIDEO_MODEL_ID = 'firefly-video';
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
+const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
+  junliaiGptImage2: JUNLIAI_PRIMARY_ENABLED,
+  junliaiNanoBanana: JUNLIAI_PRIMARY_ENABLED,
+  junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
+};
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
 const INVITE_API_CREDIT_SETTING_PREFIX = 'invite_api_credits_v1:';
@@ -1481,6 +1491,13 @@ function normalizeImageSize(value: string, modelId: string) {
   if (value === '1K') return '1K';
   if (value === '4K') return '4K';
   return '2K';
+}
+
+async function normalizeRoutedImageSize(value: string, modelId: string) {
+  const imageSize = normalizeImageSize(value, modelId);
+  if (modelId !== 'Nano_Banana_Pro' || imageSize !== '1K' || !providerRouting) return imageSize;
+  const routing = await providerRouting.get();
+  return applyProviderRoutingToImageSize(modelId, imageSize, routing);
 }
 
 function normalizeGptQuality(value: string, imageSize: string) {
@@ -3762,6 +3779,7 @@ async function callVisionaryGeneration({
 let imageProviderRouter: ReturnType<typeof createImageProviderRouter> | null = null;
 let providerMetrics: ReturnType<typeof createProviderMetrics> | null = null;
 let providerRiskMonitor: ReturnType<typeof createProviderRiskMonitor> | null = null;
+let providerRouting: ReturnType<typeof createProviderRouting> | null = null;
 
 async function enhanceNanoBananaPrompt(prompt: string) {
   if (!GEMINI_API_KEY) {
@@ -3794,10 +3812,16 @@ async function enhanceNanoBananaPrompt(prompt: string) {
 }
 
 async function callImageGeneration(input: ImageGenerationInput) {
+  let routedInput = input;
+  if (input.modelId === 'Nano_Banana_Pro' && input.imageSize === '1K' && providerRouting) {
+    const routing = await providerRouting.get();
+    const routedImageSize = applyProviderRoutingToImageSize(input.modelId, input.imageSize, routing);
+    if (routedImageSize !== input.imageSize) routedInput = { ...input, imageSize: routedImageSize };
+  }
   const effectiveInput =
-    input.modelId === 'Nano_Banana_Pro' && input.optimizeChineseText
-      ? { ...input, prompt: await enhanceNanoBananaPrompt(input.prompt) }
-      : input;
+    routedInput.modelId === 'Nano_Banana_Pro' && routedInput.optimizeChineseText
+      ? { ...routedInput, prompt: await enhanceNanoBananaPrompt(routedInput.prompt) }
+      : routedInput;
   if (!imageProviderRouter) {
     return callVisionaryGeneration(effectiveInput);
   }
@@ -4546,6 +4570,10 @@ async function start() {
       });
     },
   };
+  providerRouting = createProviderRouting({
+    store: visionaryDocSyncStore,
+    defaults: DEFAULT_PROVIDER_ROUTING,
+  });
   providerMetrics = createProviderMetrics({
     store: visionaryDocSyncStore,
     timeZone: ADMIN_STATS_TIME_ZONE,
@@ -4561,6 +4589,12 @@ async function start() {
     primaryModels: {
       'gpt-image-2': JUNLIAI_MODEL,
       Nano_Banana_Pro: 'nano-banana-pro',
+    },
+    isPrimaryEnabled: async (input) => {
+      const routing = await providerRouting!.get();
+      return input.modelId === 'Nano_Banana_Pro'
+        ? routing.junliaiNanoBanana
+        : routing.junliaiGptImage2;
     },
     timeoutMs: JUNLIAI_TIMEOUT_MS,
     failureThreshold: JUNLIAI_FAILURE_THRESHOLD,
@@ -5053,8 +5087,12 @@ async function start() {
     }
   });
 
-  app.get('/api/models', requireAuth, (_req, res) => {
-    res.json({ models, gptImagePricing: getActiveGptImagePricing() });
+  app.get('/api/models', requireAuth, async (_req, res) => {
+    res.json({
+      models,
+      gptImagePricing: getActiveGptImagePricing(),
+      providerRouting: await providerRouting!.get(),
+    });
   });
 
   app.get('/api/chat/conversations', requireAuth, async (req, res) => {
@@ -5264,7 +5302,7 @@ async function start() {
     try {
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = normalizeImageSize(requestedImageSize, modelId);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
@@ -5954,7 +5992,7 @@ async function start() {
 
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = normalizeImageSize(requestedImageSize, modelId);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
@@ -6458,6 +6496,11 @@ async function start() {
       res.status(400).json({ error: '不支持的视频比例或分辨率' });
       return;
     }
+    const routing = await providerRouting!.get();
+    if (!routing.junliaiFireflyVideo) {
+      res.status(503).json({ error: '管理员已关闭 Junliai Firefly Video 接口' });
+      return;
+    }
     if (!JUNLIAI_API_KEY) {
       res.status(503).json({ error: '视频生成接口尚未配置' });
       return;
@@ -6526,7 +6569,7 @@ async function start() {
       let modelId = normalizeModelId(model);
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
-      let imageSize = normalizeImageSize(requestedImageSize, modelId);
+      let imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       let creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
 
@@ -7279,12 +7322,41 @@ async function start() {
     }
   });
 
+  app.put('/api/admin/provider-routing', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const keys: Array<keyof ProviderRoutingConfig> = [
+        'junliaiGptImage2',
+        'junliaiNanoBanana',
+        'junliaiFireflyVideo',
+      ];
+      const patch: Partial<ProviderRoutingConfig> = {};
+      for (const key of keys) {
+        if (typeof req.body?.[key] === 'boolean') patch[key] = req.body[key];
+      }
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({ error: '至少需要提交一个有效的 Junliai 接口开关' });
+        return;
+      }
+
+      const previous = await providerRouting!.get();
+      const next = await providerRouting!.update(patch);
+      const reopened =
+        (!previous.junliaiGptImage2 && next.junliaiGptImage2) ||
+        (!previous.junliaiNanoBanana && next.junliaiNanoBanana);
+      if (reopened) await imageProviderRouter?.resetCircuit();
+      res.json({ providerRouting: next });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '更新上游接口开关失败' });
+    }
+  });
+
   app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const [imageStorage, providerMetricRows, providerRiskRows] = await Promise.all([
+      const [imageStorage, providerMetricRows, providerRiskRows, routing] = await Promise.all([
         getImageStorageStats(),
         providerMetrics?.getToday() || Promise.resolve([]),
         providerRiskMonitor?.getToday() || Promise.resolve([]),
+        providerRouting!.get(),
       ]);
 
       if (USE_SUPABASE) {
@@ -7314,6 +7386,7 @@ async function start() {
           imageStorage,
           providerMetrics: providerMetricRows,
           providerRisks: providerRiskRows,
+          providerRouting: routing,
           adminCredits,
           visionaryDocSync: getVisionaryDocSyncStatus(),
         });
@@ -7347,6 +7420,7 @@ async function start() {
           imageStorage,
           providerMetrics: providerMetricRows,
           providerRisks: providerRiskRows,
+          providerRouting: routing,
           adminCredits: getAdminCreditSummary(db),
           visionaryDocSync: getVisionaryDocSyncStatus(),
         };
