@@ -4,6 +4,7 @@ import test from 'node:test';
 import { applyProviderRoutingToImageSize, createProviderRouting } from './provider-routing.js';
 
 const defaults = {
+  junliaiGptImage2Economy: true,
   junliaiGptImage2: true,
   junliaiNanoBanana: true,
   junliaiFireflyVideo: true,
@@ -45,9 +46,30 @@ test('ignores unknown persisted values and keeps explicit false values', async (
   });
 
   assert.deepEqual(await routing.get(), {
+    junliaiGptImage2Economy: false,
     junliaiGptImage2: false,
     junliaiNanoBanana: true,
     junliaiFireflyVideo: true,
+  });
+});
+
+test('migrates the legacy GPT switch to both independent GPT routes', async () => {
+  const routing = createProviderRouting({
+    defaults,
+    store: {
+      get: async () => JSON.stringify({
+        junliaiGptImage2: false,
+        junliaiNanoBanana: true,
+        junliaiFireflyVideo: true,
+      }),
+      set: async () => undefined,
+    },
+  });
+
+  assert.deepEqual(await routing.get(), {
+    ...defaults,
+    junliaiGptImage2Economy: false,
+    junliaiGptImage2: false,
   });
 });
 

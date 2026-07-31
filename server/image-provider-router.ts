@@ -16,8 +16,14 @@ export type PrimaryCircuitState = {
 };
 
 type StateStore = {
-  get: () => Promise<PrimaryCircuitState | null>;
-  set: (state: PrimaryCircuitState) => Promise<void>;
+  get: (upstreamModel?: string) => Promise<PrimaryCircuitState | null>;
+  set: (state: PrimaryCircuitState, upstreamModel?: string) => Promise<void>;
+};
+
+type PrimaryModelCapability = {
+  imageSizes?: string[];
+  ratios?: string[];
+  maxImages?: number;
 };
 
 type RouterOptions = {
@@ -25,7 +31,13 @@ type RouterOptions = {
   authorization: string;
   primaryModel: string;
   primaryModels?: Record<string, string>;
+  primaryModelChains?: Record<string, string[]>;
+  primaryModelCapabilities?: Record<string, PrimaryModelCapability>;
   isPrimaryEnabled?: (input: ImageGenerationInput) => boolean | Promise<boolean>;
+  isPrimaryModelEnabled?: (
+    input: ImageGenerationInput,
+    upstreamModel: string,
+  ) => boolean | Promise<boolean>;
   timeoutMs: number;
   failureThreshold: number;
   transientCooldownMs: number;
@@ -98,7 +110,8 @@ const IMAGE_SIZES: Record<string, Record<string, string>> = {
 function requestSize(input: ImageGenerationInput) {
   const sizeKey = ['1K', '2K', '4K'].includes(input.imageSize) ? input.imageSize : 'STANDARD';
   const ratio = input.ratio === 'auto' ? '1:1' : input.ratio;
-  return IMAGE_SIZES[sizeKey][ratio] || (/^\d+x\d+$/i.test(ratio) ? ratio : IMAGE_SIZES[sizeKey]['1:1']);
+  return IMAGE_SIZES[sizeKey][ratio]
+    || (/^\d+x\d+$/i.test(ratio) ? ratio : IMAGE_SIZES[sizeKey]['1:1']);
 }
 
 function payloadError(payload: ImageApiPayload) {
@@ -149,7 +162,7 @@ export function createImageProviderRouter(options: RouterOptions) {
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
   const logger = options.logger || console;
-  let cachedState: PrimaryCircuitState | null = null;
+  const cachedStates = new Map<string, PrimaryCircuitState>();
 
   function configuration(input: ImageGenerationInput) {
     return `${input.imageSize || 'STANDARD'} / ${input.quality || 'default'} / ${input.ratio || '1:1'}`;
@@ -190,20 +203,22 @@ export function createImageProviderRouter(options: RouterOptions) {
     }
   }
 
-  async function readState() {
+  async function readState(upstreamModel: string) {
+    const cachedState = cachedStates.get(upstreamModel);
     if (cachedState) return cachedState;
-    cachedState = (await options.store.get().catch(() => null)) || { ...CLOSED_STATE };
-    return cachedState;
+    const state = (await options.store.get(upstreamModel).catch(() => null)) || { ...CLOSED_STATE };
+    cachedStates.set(upstreamModel, state);
+    return state;
   }
 
-  async function writeState(state: PrimaryCircuitState) {
-    cachedState = state;
-    await options.store.set(state).catch((error) => {
+  async function writeState(upstreamModel: string, state: PrimaryCircuitState) {
+    cachedStates.set(upstreamModel, state);
+    await options.store.set(state, upstreamModel).catch((error) => {
       logger.warn('[image-provider] failed to persist circuit state:', errorText(error));
     });
   }
 
-  async function callPrimary(input: ImageGenerationInput) {
+  async function callPrimary(input: ImageGenerationInput, upstreamModel: string) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
     let requestSent = false;
@@ -214,11 +229,10 @@ export function createImageProviderRouter(options: RouterOptions) {
       };
       let body: BodyInit;
       let endpoint = '/v1/images/generations';
-      const primaryModel = options.primaryModels?.[input.modelId] || options.primaryModel;
       if (input.images.length) {
         endpoint = '/v1/images/edits';
         const form = new FormData();
-        form.set('model', primaryModel);
+        form.set('model', upstreamModel);
         form.set('prompt', input.prompt);
         form.set('size', requestSize(input));
         form.set('response_format', 'b64_json');
@@ -230,7 +244,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       } else {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
-          model: primaryModel,
+          model: upstreamModel,
           prompt: input.prompt,
           size: requestSize(input),
           response_format: 'b64_json',
@@ -277,76 +291,107 @@ export function createImageProviderRouter(options: RouterOptions) {
     }
   }
 
+  function primaryCandidates(input: ImageGenerationInput) {
+    const configured = options.primaryModelChains?.[input.modelId]
+      || [options.primaryModels?.[input.modelId] || options.primaryModel];
+    return [...new Set(configured.map((item) => item.trim()).filter(Boolean))].filter((upstreamModel) => {
+      const capability = options.primaryModelCapabilities?.[upstreamModel];
+      if (!capability) return true;
+      const imageSize = ['1K', '2K', '4K'].includes(input.imageSize) ? input.imageSize : 'STANDARD';
+      const ratio = input.ratio || '1:1';
+      return (!capability.imageSizes || capability.imageSizes.includes(imageSize))
+        && (!capability.ratios || capability.ratios.includes(ratio))
+        && (capability.maxImages === undefined || input.images.length <= capability.maxImages);
+    });
+  }
+
   async function generate(input: ImageGenerationInput) {
     const traceId = crypto.randomUUID();
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
+    const candidates = primaryCandidates(input);
     const primaryEligible =
       primaryConfigured &&
       primaryEnabled &&
-      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro');
+      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro') &&
+      candidates.length > 0;
     if (!primaryEligible) return callFallback(input, traceId);
 
-    const state = await readState();
     const currentTime = now();
-    if (state.openUntil > currentTime) {
-      return callFallback(input, traceId);
-    }
+    for (const upstreamModel of candidates) {
+      const modelEnabled = options.isPrimaryModelEnabled
+        ? await options.isPrimaryModelEnabled(input, upstreamModel)
+        : true;
+      if (!modelEnabled) continue;
+      const state = await readState(upstreamModel);
+      if (state.openUntil > currentTime) continue;
 
-    const primaryStartedAt = now();
-    try {
-      const result = await callPrimary(input);
-      await reportAttempt(traceId, input, 'Junliai', primaryStartedAt, true);
-      if (state.consecutiveFailures || state.openUntil) {
-        await writeState({ ...CLOSED_STATE, updatedAt: new Date(currentTime).toISOString() });
-        logger.info('[image-provider] primary provider recovered; circuit closed');
-      }
-      return result;
-    } catch (error) {
-      const failure = classifyFailure(error);
-      await reportAttempt(
-        traceId,
-        input,
-        'Junliai',
-        primaryStartedAt,
-        false,
-        failure.safeToFallback ? failure.kind : 'uncertain',
-      );
-      if (!failure.safeToFallback) {
-        await writeState({
-          consecutiveFailures: 0,
-          openUntil: 0,
-          reason: 'uncertain',
+      const primaryStartedAt = now();
+      try {
+        const result = await callPrimary(input, upstreamModel);
+        await reportAttempt(traceId, input, `Junliai · ${upstreamModel}`, primaryStartedAt, true);
+        if (state.consecutiveFailures || state.openUntil) {
+          await writeState(upstreamModel, {
+            ...CLOSED_STATE,
+            updatedAt: new Date(currentTime).toISOString(),
+          });
+          logger.info(`[image-provider] ${upstreamModel} recovered; circuit closed`);
+        }
+        return result;
+      } catch (error) {
+        const failure = classifyFailure(error);
+        await reportAttempt(
+          traceId,
+          input,
+          `Junliai · ${upstreamModel}`,
+          primaryStartedAt,
+          false,
+          failure.safeToFallback ? failure.kind : 'uncertain',
+        );
+        if (!failure.safeToFallback) {
+          await writeState(upstreamModel, {
+            consecutiveFailures: 0,
+            openUntil: 0,
+            reason: 'uncertain',
+            updatedAt: new Date(currentTime).toISOString(),
+          });
+          logger.warn(`[image-provider] ${upstreamModel} result is uncertain; failover suppressed`);
+          throw new Error(
+            '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试。',
+          );
+        }
+        const consecutiveFailures = state.consecutiveFailures + 1;
+        const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
+        const cooldownMs =
+          failure.kind === 'auth'
+            ? options.authCooldownMs
+            : failure.kind === 'quota'
+              ? options.quotaCooldownMs
+              : options.transientCooldownMs;
+        await writeState(upstreamModel, {
+          consecutiveFailures,
+          openUntil: shouldOpen ? currentTime + cooldownMs : 0,
+          reason: failure.kind,
           updatedAt: new Date(currentTime).toISOString(),
         });
-        logger.warn('[image-provider] primary result is uncertain; fallback suppressed to avoid duplicate billing');
-        throw new Error(
-          '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试',
+        logger.warn(
+          `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 60000)}m cooldown` : ''}`,
         );
       }
-      const consecutiveFailures = state.consecutiveFailures + 1;
-      const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
-      const cooldownMs =
-        failure.kind === 'auth'
-          ? options.authCooldownMs
-          : failure.kind === 'quota'
-            ? options.quotaCooldownMs
-            : options.transientCooldownMs;
-      await writeState({
-        consecutiveFailures,
-        openUntil: shouldOpen ? currentTime + cooldownMs : 0,
-        reason: failure.kind,
-        updatedAt: new Date(currentTime).toISOString(),
-      });
-      logger.warn(
-        `[image-provider] primary failed (${failure.kind}); using fallback${shouldOpen ? ` for ${Math.ceil(cooldownMs / 60000)}m` : ''}`,
-      );
-      return callFallback(input, traceId);
     }
+    return callFallback(input, traceId);
   }
 
   async function resetCircuit() {
-    await writeState({ ...CLOSED_STATE, updatedAt: new Date(now()).toISOString() });
+    const models = [...new Set([
+      options.primaryModel,
+      ...Object.values(options.primaryModels || {}),
+      ...Object.values(options.primaryModelChains || {}).flat(),
+    ].filter(Boolean))];
+    await Promise.all(models.map((upstreamModel) => writeState(upstreamModel, {
+      ...CLOSED_STATE,
+      updatedAt: new Date(now()).toISOString(),
+    })));
   }
 
   return { generate, resetCircuit };

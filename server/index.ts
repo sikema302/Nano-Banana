@@ -403,6 +403,7 @@ const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
 const JUNLIAI_BASE_URL = normalizeEnvValue(process.env.JUNLIAI_BASE_URL || 'https://img.junliai.org');
 const JUNLIAI_API_KEY = normalizeEnvValue(process.env.JUNLIAI_API_KEY);
 const JUNLIAI_MODEL = normalizeEnvValue(process.env.JUNLIAI_MODEL || 'firefly-gpt-image-2');
+const JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL = 'gpt-image-2';
 const JUNLIAI_TIMEOUT_MS = Math.max(15 * 60_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 15 * 60_000));
 const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 3));
 const JUNLIAI_TRANSIENT_COOLDOWN_MS = Math.max(
@@ -421,6 +422,7 @@ const VIDEO_MODEL_ID = 'firefly-video';
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
 const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
+  junliaiGptImage2Economy: JUNLIAI_PRIMARY_ENABLED,
   junliaiGptImage2: JUNLIAI_PRIMARY_ENABLED,
   junliaiNanoBanana: JUNLIAI_PRIMARY_ENABLED,
   junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
@@ -4598,10 +4600,33 @@ async function start() {
       'gpt-image-2': JUNLIAI_MODEL,
       Nano_Banana_Pro: 'nano-banana-pro',
     },
+    primaryModelChains: {
+      'gpt-image-2': [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL, JUNLIAI_MODEL],
+      Nano_Banana_Pro: ['nano-banana-pro'],
+    },
+    primaryModelCapabilities: {
+      [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL]: {
+        imageSizes: ['STANDARD', '1K'],
+        ratios: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4'],
+        maxImages: 6,
+      },
+      [JUNLIAI_MODEL]: {
+        imageSizes: ['STANDARD', '1K', '2K', '4K'],
+        ratios: ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'],
+        maxImages: 6,
+      },
+    },
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
       return input.modelId === 'Nano_Banana_Pro'
         ? routing.junliaiNanoBanana
+        : routing.junliaiGptImage2Economy || routing.junliaiGptImage2;
+    },
+    isPrimaryModelEnabled: async (input, upstreamModel) => {
+      const routing = await providerRouting!.get();
+      if (input.modelId === 'Nano_Banana_Pro') return routing.junliaiNanoBanana;
+      return upstreamModel === JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
+        ? routing.junliaiGptImage2Economy
         : routing.junliaiGptImage2;
     },
     timeoutMs: JUNLIAI_TIMEOUT_MS,
@@ -4610,8 +4635,11 @@ async function start() {
     quotaCooldownMs: JUNLIAI_QUOTA_COOLDOWN_MS,
     authCooldownMs: JUNLIAI_AUTH_COOLDOWN_MS,
     store: {
-      get: async () => {
-        const raw = await visionaryDocSyncStore.get(JUNLIAI_CIRCUIT_SETTING_KEY, '');
+      get: async (upstreamModel = JUNLIAI_MODEL) => {
+        const raw = await visionaryDocSyncStore.get(
+          `${JUNLIAI_CIRCUIT_SETTING_KEY}:${upstreamModel}`,
+          '',
+        );
         if (!raw) return null;
         try {
           return JSON.parse(raw);
@@ -4619,7 +4647,10 @@ async function start() {
           return null;
         }
       },
-      set: (state) => visionaryDocSyncStore.set(JUNLIAI_CIRCUIT_SETTING_KEY, JSON.stringify(state)),
+      set: (state, upstreamModel = JUNLIAI_MODEL) => visionaryDocSyncStore.set(
+        `${JUNLIAI_CIRCUIT_SETTING_KEY}:${upstreamModel}`,
+        JSON.stringify(state),
+      ),
     },
     fallback: callVisionaryGeneration,
     onAttempt: async (attempt) => {
@@ -7333,6 +7364,7 @@ async function start() {
   app.put('/api/admin/provider-routing', requireAuth, requireAdmin, async (req, res) => {
     try {
       const keys: Array<keyof ProviderRoutingConfig> = [
+        'junliaiGptImage2Economy',
         'junliaiGptImage2',
         'junliaiNanoBanana',
         'junliaiFireflyVideo',
@@ -7349,6 +7381,7 @@ async function start() {
       const previous = await providerRouting!.get();
       const next = await providerRouting!.update(patch);
       const reopened =
+        (!previous.junliaiGptImage2Economy && next.junliaiGptImage2Economy) ||
         (!previous.junliaiGptImage2 && next.junliaiGptImage2) ||
         (!previous.junliaiNanoBanana && next.junliaiNanoBanana);
       if (reopened) await imageProviderRouter?.resetCircuit();

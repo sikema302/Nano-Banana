@@ -91,16 +91,40 @@ function publicRows(rows: StoredMetricRow[]): ProviderMetricRow[] {
     }
   }
 
+  const configurationOrder: Record<string, number> = {
+    STANDARD: 0,
+    '1K': 1,
+    '2K': 2,
+    '4K': 3,
+  };
+  const modelOrder = (modelId: string) => {
+    const normalized = modelId.toLowerCase();
+    if (normalized === 'gpt-image-2') return 0;
+    if (normalized.includes('banana')) return 1;
+    if (normalized.includes('video')) return 2;
+    return 3;
+  };
+  const providerOrder = (provider: string) => {
+    const normalized = provider.toLowerCase();
+    if (normalized.includes('junliai') && normalized.includes('· gpt-image-2')) return 0;
+    if (normalized.includes('junliai') && normalized.includes('firefly-gpt-image-2')) return 1;
+    if (normalized.startsWith('junliai')) return 2;
+    if (normalized.startsWith('visionary')) return 3;
+    return 4;
+  };
+
   return [...merged.values()]
     .map((row) => ({
       ...row,
       averageResponseMs: row.callCount > 0 ? Math.round(row.totalResponseMs / row.callCount) : 0,
     }))
     .sort((left, right) =>
-      right.callCount - left.callCount ||
-      left.modelId.localeCompare(right.modelId) ||
-      left.provider.localeCompare(right.provider) ||
-      left.configuration.localeCompare(right.configuration));
+      modelOrder(left.modelId) - modelOrder(right.modelId) ||
+      left.modelId.localeCompare(right.modelId, undefined, { sensitivity: 'base' }) ||
+      (configurationOrder[left.configuration] ?? 99) - (configurationOrder[right.configuration] ?? 99) ||
+      left.configuration.localeCompare(right.configuration) ||
+      providerOrder(left.provider) - providerOrder(right.provider) ||
+      left.provider.localeCompare(right.provider));
 }
 
 export function createProviderMetrics(options: ProviderMetricsOptions) {

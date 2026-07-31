@@ -185,6 +185,7 @@ export interface ProviderRiskRecord {
 }
 
 export interface ProviderRoutingConfig {
+  junliaiGptImage2Economy: boolean;
   junliaiGptImage2: boolean;
   junliaiNanoBanana: boolean;
   junliaiFireflyVideo: boolean;

@@ -1,4 +1,5 @@
 export type ProviderRoutingConfig = {
+  junliaiGptImage2Economy: boolean;
   junliaiGptImage2: boolean;
   junliaiNanoBanana: boolean;
   junliaiFireflyVideo: boolean;
@@ -26,6 +27,7 @@ type ProviderRoutingOptions = {
 };
 
 const ROUTING_KEYS: Array<keyof ProviderRoutingConfig> = [
+  'junliaiGptImage2Economy',
   'junliaiGptImage2',
   'junliaiNanoBanana',
   'junliaiFireflyVideo',
@@ -33,9 +35,16 @@ const ROUTING_KEYS: Array<keyof ProviderRoutingConfig> = [
 
 function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): ProviderRoutingConfig {
   const record = value && typeof value === 'object' ? value as Partial<ProviderRoutingConfig> : {};
+  const legacyGptImage2 = typeof record.junliaiGptImage2 === 'boolean'
+    ? record.junliaiGptImage2
+    : defaults.junliaiGptImage2;
   return {
-    junliaiGptImage2:
-      typeof record.junliaiGptImage2 === 'boolean' ? record.junliaiGptImage2 : defaults.junliaiGptImage2,
+    junliaiGptImage2Economy: typeof record.junliaiGptImage2Economy === 'boolean'
+      ? record.junliaiGptImage2Economy
+      : typeof record.junliaiGptImage2 === 'boolean'
+        ? record.junliaiGptImage2
+        : defaults.junliaiGptImage2Economy,
+    junliaiGptImage2: legacyGptImage2,
     junliaiNanoBanana:
       typeof record.junliaiNanoBanana === 'boolean' ? record.junliaiNanoBanana : defaults.junliaiNanoBanana,
     junliaiFireflyVideo:

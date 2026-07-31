@@ -208,6 +208,7 @@ const emptyDashboardStats: AdminDashboardStats = {
 };
 
 const defaultProviderRouting: ProviderRoutingConfig = {
+  junliaiGptImage2Economy: true,
   junliaiGptImage2: true,
   junliaiNanoBanana: true,
   junliaiFireflyVideo: true,
@@ -3110,16 +3111,22 @@ function AdminView({
               <div>
                 <h2 className="text-base font-black text-white">Junliai 接口开关</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  关闭生图线路后会直接使用原 Visionary 流程，不再请求 Junliai。
+                  每条线路可独立控制；关闭后会跳过对应 Junliai 接口，并按既定顺序继续回退。
                 </p>
               </div>
-              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+              <div className="mt-4 grid gap-3 xl:grid-cols-4">
                 {([
                   {
+                    key: 'junliaiGptImage2Economy',
+                    title: 'GPT Image 2（低价）',
+                    enabledText: 'STANDARD 优先使用 gpt-image-2',
+                    disabledText: 'STANDARD 跳过低价接口',
+                  },
+                  {
                     key: 'junliaiGptImage2',
-                    title: 'GPT-Image-2',
-                    enabledText: 'Junliai 优先，失败回退 Visionary',
-                    disabledText: '直接使用 Visionary GPT-Image-2',
+                    title: 'Firefly GPT Image 2',
+                    enabledText: '低价失败及 2K / 4K 使用 Firefly',
+                    disabledText: '跳过 Firefly，失败回退 Visionary',
                   },
                   {
                     key: 'junliaiNanoBanana',
@@ -3221,7 +3228,7 @@ function AdminView({
                         <td className="px-4 py-3 font-bold text-white">{item.modelId}</td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full border px-2.5 py-1 font-bold ${
-                            item.provider === 'Junliai'
+                            item.provider.startsWith('Junliai')
                               ? 'border-violet-400/25 bg-violet-500/10 text-violet-100'
                               : 'border-sky-400/25 bg-sky-500/10 text-sky-100'
                           }`}>
@@ -3244,7 +3251,7 @@ function AdminView({
                           {(() => {
                             const matches = providerRisks.filter((risk) => {
                               const riskConfiguration = risk.configuration.split('/')[0].trim().toUpperCase() || 'STANDARD';
-                              const providerCalled = item.provider === 'Junliai'
+                              const providerCalled = item.provider.startsWith('Junliai')
                                 ? risk.junliaiStatus !== 'not_called'
                                 : risk.visionaryStatus !== 'not_called';
                               return risk.modelId === item.modelId
@@ -4899,9 +4906,11 @@ export default function App() {
     setNotice(`${enabled ? '已开启' : '已关闭'} ${
       key === 'junliaiNanoBanana'
         ? 'Junliai Nano Banana'
-        : key === 'junliaiGptImage2'
-          ? 'Junliai GPT-Image-2'
-          : 'Junliai Firefly Video'
+        : key === 'junliaiGptImage2Economy'
+          ? 'Junliai GPT Image 2（低价）'
+          : key === 'junliaiGptImage2'
+            ? 'Junliai Firefly GPT Image 2'
+            : 'Junliai Firefly Video'
     }`);
   }
 

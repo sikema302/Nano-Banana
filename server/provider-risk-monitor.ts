@@ -108,13 +108,13 @@ export function createProviderRiskMonitor(options: {
         records.unshift(record);
       }
       record.updatedAt = now;
-      if (attempt.provider === 'Junliai') {
+      if (attempt.provider.startsWith('Junliai')) {
         record.junliaiStatus = attempt.success
           ? 'success'
           : attempt.failureReason === 'uncertain'
             ? 'uncertain'
             : 'explicit_failure';
-        record.junliaiDurationMs = Math.max(0, Math.round(attempt.durationMs));
+        record.junliaiDurationMs += Math.max(0, Math.round(attempt.durationMs));
       } else if (attempt.provider === 'Visionary') {
         record.visionaryStatus = attempt.success ? 'success' : 'failure';
         record.visionaryDurationMs = Math.max(0, Math.round(attempt.durationMs));

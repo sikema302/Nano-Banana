@@ -40,7 +40,7 @@ test('keeps an explicit Junliai failure followed by Visionary success as a norma
     durationMs: 10_000,
     success: false,
   };
-  await monitor.record({ ...base, provider: 'Junliai', failureReason: 'quota' });
+  await monitor.record({ ...base, provider: 'Junliai · gpt-image-2', failureReason: 'quota' });
   await monitor.record({ ...base, provider: 'Visionary', durationMs: 60_000, success: true });
 
   const [record] = await monitor.getToday();
