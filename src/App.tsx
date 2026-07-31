@@ -3050,7 +3050,7 @@ function AdminView({
     { id: 'invites', label: '邀请码' },
     { id: 'apiKeys', label: 'API Key' },
     { id: 'users', label: '用户' },
-    { id: 'records', label: '生图记录' },
+    { id: 'records', label: '请求记录' },
   ];
 
   return (
@@ -3865,13 +3865,13 @@ function AdminView({
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-base font-black text-white">生图记录页</h2>
-                    <p className="mt-1 text-xs text-zinc-500">按模型、时间、用户和分辨率筛选，快速找出高消耗和高活跃记录。</p>
+                    <h2 className="text-base font-black text-white">请求记录</h2>
+                    <p className="mt-1 text-xs text-zinc-500">记录每一次实际上游调用；失败时可直接查看接口返回的报错。</p>
                   </div>
                   <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-5">
                     <input
                       className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
-                      placeholder="搜索用户 / 邀请码 / 提示词"
+                      placeholder="搜索用户"
                       value={recordUserFilterDraft}
                       onChange={(event) => setRecordUserFilterDraft(event.target.value)}
                       onKeyDown={(event) => {
@@ -3922,40 +3922,17 @@ function AdminView({
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">当日消耗积分</p>
-                    <p className="mt-2 text-2xl font-black text-sky-200">{filteredTodayRecordCredits}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">当日生成图片数量</p>
-                    <p className="mt-2 text-2xl font-black text-violet-200">{filteredTodayRecordCount}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">总消耗积分</p>
-                    <p className="mt-2 text-2xl font-black text-white">{filteredRecordCredits}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">最常用模型</p>
-                    <p className="mt-2 text-2xl font-black text-amber-200">{displayMostUsedModel}</p>
-                  </div>
-                  <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-xs text-zinc-500">最活跃时段</p>
-                    <p className="mt-2 text-2xl font-black text-emerald-200">{displayMostActiveHour ? `${displayMostActiveHour}:00` : '暂无'}</p>
-                  </div>
-                </div>
-
                 <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
                   {filteredRecords.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1180px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1080px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="w-24 px-3 py-2 font-medium">图片</th>
                           <th className="px-3 py-2 font-medium">用户</th>
-                          <th className="px-3 py-2 font-medium">邀请码</th>
-                          <th className="px-3 py-2 font-medium">模型</th>
+                          <th className="px-3 py-2 font-medium">请求结果</th>
+                          <th className="px-3 py-2 font-medium">源头模型</th>
                           <th className="px-3 py-2 font-medium">比例 / 分辨率</th>
                           <th className="px-3 py-2 font-medium">积分消耗</th>
                           <th className="px-3 py-2 font-medium">接口耗时</th>
@@ -3967,12 +3944,16 @@ function AdminView({
                         {pagedRecords.map((item) => (
                           <tr key={item.id} className="align-top text-zinc-300">
                             <td className="px-3 py-3">
-                              <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
-                                <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
-                              </button>
+                              {item.imageUrl ? (
+                                <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
+                                  <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                                </button>
+                              ) : <span className="text-zinc-600">-</span>}
                             </td>
                             <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                            <td className="max-w-[180px] truncate px-3 py-3 font-mono text-zinc-500">{item.inviteCode || '-'}</td>
+                            <td className={`max-w-[280px] truncate px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultMessage || ''}>
+                              {item.resultStatus === 'failed' ? item.resultMessage || '请求失败' : '成功'}
+                            </td>
                             <td className="px-3 py-3">{item.modelName}</td>
                             <td className="px-3 py-3">
                               {item.dimensions}
@@ -4011,7 +3992,7 @@ function AdminView({
                     </div>
                     </>
                   ) : (
-                    <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无生图记录</div>
+                    <div className="py-10 text-center text-sm text-zinc-500">当前筛选条件下暂无请求记录</div>
                   )}
                 </div>
               </div>

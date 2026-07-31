@@ -83,6 +83,8 @@ export interface GenerationRecord {
   apiRequestMs?: number;
   referenceImages: string[];
   inviteCode?: string;
+  resultStatus?: 'success' | 'failed';
+  resultMessage?: string;
   createdAt: string;
 }
 

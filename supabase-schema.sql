@@ -36,6 +36,25 @@ CREATE TABLE IF NOT EXISTS generations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 上游图片接口请求日志：成功和失败均记录，供管理员排查路由和报错。
+CREATE TABLE IF NOT EXISTS generation_requests (
+  id BIGINT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  model_id TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  dimensions TEXT NOT NULL DEFAULT '',
+  image_size TEXT NOT NULL DEFAULT '',
+  image_path TEXT NOT NULL DEFAULT '',
+  credits_used INTEGER NOT NULL DEFAULT 0,
+  api_request_ms INTEGER NOT NULL DEFAULT 0,
+  reference_images TEXT NOT NULL DEFAULT '[]',
+  result_status TEXT NOT NULL,
+  result_message TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 4. 用户保存的图片表
 CREATE TABLE IF NOT EXISTS images (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,6 +91,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- 创建索引优化查询
 CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id);
 CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requests(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id);
 CREATE INDEX IF NOT EXISTS idx_images_category ON images(user_id, category);
 CREATE INDEX IF NOT EXISTS idx_invite_codes_redeemed ON invite_codes(redeemed_by);
@@ -101,6 +121,7 @@ CREATE TRIGGER update_app_settings_updated_at
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_credits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE generation_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invite_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;

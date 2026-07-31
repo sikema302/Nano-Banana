@@ -1039,8 +1039,59 @@ function toGeneration(row: Record<string, unknown>) {
     apiRequestMs: Number(row.api_request_ms || 0),
     referenceImages: parseReferenceImages(row.reference_images),
     inviteCode: row.invite_code ? String(row.invite_code) : '',
+    resultStatus: String(row.result_status || 'success'),
+    resultMessage: String(row.result_message || ''),
     createdAt: String(row.created_at || ''),
   };
+}
+
+async function recordGenerationRequest(attempt: {
+  modelId: string;
+  provider: string;
+  configuration: string;
+  durationMs: number;
+  success: boolean;
+  errorMessage?: string;
+  sourceModel: string;
+  prompt: string;
+  requestContext?: { userId: string; username: string };
+}) {
+  const context = attempt.requestContext;
+  if (!context?.userId || !context.username) return;
+  const [imageSize = '', quality = '', ratio = ''] = attempt.configuration.split('/').map((item) => item.trim());
+  const record = {
+    userId: context.userId,
+    username: context.username,
+    prompt: attempt.prompt,
+    modelId: attempt.modelId,
+    modelName: attempt.sourceModel || attempt.provider,
+    dimensions: ratio,
+    imageSize: [imageSize, quality].filter(Boolean).join(' / '),
+    apiRequestMs: Math.max(0, Math.round(attempt.durationMs || 0)),
+    resultStatus: attempt.success ? 'success' : 'failed',
+    resultMessage: attempt.success ? '' : sanitizeExternalErrorMessage(attempt.errorMessage || 'Upstream request failed', 'Upstream request failed'),
+    createdAt: nowIso(),
+  };
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.insertGenerationRequest(record);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    db.run(
+      `INSERT INTO generation_requests (
+        user_id, username, prompt, model_id, model_name, dimensions, image_size,
+        image_path, credits_used, api_request_ms, reference_images, result_status,
+        result_message, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, ?, '[]', ?, ?, ?)`,
+      [
+        record.userId, record.username, record.prompt, record.modelId, record.modelName,
+        record.dimensions, record.imageSize, record.apiRequestMs, record.resultStatus,
+        record.resultMessage, record.createdAt,
+      ],
+    );
+  });
 }
 
 function toPublicReferenceImages(req: Request, referenceImages: string[]) {
@@ -1981,6 +2032,27 @@ function ensureSchema(db: SqlDatabase) {
       updated_at TEXT NOT NULL
     )
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS generation_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      dimensions TEXT NOT NULL,
+      image_size TEXT NOT NULL DEFAULT '',
+      image_path TEXT NOT NULL DEFAULT '',
+      credits_used INTEGER NOT NULL DEFAULT 0,
+      api_request_ms INTEGER NOT NULL DEFAULT 0,
+      reference_images TEXT NOT NULL DEFAULT '[]',
+      result_status TEXT NOT NULL,
+      result_message TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requests(created_at DESC)');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS invite_codes (
@@ -4657,6 +4729,7 @@ async function start() {
       await Promise.all([
         providerMetrics?.record(attempt),
         providerRiskMonitor?.record(attempt),
+        recordGenerationRequest(attempt),
       ]);
     },
   });
@@ -5356,6 +5429,10 @@ async function start() {
         quality,
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: Array.from(new Set(referenceImages)),
+        requestContext: {
+          userId: `api-key:${reservedKey.id}`,
+          username: `api-${reservedKey.name}`.slice(0, 80),
+        },
       });
       const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
       const imagePath = await persistGeneratedImage(generatedImageSource);
@@ -5901,6 +5978,10 @@ async function start() {
           quality: current.quality || '',
           optimizeChineseText: Boolean(current.optimizeChineseText),
           images: current.referenceImages,
+          requestContext: {
+            userId: `api-key:${current.apiKeyId}`,
+            username: `api-${current.apiKeyId}`,
+          },
         });
         const imagePath = await persistGeneratedImage(generatedImageSource);
         current = await updatePublicAsyncTask(current.id, current.apiKeyHash, async (latest) => {
@@ -6668,6 +6749,10 @@ async function start() {
           quality,
           optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
           images: uniqueModelReferenceImages,
+          requestContext: {
+            userId: req.authUser!.userId,
+            username: req.authUser!.username,
+          },
         });
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
@@ -6922,7 +7007,7 @@ async function start() {
           (left, right) => right.creditsUsed - left.creditsUsed || right.generations - left.generations,
         );
 
-        const { records: genRecords, total: recordsTotal } = await db.getGenerationsWithInviteCode(recordsPage, recordsPageSize);
+        const { records: genRecords, total: recordsTotal } = await db.getGenerationRequests(recordsPage, recordsPageSize);
         const records = genRecords.map((row) => toGeneration({
           id: row.id,
           user_id: row.user_id,
@@ -6937,7 +7022,8 @@ async function start() {
           api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
-          invite_code: row.invite_code,
+          result_status: row.result_status,
+          result_message: row.result_message,
         }));
 
         const { codes: inviteCodeRows, total: inviteCodesTotal } = await db.listInviteCodes(inviteCodesPage, inviteCodesPageSize);
@@ -7087,7 +7173,7 @@ async function start() {
             db,
             `
               SELECT COUNT(*) AS total
-              FROM generations
+              FROM generation_requests
               WHERE username != 'demo'
             `,
           )?.total || 0,
@@ -7108,15 +7194,10 @@ async function start() {
               g.credits_used,
               g.api_request_ms,
               g.reference_images,
+              g.result_status,
+              g.result_message,
               g.created_at,
-              COALESCE((
-                SELECT ic.code
-                FROM invite_codes ic
-                WHERE ic.redeemed_by = g.user_id
-                ORDER BY datetime(ic.redeemed_at) DESC, datetime(ic.created_at) DESC
-                LIMIT 1
-              ), '') AS invite_code
-            FROM generations g
+            FROM generation_requests g
             WHERE g.username != 'demo'
             ORDER BY datetime(g.created_at) DESC, g.id DESC
             LIMIT ? OFFSET ?
@@ -7904,9 +7985,9 @@ async function start() {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const [pagePayload, statsPayload, optionsPayload] = await Promise.all([
-          db.getGenerationsWithInviteCode(page, pageSize, options),
-          db.getGenerationStatsRows(options),
-          db.getGenerationFilterOptions(),
+          db.getGenerationRequests(page, pageSize, options),
+          Promise.resolve({ rows: [], total: 0 }),
+          db.getGenerationRequestFilterOptions(),
         ]);
         const toRecord = (row: (typeof pagePayload.records)[number]) => toGeneration({
           id: row.id,
@@ -7922,7 +8003,8 @@ async function start() {
           api_request_ms: row.api_request_ms,
           reference_images: row.reference_images,
           created_at: row.created_at,
-          invite_code: row.invite_code,
+          result_status: row.result_status,
+          result_message: row.result_message,
         });
         const records = pagePayload.records.map(toRecord);
         const statRecords = statsPayload.rows.map((row) => ({
@@ -7941,12 +8023,53 @@ async function start() {
         return;
       }
 
+      const payload = await withReadDb((db) => {
+        ensureSchema(db);
+        const where = ["username != 'demo'"];
+        const params: unknown[] = [];
+        if (options.search) {
+          where.push('(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)');
+          const keyword = `%${options.search}%`;
+          params.push(keyword, keyword, keyword);
+        }
+        if (options.model && options.model !== 'all') {
+          where.push('model_name = ?');
+          params.push(options.model);
+        }
+        if (options.resolution && options.resolution !== 'all') {
+          const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
+          if (dimensions) { where.push('dimensions = ?'); params.push(dimensions); }
+          if (imageSize) { where.push('image_size = ?'); params.push(imageSize); }
+        }
+        if (options.range && options.range !== 'all') {
+          const hours = options.range === '24h' ? 24 : options.range === '7d' ? 168 : options.range === '30d' ? 720 : 0;
+          if (hours) { where.push('datetime(created_at) >= datetime(?)'); params.push(new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()); }
+        }
+        const clause = `WHERE ${where.join(' AND ')}`;
+        const total = Number(getOne<{ total: number }>(db, `SELECT COUNT(*) AS total FROM generation_requests ${clause}`, params)?.total || 0);
+        const records = runQuery<Record<string, unknown>>(
+          db,
+          `SELECT * FROM generation_requests ${clause} ORDER BY datetime(created_at) DESC, id DESC LIMIT ? OFFSET ?`,
+          [...params, pageSize, (page - 1) * pageSize],
+        ).map(toGeneration);
+        const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT model_name, dimensions, image_size FROM generation_requests WHERE username != 'demo'");
+        return {
+          records,
+          total,
+          modelOptions: [...new Set(optionsRows.map((row) => String(row.model_name || '')).filter(Boolean))].sort(),
+          resolutionOptions: [...new Set(optionsRows.map((row) => {
+            const dimensions = String(row.dimensions || '');
+            const imageSize = String(row.image_size || '');
+            return dimensions ? (imageSize ? `${dimensions} / ${imageSize}` : dimensions) : '';
+          }).filter(Boolean))].sort(),
+        };
+      });
       res.json({
-        records: [],
-        recordsPage: toPagination(page, pageSize, 0),
+        records: payload.records.map((item) => toPublicGeneration(req, item)),
+        recordsPage: toPagination(page, pageSize, payload.total),
         stats: summarizeRecordStats([]),
-        modelOptions: [],
-        resolutionOptions: [],
+        modelOptions: payload.modelOptions,
+        resolutionOptions: payload.resolutionOptions,
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch records failed' });

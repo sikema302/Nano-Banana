@@ -6,6 +6,10 @@ export type ImageGenerationInput = {
   quality: string;
   optimizeChineseText: boolean;
   images: string[];
+  requestContext?: {
+    userId: string;
+    username: string;
+  };
 };
 
 export type PrimaryCircuitState = {
@@ -56,6 +60,10 @@ type RouterOptions = {
     durationMs: number;
     success: boolean;
     failureReason?: string;
+    errorMessage?: string;
+    sourceModel: string;
+    prompt: string;
+    requestContext?: ImageGenerationInput['requestContext'];
   }) => void | Promise<void>;
 };
 
@@ -175,6 +183,8 @@ export function createImageProviderRouter(options: RouterOptions) {
     startedAt: number,
     success: boolean,
     failureReason = '',
+    errorMessage = '',
+    sourceModel = input.modelId,
   ) {
     try {
       await options.onAttempt?.({
@@ -185,6 +195,10 @@ export function createImageProviderRouter(options: RouterOptions) {
         durationMs: Math.max(0, now() - startedAt),
         success,
         failureReason: failureReason || undefined,
+        errorMessage: errorMessage || undefined,
+        sourceModel,
+        prompt: input.prompt,
+        requestContext: input.requestContext,
       });
     } catch (error) {
       logger.warn('[image-provider] failed to record provider metrics:', errorText(error));
@@ -198,7 +212,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       await reportAttempt(traceId, input, 'Visionary', startedAt, true);
       return result;
     } catch (error) {
-      await reportAttempt(traceId, input, 'Visionary', startedAt, false, 'explicit_failure');
+      await reportAttempt(traceId, input, 'Visionary', startedAt, false, 'explicit_failure', errorText(error));
       throw error;
     }
   }
@@ -329,7 +343,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       const primaryStartedAt = now();
       try {
         const result = await callPrimary(input, upstreamModel);
-        await reportAttempt(traceId, input, `Junliai · ${upstreamModel}`, primaryStartedAt, true);
+        await reportAttempt(traceId, input, `Junliai · ${upstreamModel}`, primaryStartedAt, true, '', '', upstreamModel);
         if (state.consecutiveFailures || state.openUntil) {
           await writeState(upstreamModel, {
             ...CLOSED_STATE,
@@ -347,6 +361,8 @@ export function createImageProviderRouter(options: RouterOptions) {
           primaryStartedAt,
           false,
           failure.safeToFallback ? failure.kind : 'uncertain',
+          errorText(error),
+          upstreamModel,
         );
         if (!failure.safeToFallback) {
           await writeState(upstreamModel, {

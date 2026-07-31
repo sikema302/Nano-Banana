@@ -41,6 +41,8 @@ type GenerationRow = {
   reference_images: string;
   created_at: string;
   invite_code?: string;
+  result_status?: string;
+  result_message?: string;
 };
 
 type GenerationFilterOptions = {
@@ -161,6 +163,8 @@ function toGenerationRow(row: Record<string, unknown>): GenerationRow {
     reference_images: String(row.reference_images || '[]'),
     created_at: String(row.created_at || ''),
     invite_code: row.invite_code == null ? undefined : String(row.invite_code),
+    result_status: row.result_status == null ? undefined : String(row.result_status),
+    result_message: row.result_message == null ? undefined : String(row.result_message),
   };
 }
 
@@ -243,7 +247,7 @@ function toImageRow(row: Record<string, unknown>): ImageRow {
   };
 }
 
-async function getNextNumericId(tableName: 'users' | 'generations' | 'images'): Promise<number> {
+async function getNextNumericId(tableName: 'users' | 'generations' | 'images' | 'generation_requests'): Promise<number> {
   const { data, error } = await getSupabase()
     .from(tableName)
     .select('id')
@@ -987,6 +991,89 @@ export async function getUserGenerations(userId: string): Promise<GenerationRow[
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
   return hydrateGenerationApiRequestMs((data || []).map((row) => toGenerationRow(row as Record<string, unknown>)));
+}
+
+export async function insertGenerationRequest(record: {
+  userId: string;
+  username: string;
+  prompt: string;
+  modelId: string;
+  modelName: string;
+  dimensions: string;
+  imageSize: string;
+  apiRequestMs: number;
+  resultStatus: string;
+  resultMessage: string;
+  createdAt: string;
+}): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('generation_requests');
+    const { error } = await getSupabase().from('generation_requests').insert({
+      id,
+      user_id: record.userId,
+      username: record.username,
+      prompt: record.prompt,
+      model_id: record.modelId,
+      model_name: record.modelName,
+      dimensions: record.dimensions,
+      image_size: record.imageSize,
+      image_path: '',
+      credits_used: 0,
+      api_request_ms: record.apiRequestMs,
+      reference_images: '[]',
+      result_status: record.resultStatus,
+      result_message: record.resultMessage,
+      created_at: record.createdAt,
+    });
+    if (!error) return;
+    if (!isPrimaryKeyConflict(error)) throw new Error(`Insert generation request failed: ${error.message}`);
+  }
+  throw new Error('Insert generation request failed: unable to allocate a unique request id');
+}
+
+export async function getGenerationRequests(
+  page: number,
+  pageSize: number,
+  options: GenerationFilterOptions = {},
+): Promise<{ records: GenerationRow[]; total: number }> {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  const keyword = String(options.search || '').trim();
+  const inviteUserIds = keyword ? await getInviteUserIdsForGenerationKeyword(keyword) : new Set<string>();
+  const [{ count, error: countError }, { data, error }] = await Promise.all([
+    applyGenerationFilters(getSupabase().from('generation_requests').select('id', { count: 'exact', head: true }), options, inviteUserIds),
+    applyGenerationFilters(getSupabase().from('generation_requests').select('*'), options, inviteUserIds)
+      .order('created_at', { ascending: false }).range(from, to),
+  ]);
+  if (error) throw new Error(`Fetch generation requests failed: ${error.message}`);
+  if (countError) throw new Error(`Count generation requests failed: ${countError.message}`);
+  return {
+    records: (data || []).map((row) => toGenerationRow(row as Record<string, unknown>)),
+    total: count || 0,
+  };
+}
+
+export async function getGenerationRequestFilterOptions(): Promise<{
+  modelOptions: string[];
+  resolutionOptions: string[];
+}> {
+  const { data, error } = await getSupabase()
+    .from('generation_requests')
+    .select('model_name, dimensions, image_size')
+    .neq('username', 'demo')
+    .order('created_at', { ascending: false })
+    .range(0, 9999);
+  if (error) return { modelOptions: [], resolutionOptions: [] };
+  const modelOptions = new Set<string>();
+  const resolutionOptions = new Set<string>();
+  for (const row of data || []) {
+    const modelName = String((row as { model_name: string }).model_name || '');
+    const dimensions = String((row as { dimensions: string }).dimensions || '');
+    const imageSize = String((row as { image_size: string }).image_size || '');
+    if (modelName) modelOptions.add(modelName);
+    if (dimensions) resolutionOptions.add(imageSize ? `${dimensions} / ${imageSize}` : dimensions);
+  }
+  return { modelOptions: [...modelOptions].sort(), resolutionOptions: [...resolutionOptions].sort() };
 }
 
 async function hydrateGenerationApiRequestMs(records: GenerationRow[]): Promise<GenerationRow[]> {
