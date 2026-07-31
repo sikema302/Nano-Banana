@@ -3886,7 +3886,7 @@ function AdminView({
                       value={recordModelFilter}
                       onChange={(event) => setRecordModelFilter(event.target.value)}
                     >
-                      <option value="all">全部模型</option>
+                      <option value="all">全部源头模型</option>
                       {modelOptions.map((item) => (
                         <option key={item} value={item}>{item}</option>
                       ))}

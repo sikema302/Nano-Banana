@@ -1001,14 +1001,15 @@ export async function insertGenerationRequest(record: {
   modelName: string;
   dimensions: string;
   imageSize: string;
+  creditsUsed: number;
   apiRequestMs: number;
   resultStatus: string;
   resultMessage: string;
   createdAt: string;
-}): Promise<void> {
+}): Promise<string> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const id = await getNextNumericId('generation_requests');
-    const { error } = await getSupabase().from('generation_requests').insert({
+    const { data, error } = await getSupabase().from('generation_requests').insert({
       id,
       user_id: record.userId,
       username: record.username,
@@ -1018,17 +1019,26 @@ export async function insertGenerationRequest(record: {
       dimensions: record.dimensions,
       image_size: record.imageSize,
       image_path: '',
-      credits_used: 0,
+      credits_used: record.creditsUsed,
       api_request_ms: record.apiRequestMs,
       reference_images: '[]',
       result_status: record.resultStatus,
       result_message: record.resultMessage,
       created_at: record.createdAt,
     });
-    if (!error) return;
+    if (!error) return String((data as { id?: string | number } | null)?.id || id);
     if (!isPrimaryKeyConflict(error)) throw new Error(`Insert generation request failed: ${error.message}`);
   }
   throw new Error('Insert generation request failed: unable to allocate a unique request id');
+}
+
+export async function updateGenerationRequestImage(requestId: string, imagePath: string): Promise<void> {
+  if (!requestId || !imagePath) return;
+  const { error } = await getSupabase()
+    .from('generation_requests')
+    .update({ image_path: imagePath })
+    .eq('id', requestId);
+  if (error) throw new Error(`Update generation request image failed: ${error.message}`);
 }
 
 export async function getGenerationRequests(

@@ -9,6 +9,8 @@ export type ImageGenerationInput = {
   requestContext?: {
     userId: string;
     username: string;
+    creditsUsed: number;
+    successfulRequestId?: string;
   };
 };
 

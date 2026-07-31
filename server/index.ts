@@ -1054,10 +1054,10 @@ async function recordGenerationRequest(attempt: {
   errorMessage?: string;
   sourceModel: string;
   prompt: string;
-  requestContext?: { userId: string; username: string };
-}) {
+  requestContext?: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string };
+}): Promise<string> {
   const context = attempt.requestContext;
-  if (!context?.userId || !context.username) return;
+  if (!context?.userId || !context.username) return '';
   const [imageSize = '', quality = '', ratio = ''] = attempt.configuration.split('/').map((item) => item.trim());
   const record = {
     userId: context.userId,
@@ -1067,6 +1067,7 @@ async function recordGenerationRequest(attempt: {
     modelName: attempt.sourceModel || attempt.provider,
     dimensions: ratio,
     imageSize: [imageSize, quality].filter(Boolean).join(' / '),
+    creditsUsed: attempt.success ? context.creditsUsed : 0,
     apiRequestMs: Math.max(0, Math.round(attempt.durationMs || 0)),
     resultStatus: attempt.success ? 'success' : 'failed',
     resultMessage: attempt.success ? '' : sanitizeExternalErrorMessage(attempt.errorMessage || 'Upstream request failed', 'Upstream request failed'),
@@ -1074,9 +1075,9 @@ async function recordGenerationRequest(attempt: {
   };
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
-    await db.insertGenerationRequest(record);
-    return;
+    return db.insertGenerationRequest(record);
   }
+  let requestId = 0;
   await withWriteDb((db) => {
     ensureSchema(db);
     db.run(
@@ -1084,13 +1085,28 @@ async function recordGenerationRequest(attempt: {
         user_id, username, prompt, model_id, model_name, dimensions, image_size,
         image_path, credits_used, api_request_ms, reference_images, result_status,
         result_message, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, ?, '[]', ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, '[]', ?, ?, ?)`,
       [
         record.userId, record.username, record.prompt, record.modelId, record.modelName,
-        record.dimensions, record.imageSize, record.apiRequestMs, record.resultStatus,
+        record.dimensions, record.imageSize, record.creditsUsed, record.apiRequestMs, record.resultStatus,
         record.resultMessage, record.createdAt,
       ],
     );
+    requestId = lastInsertId(db);
+  });
+  return String(requestId);
+}
+
+async function updateGenerationRequestImage(requestId: string | undefined, imagePath: string) {
+  if (!requestId || !imagePath) return;
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.updateGenerationRequestImage(requestId, imagePath);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    db.run('UPDATE generation_requests SET image_path = ? WHERE id = ?', [imagePath, requestId]);
   });
 }
 
@@ -4726,10 +4742,13 @@ async function start() {
     },
     fallback: callVisionaryGeneration,
     onAttempt: async (attempt) => {
+      const requestId = await recordGenerationRequest(attempt);
+      if (attempt.success && requestId && attempt.requestContext) {
+        attempt.requestContext.successfulRequestId = requestId;
+      }
       await Promise.all([
         providerMetrics?.record(attempt),
         providerRiskMonitor?.record(attempt),
-        recordGenerationRequest(attempt),
       ]);
     },
   });
@@ -5421,6 +5440,11 @@ async function start() {
 
       const createdAt = nowIso();
       const apiRequestStartedAt = Date.now();
+      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
+        userId: `api-key:${reservedKey.id}`,
+        username: `api-${reservedKey.name}`.slice(0, 80),
+        creditsUsed,
+      };
       const generatedImageSource = await callImageGeneration({
         prompt,
         modelId,
@@ -5429,13 +5453,11 @@ async function start() {
         quality,
         optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
         images: Array.from(new Set(referenceImages)),
-        requestContext: {
-          userId: `api-key:${reservedKey.id}`,
-          username: `api-${reservedKey.name}`.slice(0, 80),
-        },
+        requestContext,
       });
       const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
       const imagePath = await persistGeneratedImage(generatedImageSource);
+      await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
       const username = `api-${reservedKey.name}`.slice(0, 80);
 
       if (USE_SUPABASE) {
@@ -5970,6 +5992,11 @@ async function start() {
           updatedAt: nowIso(),
         }));
         if (!current) return;
+        const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
+          userId: `api-key:${current.apiKeyId}`,
+          username: `api-${current.apiKeyId}`,
+          creditsUsed: current.creditsUsed,
+        };
         const generatedImageSource = await callImageGeneration({
           prompt: current.prompt,
           modelId: current.modelId,
@@ -5978,12 +6005,10 @@ async function start() {
           quality: current.quality || '',
           optimizeChineseText: Boolean(current.optimizeChineseText),
           images: current.referenceImages,
-          requestContext: {
-            userId: `api-key:${current.apiKeyId}`,
-            username: `api-${current.apiKeyId}`,
-          },
+          requestContext,
         });
         const imagePath = await persistGeneratedImage(generatedImageSource);
+        await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
         current = await updatePublicAsyncTask(current.id, current.apiKeyHash, async (latest) => {
           if (latest.status === 'succeeded' && latest.imagePath) return latest;
           const completed: PublicAsyncGenerationTask = {
@@ -6739,6 +6764,11 @@ async function start() {
       const createdAt = nowIso();
       let imagePath = '';
       let apiRequestMs = 0;
+      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
+        userId: req.authUser!.userId,
+        username: req.authUser!.username,
+        creditsUsed,
+      };
       try {
         const apiRequestStartedAt = Date.now();
         const generatedImageSource = await callImageGeneration({
@@ -6749,13 +6779,11 @@ async function start() {
           quality,
           optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
           images: uniqueModelReferenceImages,
-          requestContext: {
-            userId: req.authUser!.userId,
-            username: req.authUser!.username,
-          },
+          requestContext,
         });
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
+        await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
       } finally {
         await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       }
