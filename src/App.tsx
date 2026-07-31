@@ -12,6 +12,7 @@ import {
   Info,
   Home,
   KeyRound,
+  Layers3,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -111,6 +112,7 @@ import {
   type VideoResolution,
 } from './lib/video-pricing';
 import ChatView from './ChatView';
+import BatchCreateView from './BatchCreateView';
 
 interface UploadPreview {
   id: string;
@@ -142,12 +144,13 @@ const defaultModels: ModelInfo[] = [
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
-type AppTab = 'home' | 'create' | 'chat' | 'history' | 'apiDocs' | 'admin';
+type AppTab = 'home' | 'create' | 'batchCreate' | 'chat' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
   home: '/',
   create: '/create',
+  batchCreate: '/batch-create',
   chat: '/chat',
   history: '/history',
   apiDocs: '/apidoc',
@@ -160,6 +163,7 @@ function getTabPath(tab: AppTab) {
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
+  if (pathname === '/batch-create') return 'batchCreate';
   if (pathname === '/chat') return 'home';
   if (pathname === '/history') return 'history';
   if (pathname === '/apidoc') return 'apiDocs';
@@ -5460,6 +5464,7 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
+    { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
     { id: 'admin', label: '后台管理', icon: <ShieldCheck size={15} />, hidden: !user?.isAdmin },
@@ -6254,6 +6259,25 @@ export default function App() {
                 ))}
               </div>
             </section>
+          ) : activeTab === 'batchCreate' ? (
+            <BatchCreateView
+              user={user}
+              models={models}
+              gptImagePricing={gptImagePricing}
+              providerRouting={providerRouting}
+              onLogin={() => {
+                setAuthMode('login');
+                setAuthOpen(true);
+              }}
+              onPurchase={openPurchasePage}
+              onCreditsChange={(creditsRemaining) => {
+                setUser((current) => current ? { ...current, creditsRemaining } : current);
+              }}
+              onGenerationComplete={() => {
+                void loadHistory();
+                if (user?.isAdmin) void loadAdminSection('dashboard');
+              }}
+            />
           ) : activeTab === 'history' ? (
             <HistoryView records={historyRecords} onPreview={setPreviewImage} />
           ) : activeTab === 'chat' ? (
