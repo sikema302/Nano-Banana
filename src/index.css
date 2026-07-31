@@ -95,6 +95,13 @@
   padding-inline: var(--space-5);
 }
 
+.admin-page-shell {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: clamp(12px, 1.2vw, 24px);
+}
+
 .btn-primary,
 .btn-secondary,
 .btn-ghost {

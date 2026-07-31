@@ -3049,8 +3049,8 @@ function AdminView({
   ];
 
   return (
-    <section className="page-shell flex min-h-0 flex-col overflow-auto py-4 lg:h-full lg:overflow-hidden">
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+    <section className="admin-page-shell flex min-h-0 flex-col overflow-auto py-4 lg:h-full lg:overflow-hidden">
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[200px_minmax(0,1fr)] xl:gap-4">
         <aside className="app-panel flex flex-col p-3">
           <div className="card mb-4 p-4">
             <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
@@ -3706,7 +3706,17 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1360px] w-full table-fixed text-left text-xs">
+                    <table className="w-[1020px] table-fixed text-left text-xs">
+                      <colgroup>
+                        <col style={{ width: '115px' }} />
+                        <col style={{ width: '65px' }} />
+                        <col style={{ width: '145px' }} />
+                        <col style={{ width: '65px' }} />
+                        <col style={{ width: '155px' }} />
+                        <col style={{ width: '125px' }} />
+                        <col style={{ width: '105px' }} />
+                        <col style={{ width: '245px' }} />
+                      </colgroup>
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 font-medium">用户</th>
@@ -3727,7 +3737,7 @@ function AdminView({
                               最近生成 {userSortMode === 'recent-desc' ? '↓' : '↑'}
                             </button>
                           </th>
-                          <th className="sticky right-0 z-20 w-[330px] border-l border-white/8 bg-[#0a0a0a] px-3 py-2 text-right font-medium shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">{'\u64cd\u4f5c'}</th>
+                          <th className="sticky right-0 z-20 border-l border-white/8 bg-[#0a0a0a] px-2 py-2 text-left font-medium shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">{'\u64cd\u4f5c'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/6">
@@ -3738,11 +3748,11 @@ function AdminView({
                           const inviteCode = item.inviteCode || invitePrefixesByUserId[item.userId]?.[0] || '';
                           return (
                             <tr key={item.userId} className="text-zinc-300">
-                              <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                              <td className="max-w-[240px] truncate px-3 py-3 text-zinc-500">{item.userId}</td>
-                              <td className="max-w-[180px] truncate px-3 py-3 font-mono text-zinc-400">{inviteCode || '-'}</td>
-                              <td className="px-3 py-3">{item.generations}</td>
-                              <td className="px-3 py-3">
+                              <td className="px-2.5 py-2.5 font-semibold text-white">{item.username}</td>
+                              <td className="truncate px-2.5 py-2.5 text-zinc-500">{item.userId}</td>
+                              <td className="truncate px-2.5 py-2.5 font-mono text-zinc-400">{inviteCode || '-'}</td>
+                              <td className="px-2.5 py-2.5">{item.generations}</td>
+                              <td className="px-2.5 py-2.5">
                                 <div className="flex items-center justify-between gap-3">
                                   <span className="font-semibold text-white">{item.remainingCredits}</span>
                                   <span className="text-zinc-500">/ {item.totalCredits}</span>
@@ -3752,7 +3762,7 @@ function AdminView({
                                 </div>
                                 <div className="mt-1 text-[11px] text-zinc-500">使用率 {formatPercent(usageRate)}</div>
                               </td>
-                              <td className="px-3 py-3">
+                              <td className="px-2.5 py-2.5">
                                 <div className="group relative inline-flex cursor-default items-center gap-2 font-semibold text-sky-200">
                                   <span>{item.creditsUsed} 点</span>
                                   <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">近 7 天</span>
@@ -3765,12 +3775,12 @@ function AdminView({
                                   </div>
                                 </div>
                               </td>
-                              <td className="px-3 py-3">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
-                              <td className="sticky right-0 z-[5] w-[330px] border-l border-white/8 bg-[#0d0d15] px-3 py-3 text-right shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">
-                                <div className="flex items-center justify-end gap-1.5">
+                              <td className="px-2.5 py-2.5">{item.lastGeneratedAt ? formatTime(item.lastGeneratedAt) : '暂无'}</td>
+                              <td className="sticky right-0 z-[5] border-l border-white/8 bg-[#0d0d15] px-2 py-2.5 text-left shadow-[-12px_0_24px_rgba(0,0,0,0.35)]">
+                                <div className="flex items-center justify-start gap-1">
                                   {!isApiKeyUsage && !item.username.toLowerCase().startsWith('invite-') ? (
                                     <button
-                                      className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-100 transition hover:bg-sky-500/20"
+                                      className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-2 py-1.5 text-[11px] font-semibold text-sky-100 transition hover:bg-sky-500/20"
                                       type="button"
                                       onClick={() => void handleViewRedemptions(item)}
                                     >
@@ -3778,7 +3788,7 @@ function AdminView({
                                     </button>
                                   ) : null}
                                   <button
-                                    className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                                     disabled={isApiKeyUsage || (item.username.toLowerCase() !== 'admin' && adminCredits.remainingCredits <= 0) || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleRechargeUser(item)}
@@ -3786,7 +3796,7 @@ function AdminView({
                                     {rechargingUserId === item.userId ? '充值中...' : '充值'}
                                   </button>
                                   <button
-                                    className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                                     disabled={isApiKeyUsage || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeductUser(item)}
@@ -3794,7 +3804,7 @@ function AdminView({
                                     {deductingUserId === item.userId ? '扣除中...' : '扣积分'}
                                   </button>
                                   <button
-                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                                     disabled={isApiKeyUsage || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeleteUser(item)}
