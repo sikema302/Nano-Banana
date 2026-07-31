@@ -53,6 +53,8 @@ test('submits and polls nano-banana-2-lite as a fixed 1K fallback', async () => 
     images: ['https://images.example/reference.png'],
     size: '16:9',
     resolution: '1K',
+    optimizeChineseText: false,
+    client_request_id: 'stable-request-id',
   });
   assert.equal(requests[1].url, 'https://visionary.beer/v1/tasks/task-lite-1');
 });
@@ -81,6 +83,73 @@ test('surfaces a failed nano-banana-2-lite task', async () => {
         fetchImpl: async () => responses.shift() || new Response(null, { status: 500 }),
       },
     ),
-    /upstream generation rejected/,
+    /任务 ID：task-lite-failed.*upstream generation rejected/,
+  );
+});
+
+test('retries transient polling errors without submitting a duplicate Lite task', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const warnings: string[] = [];
+  const responses = [
+    new Response(JSON.stringify({
+      data: [{ status: 'submitted', task_id: 'task-lite-retry', retry_after: 1 }],
+    })),
+    new Response(JSON.stringify({
+      error: { message: 'temporary status gateway error' },
+    }), { status: 502 }),
+    new Response(JSON.stringify({
+      data: {
+        id: 'task-lite-retry',
+        status: 'completed',
+        result: {
+          images: [{ url: ['https://visionary.beer/generated/retry.png'] }],
+        },
+      },
+    })),
+  ];
+
+  const result = await generateVisionaryNanoLite(
+    { prompt: 'Poster', ratio: '1:1', images: [] },
+    {
+      baseUrl: 'https://visionary.beer',
+      apiKey: 'secret',
+      requestId: 'retry-request-id',
+      sleep: async () => undefined,
+      logger: { warn: (message) => warnings.push(String(message)) },
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init });
+        return responses.shift() || new Response(null, { status: 500 });
+      },
+    },
+  );
+
+  assert.equal(result, 'https://visionary.beer/generated/retry.png');
+  assert.equal(requests.filter((request) => request.init?.method === 'POST').length, 1);
+  assert.equal(requests.filter((request) => request.init?.method === 'GET').length, 2);
+  assert.match(warnings[0], /task-lite-retry.*temporary status gateway error/);
+});
+
+test('includes the polling phase and task ID after repeated status failures', async () => {
+  const responses = [
+    new Response(JSON.stringify({
+      data: [{ status: 'submitted', task_id: 'task-lite-poll-failed', retry_after: 1 }],
+    })),
+    new Response(JSON.stringify({ error: { message: 'gateway one' } }), { status: 502 }),
+    new Response(JSON.stringify({ error: { message: 'gateway two' } }), { status: 502 }),
+  ];
+
+  await assert.rejects(
+    () => generateVisionaryNanoLite(
+      { prompt: 'Poster', ratio: '1:1', images: [] },
+      {
+        baseUrl: 'https://visionary.beer',
+        apiKey: 'secret',
+        maxPollErrors: 2,
+        sleep: async () => undefined,
+        logger: { warn: () => undefined },
+        fetchImpl: async () => responses.shift() || new Response(null, { status: 500 }),
+      },
+    ),
+    /查询阶段连续失败.*任务 ID：task-lite-poll-failed.*gateway two/,
   );
 });
