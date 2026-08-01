@@ -434,6 +434,7 @@ function createActivityPreviewCount() {
 }
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
+const SHOW_CREATION_ACTIVITY = false;
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -4299,7 +4300,7 @@ export default function App() {
   const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
 
   useEffect(() => {
-    if (!import.meta.env.DEV || activeTab !== 'create' || creationMode !== 'image') return;
+    if (!SHOW_CREATION_ACTIVITY || !import.meta.env.DEV || activeTab !== 'create' || creationMode !== 'image') return;
     const timer = window.setInterval(() => {
       setActivityPreviewCount((current) => {
         const { min, max } = getActivityPreviewRange();
@@ -4312,7 +4313,7 @@ export default function App() {
   }, [activeTab, creationMode]);
 
   useEffect(() => {
-    if (activeTab !== 'create' || creationMode !== 'image') return;
+    if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
     let cancelled = false;
 
     const refreshActivity = () => {
@@ -6328,7 +6329,7 @@ export default function App() {
                       loading={index === activeGenerationStageIndex && loading}
                       progress={index === activeGenerationStageIndex && loading ? generationProgress : null}
                       showActions={Boolean(item && !(index === activeGenerationStageIndex && loading) && user)}
-                      showActivity={index === 0}
+                      showActivity={SHOW_CREATION_ACTIVITY && index === 0}
                       activity={creationActivity}
                       activityPreviewCount={import.meta.env.DEV ? activityPreviewCount : undefined}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
