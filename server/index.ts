@@ -22,7 +22,14 @@ import {
   isValidImageBuffer,
 } from './generated-image-download.js';
 import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
-import { getVideoGenerationCredits, type VideoResolution } from '../src/lib/video-pricing.js';
+import {
+  getVideoGenerationCredits,
+  supportsVideoConfiguration,
+  type VideoDurationSeconds,
+  type VideoModelId,
+  type VideoRatio,
+  type VideoResolution,
+} from '../src/lib/video-pricing.js';
 import {
   getActiveGptImagePricing,
   getVisionaryDocSyncStatus,
@@ -419,13 +426,19 @@ const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
   60_000,
   Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
 );
-const VIDEO_MODEL_ID = 'firefly-video';
+const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
+const VIDEO_MODEL_FIREFLY_ID = 'firefly-video';
+const VIDEO_MODEL_LABELS: Record<string, string> = {
+  [VIDEO_MODEL_GEMINI_ID]: 'Gemini Veo 3.1',
+  [VIDEO_MODEL_FIREFLY_ID]: 'Firefly Video',
+};
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
 const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   junliaiGptImage2Economy: JUNLIAI_PRIMARY_ENABLED,
   junliaiGptImage2: JUNLIAI_PRIMARY_ENABLED,
   junliaiNanoBanana: JUNLIAI_PRIMARY_ENABLED,
+  junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
   junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
@@ -3981,9 +3994,11 @@ async function parseJunliaiVideoResponse(response: globalThis.Response) {
 }
 
 async function createJunliaiVideoTask(input: {
+  modelId: VideoModelId;
   prompt: string;
   ratio: string;
   resolution: string;
+  seconds: VideoDurationSeconds;
   referenceImages: ReferenceUploadInput[];
 }) {
   const url = `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos`;
@@ -3993,21 +4008,21 @@ async function createJunliaiVideoTask(input: {
   let body: BodyInit;
   if (input.referenceImages.length > 0) {
     const form = new FormData();
-    form.set('model', VIDEO_MODEL_ID);
+    form.set('model', input.modelId);
     form.set('prompt', input.prompt);
-    form.set('seconds', '5');
+    form.set('seconds', String(input.seconds));
     form.set('size', videoSize(input.ratio, input.resolution));
     form.set('response_format', 'url');
-    input.referenceImages.slice(0, 1).forEach((item, index) => {
+    input.referenceImages.slice(0, 2).forEach((item, index) => {
       form.append('input_reference', dataUrlBlob(item.data), item.name || `reference-${index + 1}.png`);
     });
     body = form;
   } else {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify({
-      model: VIDEO_MODEL_ID,
+      model: input.modelId,
       prompt: input.prompt,
-      seconds: '5',
+      seconds: String(input.seconds),
       size: videoSize(input.ratio, input.resolution),
       response_format: 'url',
     });
@@ -6604,8 +6619,10 @@ async function start() {
     status: 'queued' | 'processing' | 'succeeded' | 'failed';
     progress: number;
     prompt: string;
-    ratio: '16:9' | '1:1' | '9:16';
+    ratio: VideoRatio;
     resolution: VideoResolution;
+    modelId: VideoModelId;
+    seconds: VideoDurationSeconds;
     referenceImages: ReferenceUploadInput[];
     createdAt: string;
     updatedAt: string;
@@ -6624,7 +6641,7 @@ async function start() {
   };
 
   function publicVideoJob(req: Request, job: VideoGenerationJob) {
-    const creditsUsed = getVideoGenerationCredits(job.resolution);
+    const creditsUsed = getVideoGenerationCredits(job.modelId, job.resolution, job.seconds);
     return {
       id: job.id,
       status: job.status,
@@ -6633,6 +6650,8 @@ async function start() {
       updatedAt: job.updatedAt,
       completedAt: job.completedAt,
       videoUrl: job.videoPath ? toPublicAssetUrl(req, job.videoPath) : undefined,
+      modelId: job.modelId,
+      modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
       error: job.error,
       creditsUsed: job.status === 'succeeded' ? creditsUsed : 0,
       creditsRemaining: job.creditsRemaining,
@@ -6643,8 +6662,32 @@ async function start() {
     const job = videoJobs.get(jobId);
     if (!job) return;
     const requestStartedAt = Date.now();
-    const metricConfiguration = `${job.resolution} / 5s / ${job.ratio}`;
-    const creditsUsed = getVideoGenerationCredits(job.resolution);
+    const metricConfiguration = `${job.resolution} / ${job.seconds}s / ${job.ratio}`;
+    const creditsUsed = getVideoGenerationCredits(job.modelId, job.resolution, job.seconds);
+    const recordVideoRequest = async (modelId: string, success: boolean, durationMs: number, errorMessage = '', videoPath = '') => {
+      try {
+        const requestId = await recordGenerationRequest({
+          modelId,
+          provider: 'Junliai',
+          configuration: metricConfiguration,
+          durationMs,
+          success,
+          errorMessage,
+          sourceModel: VIDEO_MODEL_LABELS[modelId] || modelId,
+          prompt: job.prompt,
+          requestContext: {
+            userId: job.userId,
+            username: job.username,
+            creditsUsed,
+          },
+        });
+        if (success && requestId && videoPath) {
+          await updateGenerationRequestImage(requestId, videoPath);
+        }
+      } catch (recordError) {
+        console.warn('[video-generation] failed to save request record:', recordError);
+      }
+    };
     const update = (patch: Partial<VideoGenerationJob>) => {
       Object.assign(job, patch, { updatedAt: nowIso() });
     };
@@ -6680,8 +6723,8 @@ async function start() {
             userId: job.userId,
             username: job.username,
             prompt: job.prompt,
-            modelId: VIDEO_MODEL_ID,
-            modelName: 'Firefly Video',
+            modelId: job.modelId,
+            modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
             dimensions: job.ratio,
             imageSize: job.resolution,
             imagePath: videoPath,
@@ -6704,8 +6747,8 @@ async function start() {
                 job.userId,
                 job.username,
                 job.prompt,
-                VIDEO_MODEL_ID,
-                'Firefly Video',
+                job.modelId,
+                VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
                 job.ratio,
                 job.resolution,
                 videoPath,
@@ -6721,28 +6764,32 @@ async function start() {
         console.warn('[video-generation] failed to save history:', historyError);
       }
       void providerMetrics?.record({
-        modelId: VIDEO_MODEL_ID,
+        modelId: job.modelId,
         provider: 'Junliai',
         configuration: metricConfiguration,
         durationMs: apiRequestMs,
         success: true,
       });
+      await recordVideoRequest(job.modelId, true, apiRequestMs, '', videoPath);
       update({ status: 'succeeded', progress: 100, videoPath, creditsRemaining, completedAt: nowIso() });
     } catch (error) {
       console.error('[video-generation]', error);
+      const durationMs = Math.max(0, Date.now() - requestStartedAt);
+      const errorMessage = sanitizeExternalErrorMessage(
+        error instanceof Error ? error.message : 'Video generation failed',
+        '视频生成失败，本次不会扣除积分',
+      );
       void providerMetrics?.record({
-        modelId: VIDEO_MODEL_ID,
+        modelId: job.modelId,
         provider: 'Junliai',
         configuration: metricConfiguration,
-        durationMs: Math.max(0, Date.now() - requestStartedAt),
+        durationMs,
         success: false,
       });
+      await recordVideoRequest(job.modelId, false, durationMs, errorMessage);
       update({
         status: 'failed',
-        error: sanitizeExternalErrorMessage(
-          error instanceof Error ? error.message : 'Video generation failed',
-          '视频生成失败，本次不会扣除积分',
-        ),
+        error: errorMessage,
         completedAt: nowIso(),
       });
     }
@@ -6750,11 +6797,13 @@ async function start() {
 
   app.post('/api/generate/video/jobs', requireAuth, async (req, res) => {
     pruneVideoJobs();
+    const modelId = normalizeString(req.body?.modelId) as VideoModelId;
     const prompt = normalizeString(req.body?.prompt).slice(0, 8_000);
     const ratio = normalizeString(req.body?.ratio) as VideoGenerationJob['ratio'];
     const resolution = normalizeString(req.body?.resolution) as VideoGenerationJob['resolution'];
+    const seconds = Number(req.body?.seconds) as VideoDurationSeconds;
     const rawReferences = Array.isArray(req.body?.referenceImages) ? req.body.referenceImages : [];
-    const referenceImages = rawReferences.slice(0, 1).map((item: unknown, index: number) => {
+    const referenceImages = rawReferences.slice(0, 2).map((item: unknown, index: number) => {
       const value = asPlainObject(item);
       return {
         name: normalizeString(value.name) || `video-reference-${index + 1}.png`,
@@ -6766,13 +6815,16 @@ async function start() {
       res.status(400).json({ error: '请输入视频提示词' });
       return;
     }
-    if (!['16:9', '1:1', '9:16'].includes(ratio) || !['720p', '1080p'].includes(resolution)) {
-      res.status(400).json({ error: '不支持的视频比例或分辨率' });
+    if (!supportsVideoConfiguration(modelId, resolution, ratio, seconds)) {
+      res.status(400).json({ error: '当前视频模型不支持所选比例、分辨率或时长' });
       return;
     }
     const routing = await providerRouting!.get();
-    if (!routing.junliaiFireflyVideo) {
-      res.status(503).json({ error: '管理员已关闭 Junliai Firefly Video 接口' });
+    const routeEnabled = modelId === VIDEO_MODEL_GEMINI_ID
+      ? routing.junliaiGeminiVeo31
+      : routing.junliaiFireflyVideo;
+    if (!routeEnabled) {
+      res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
       return;
     }
     if (!JUNLIAI_API_KEY) {
@@ -6786,7 +6838,7 @@ async function start() {
             ensureSchema(db);
             return getUserCredits(db, req.authUser!.userId);
           });
-      const creditsUsed = getVideoGenerationCredits(resolution);
+      const creditsUsed = getVideoGenerationCredits(modelId, resolution, seconds);
       if (credits.remainingCredits < creditsUsed) {
         res.status(402).json({ error: `当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分` });
         return;
@@ -6798,9 +6850,11 @@ async function start() {
         username: req.authUser!.username,
         status: 'queued',
         progress: 3,
+        modelId,
         prompt,
         ratio,
         resolution,
+        seconds,
         referenceImages,
         createdAt: now,
         updatedAt: now,
@@ -7607,6 +7661,7 @@ async function start() {
         'junliaiGptImage2Economy',
         'junliaiGptImage2',
         'junliaiNanoBanana',
+        'junliaiGeminiVeo31',
         'junliaiFireflyVideo',
       ];
       const patch: Partial<ProviderRoutingConfig> = {};

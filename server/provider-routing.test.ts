@@ -7,6 +7,7 @@ const defaults = {
   junliaiGptImage2Economy: true,
   junliaiGptImage2: true,
   junliaiNanoBanana: true,
+  junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
 };
 
@@ -49,6 +50,7 @@ test('ignores unknown persisted values and keeps explicit false values', async (
     junliaiGptImage2Economy: false,
     junliaiGptImage2: false,
     junliaiNanoBanana: true,
+    junliaiGeminiVeo31: true,
     junliaiFireflyVideo: true,
   });
 });

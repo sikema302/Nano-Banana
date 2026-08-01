@@ -75,6 +75,8 @@ export interface VideoGenerationJobInfo {
   updatedAt: string;
   completedAt?: string;
   videoUrl?: string;
+  modelId?: string;
+  modelName?: string;
   error?: string;
   creditsUsed?: number;
   creditsRemaining?: number;
@@ -215,6 +217,7 @@ export interface ProviderRoutingConfig {
   junliaiGptImage2Economy: boolean;
   junliaiGptImage2: boolean;
   junliaiNanoBanana: boolean;
+  junliaiGeminiVeo31: boolean;
   junliaiFireflyVideo: boolean;
 }
 
@@ -728,10 +731,11 @@ export async function fetchGenerateImageJob(jobId: string) {
 }
 
 export async function startGenerateVideoJob(payload: {
+  modelId: 'gemini-veo31' | 'firefly-video';
   prompt: string;
   ratio: '16:9' | '1:1' | '9:16';
   resolution: '720p' | '1080p';
-  seconds: 5;
+  seconds: 4 | 5 | 6 | 8;
   referenceImages: Array<{ name: string; mimeType: string; data: string }>;
 }) {
   return request<{ job: VideoGenerationJobInfo }>(

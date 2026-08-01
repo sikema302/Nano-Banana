@@ -122,6 +122,11 @@ import {
 } from './lib/model-pricing';
 import {
   getVideoGenerationCredits,
+  getVideoModelConfig,
+  VIDEO_GENERATION_MODELS,
+  type VideoDurationSeconds,
+  type VideoModelId,
+  type VideoRatio,
   type VideoResolution,
 } from './lib/video-pricing';
 import ChatView from './ChatView';
@@ -224,6 +229,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   junliaiGptImage2Economy: true,
   junliaiGptImage2: true,
   junliaiNanoBanana: true,
+  junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
 };
 
@@ -811,25 +817,28 @@ function SidePanel({
   );
 }
 
-type VideoRatio = '16:9' | '1:1' | '9:16';
-
 function VideoCreateView({
   user,
+  providerRouting,
   onSwitchImage,
   onLogin,
   onPurchase,
   onCreditsChange,
 }: {
   user: UserInfo | null;
+  providerRouting: ProviderRoutingConfig;
   onSwitchImage: () => void;
   onLogin: () => void;
   onPurchase: () => void;
   onCreditsChange: (creditsRemaining: number) => void;
 }) {
   const [prompt, setPrompt] = useState('');
+  const [modelId, setModelId] = useState<VideoModelId>('gemini-veo31');
   const [ratio, setRatio] = useState<VideoRatio>('16:9');
   const [resolution, setResolution] = useState<VideoResolution>('1080p');
-  const creditsNeeded = getVideoGenerationCredits(resolution);
+  const [seconds, setSeconds] = useState<VideoDurationSeconds>(4);
+  const modelConfig = getVideoModelConfig(modelId);
+  const creditsNeeded = getVideoGenerationCredits(modelId, resolution, seconds);
   const [references, setReferences] = useState<UploadPreview[]>([]);
   const [job, setJob] = useState<VideoGenerationJobInfo | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
@@ -842,14 +851,33 @@ function VideoCreateView({
     pollingRunRef.current += 1;
   }, []);
 
+  const isVideoModelEnabled = (candidate: VideoModelId) => candidate === 'gemini-veo31'
+    ? providerRouting.junliaiGeminiVeo31
+    : providerRouting.junliaiFireflyVideo;
+
+  function selectVideoModel(nextModelId: VideoModelId) {
+    const next = getVideoModelConfig(nextModelId);
+    setModelId(nextModelId);
+    setRatio((current) => next.ratios.includes(current) ? current : next.ratios[0]);
+    setResolution((current) => next.resolutions.includes(current) ? current : next.resolutions[0]);
+    setSeconds(next.durations[0]);
+    setError('');
+  }
+
+  useEffect(() => {
+    if (isVideoModelEnabled(modelId)) return;
+    const next = VIDEO_GENERATION_MODELS.find((candidate) => isVideoModelEnabled(candidate.id));
+    if (next) selectVideoModel(next.id);
+  }, [modelId, providerRouting.junliaiFireflyVideo, providerRouting.junliaiGeminiVeo31]);
+
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const files: File[] = event.target.files ? Array.from(event.target.files) : [];
     event.target.value = '';
     setError('');
 
-    const remaining = Math.max(0, 1 - references.length);
+    const remaining = Math.max(0, 2 - references.length);
     if (remaining === 0) {
-      setError('最多上传 1 张参考图');
+      setError('最多上传 2 张参考图');
       return;
     }
 
@@ -862,7 +890,7 @@ function VideoCreateView({
 
     try {
       const next = await Promise.all(selected.map(fileToBase64));
-      setReferences((current) => [...current, ...next].slice(0, 1));
+      setReferences((current) => [...current, ...next].slice(0, 2));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '参考图读取失败');
     }
@@ -895,10 +923,11 @@ function VideoCreateView({
 
     try {
       const started = await startGenerateVideoJob({
+        modelId,
         prompt: normalizedPrompt,
         ratio,
         resolution,
-        seconds: 5,
+        seconds,
         referenceImages: references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
       });
       setJob(started.job);
@@ -963,12 +992,19 @@ function VideoCreateView({
 
           <section className="space-y-1.5">
             <div className="px-0.5 text-[11px] font-extrabold text-zinc-400">模型</div>
-            <div className="input flex min-h-[40px] items-center px-3 py-2">
-              <div>
-                <div className="font-mono text-[12px] font-bold text-zinc-100">firefly-video</div>
-                <div className="text-[9px] text-zinc-500">Adobe Firefly 视频生成</div>
-              </div>
-            </div>
+            <select
+              className="input min-h-[42px] w-full px-3 py-2 text-[12px] font-bold text-zinc-100 outline-none"
+              disabled={generating}
+              value={modelId}
+              onChange={(event) => selectVideoModel(event.target.value as VideoModelId)}
+            >
+              {VIDEO_GENERATION_MODELS.map((model) => (
+                <option className="bg-[#111111]" disabled={!isVideoModelEnabled(model.id)} key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+            <p className="px-0.5 text-[9px] leading-4 text-zinc-500">{modelConfig.description}</p>
           </section>
 
           <section className="space-y-1.5">
@@ -988,7 +1024,7 @@ function VideoCreateView({
             <section className="space-y-1.5">
               <div className="text-[11px] font-extrabold text-zinc-400">画面比例</div>
               <div className="grid grid-cols-3 gap-1.5">
-                {(['16:9', '1:1', '9:16'] as VideoRatio[]).map((item) => (
+                {modelConfig.ratios.map((item) => (
                   <button
                     key={item}
                     className={ratio === item
@@ -1005,7 +1041,7 @@ function VideoCreateView({
             <section className="space-y-1.5">
               <div className="text-[11px] font-extrabold text-zinc-400">分辨率</div>
               <div className="grid grid-cols-2 gap-1.5">
-                {(['720p', '1080p'] as VideoResolution[]).map((item) => (
+                {modelConfig.resolutions.map((item) => (
                   <button
                     key={item}
                     className={resolution === item
@@ -1023,28 +1059,36 @@ function VideoCreateView({
 
           <section className="space-y-1.5">
             <div className="text-[11px] font-extrabold text-zinc-400">时长</div>
-            <button
-              className="inline-flex min-h-0 w-fit items-center justify-center rounded-lg border border-white bg-white px-3.5 py-2 text-[12px] font-black text-black"
-              type="button"
-              aria-pressed="true"
-            >
-              5s
-            </button>
+            <div className="flex flex-wrap gap-1.5">
+              {modelConfig.durations.map((item) => (
+                <button
+                  key={item}
+                  className={seconds === item
+                    ? 'inline-flex min-h-0 items-center justify-center rounded-lg border border-white bg-white px-3.5 py-2 text-[12px] font-black text-black'
+                    : 'btn-secondary min-h-0 rounded-lg px-3.5 py-2 text-[12px] font-black text-zinc-400'}
+                  type="button"
+                  aria-pressed={seconds === item}
+                  onClick={() => setSeconds(item)}
+                >
+                  {item}s
+                </button>
+              ))}
+            </div>
           </section>
 
           <section className="space-y-1.5">
             <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
-              <span>参考图（最多 1 张 · 首帧 · 单张 ≤20MB）</span>
-              <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 1</span>
+              <span>参考图（最多 2 张 · 首帧/末帧 · 单张 ≤20MB）</span>
+              <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 2</span>
             </div>
             <div className="flex flex-wrap gap-2">
-              {references.length < 1 ? (
+              {references.length < 2 ? (
                 <label className="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
                   <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
                   <Plus size={20} />
                 </label>
               ) : null}
-              {references.map((item) => (
+              {references.map((item, index) => (
                 <button
                   key={item.id}
                   className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-white/10"
@@ -1053,7 +1097,7 @@ function VideoCreateView({
                   onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
                 >
                   <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
-                  <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">首帧</span>
+                  <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">{index === 0 ? '首帧' : '末帧'}</span>
                 </button>
               ))}
             </div>
@@ -1165,17 +1209,25 @@ function VideoCreateView({
   );
 }
 
-function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => void }) {
+function HomeView({
+  onNavigate,
+  onStartImage,
+  onStartVideo,
+}: {
+  onNavigate: (tab: 'create' | 'apiDocs') => void;
+  onStartImage: () => void;
+  onStartVideo: () => void;
+}) {
   const features = [
     {
-      title: '多模型支持',
-      description: '灵活选择不同模型，覆盖多种创作场景。',
-      icon: <Sparkles size={25} />,
+      title: '多模型图片创作',
+      description: '文生图、图生图与高清输出，一站完成视觉创作。',
+      icon: <ImagePlus size={25} />,
     },
     {
-      title: '高清图片生成',
-      description: '支持多种画幅与高清输出，作品可直接查看下载。',
-      icon: <ImagePlus size={25} />,
+      title: 'AI 视频创作',
+      description: '支持文生视频与参考图生视频，提供 720P、1080P 输出。',
+      icon: <Film size={25} />,
     },
     {
       title: '稳定 API 接入',
@@ -1189,46 +1241,75 @@ function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => v
       <div className="mx-auto flex min-h-full w-full max-w-[1380px] flex-col">
         <div className="grid flex-1 items-center gap-6 lg:min-h-0 lg:grid-cols-[0.9fr_1.1fr] lg:gap-10">
           <div className="max-w-2xl py-2 lg:py-3">
-            <div className="inline-flex rounded-full bg-violet-500/10 px-4 py-2 text-xs font-bold tracking-[0.12em] text-violet-200">
-              PIXORY · AI IMAGE PLATFORM
+            <div className="inline-flex items-center gap-2 rounded-full border border-violet-400/15 bg-violet-500/10 px-4 py-2 text-xs font-bold tracking-[0.12em] text-violet-200">
+              <Sparkles size={13} />
+              PIXORY · AI CREATIVE STUDIO
             </div>
-            <h1 className="mt-5 text-4xl font-black leading-[1.18] tracking-tight text-white sm:text-5xl lg:whitespace-nowrap lg:text-[48px]">
-              让创意，更快成为作品
+            <h1 className="mt-5 text-4xl font-black leading-[1.16] tracking-tight text-white sm:text-5xl lg:text-[48px]">
+              一站完成 AI 图片
+              <span className="block bg-[linear-gradient(90deg,#c4b5fd_0%,#f0abfc_52%,#67e8f9_100%)] bg-clip-text text-transparent">与视频创作</span>
             </h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-zinc-400 sm:text-lg">
-              PIXORY 提供稳定易用的 AI 图像生成与 API 服务，支持文生图、图生图和高清输出。
+              从一张图片到一段动态影像，PIXORY 支持文生图、图生图、文生视频与参考图生视频。
             </p>
+            <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-bold">
+              <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">多模型图片生成</span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-fuchsia-400/20 bg-fuchsia-500/10 px-3 py-1.5 text-fuchsia-200">
+                <Film size={12} /> AI 视频已上线
+              </span>
+              <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">720P · 1080P</span>
+            </div>
             <div className="mt-6 flex flex-wrap gap-3">
               <button
-                className="btn-primary min-w-40 justify-center px-6 py-3 text-base font-bold"
+                className="btn-primary min-w-40 justify-center gap-2 px-6 py-3 text-base font-bold"
                 type="button"
-                onClick={() => onNavigate('create')}
+                onClick={onStartImage}
               >
-                开始创作
+                <ImagePlus size={17} />
+                创作图片
               </button>
               <button
-                className="btn-secondary min-w-40 justify-center px-6 py-3 text-base font-bold"
+                className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl border border-fuchsia-400/25 bg-[linear-gradient(135deg,rgba(168,85,247,0.18),rgba(236,72,153,0.13))] px-6 py-3 text-base font-bold text-fuchsia-100 shadow-[0_12px_36px_rgba(168,85,247,0.12)] transition hover:border-fuchsia-300/40 hover:bg-fuchsia-500/20"
                 type="button"
-                onClick={() => onNavigate('apiDocs')}
+                onClick={onStartVideo}
               >
-                API 接入
+                <Film size={17} />
+                创作视频
               </button>
             </div>
+            <button className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-zinc-500 transition hover:text-violet-200" type="button" onClick={() => onNavigate('apiDocs')}>
+              <CodeIcon size={13} />
+              需要接入业务？查看 API 文档
+            </button>
           </div>
 
           <div className="rounded-[26px] bg-white/[0.035] p-3 shadow-[0_24px_70px_rgba(0,0,0,0.24)] ring-1 ring-inset ring-white/[0.07] sm:p-4">
             <div className="mb-3 flex items-center justify-between px-1">
-              <h2 className="text-sm font-black text-white sm:text-base">精选作品</h2>
+              <h2 className="text-sm font-black text-white sm:text-base">图片与视频创作</h2>
               <div className="flex gap-2 text-[10px] font-bold text-zinc-400 sm:text-[11px]">
-                <span className="rounded-full bg-black/25 px-2.5 py-1">Nano Banana Pro</span>
                 <span className="rounded-full bg-black/25 px-2.5 py-1">GPT Image 2</span>
+                <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-200">Gemini Veo 3.1</span>
               </div>
             </div>
-            <img
-              alt="PIXORY 精选 AI 作品"
-              className="aspect-[16/9] max-h-[360px] w-full rounded-[18px] object-cover"
-              src="/images/pixory-showcase.webp"
-            />
+            <div className="group relative overflow-hidden rounded-[18px] bg-black">
+              <img
+                alt="PIXORY AI 图片与视频创作"
+                className="aspect-[16/9] max-h-[360px] w-full object-cover transition duration-700 group-hover:scale-[1.02]"
+                src="/images/pixory-showcase.webp"
+              />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 bg-[linear-gradient(180deg,transparent_0%,rgba(7,7,12,0.9)_100%)] px-4 pb-4 pt-16">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white backdrop-blur-md">
+                    <Film size={18} />
+                  </span>
+                  <span>
+                    <span className="block text-xs font-black text-white sm:text-sm">让静态画面动起来</span>
+                    <span className="mt-0.5 block text-[10px] text-zinc-300 sm:text-[11px]">文生视频 · 参考图生视频</span>
+                  </span>
+                </div>
+                <span className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-[10px] font-black text-white backdrop-blur-md">5 秒高清输出</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1251,7 +1332,7 @@ function HomeView({ onNavigate }: { onNavigate: (tab: 'create' | 'apiDocs') => v
         <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-1 py-3 text-xs text-zinc-600">
           <div className="flex items-center gap-3">
             <span className="text-sm font-black tracking-[0.14em] text-zinc-300">PIXORY</span>
-            <span>专业 AI 图像生成与 API 服务</span>
+            <span>专业 AI 图片与视频创作服务</span>
           </div>
           <span>产品服务 · API 文档 · 服务条款 · 隐私政策 · 联系我们</span>
         </footer>
@@ -3311,7 +3392,7 @@ function AdminView({
                   每条线路可独立控制；关闭后会跳过对应 Junliai 接口，并按既定顺序继续回退。
                 </p>
               </div>
-              <div className="mt-4 grid gap-3 xl:grid-cols-4">
+                <div className="mt-4 grid gap-3 xl:grid-cols-5">
                 {([
                   {
                     key: 'junliaiGptImage2Economy',
@@ -3331,11 +3412,17 @@ function AdminView({
                     enabledText: 'Junliai 优先，开放 1K / 2K / 4K',
                     disabledText: '直接使用 Visionary Pro，仅保留 2K / 4K',
                   },
-                  {
-                    key: 'junliaiFireflyVideo',
-                    title: 'Firefly Video',
-                    enabledText: 'Junliai 视频生成可用',
-                    disabledText: '生视频接口暂停使用',
+                   {
+                     key: 'junliaiGeminiVeo31',
+                     title: 'Gemini Veo 3.1',
+                     enabledText: '用户可独立选择 Gemini Veo 3.1',
+                     disabledText: '暂停 Gemini Veo 3.1 模型',
+                   },
+                   {
+                     key: 'junliaiFireflyVideo',
+                     title: 'Firefly Video',
+                     enabledText: '用户可独立选择 Firefly Video',
+                     disabledText: '暂停 Firefly Video 模型',
                   },
                 ] as Array<{
                   key: keyof ProviderRoutingConfig;
@@ -4128,7 +4215,7 @@ function AdminView({
                     <table className="min-w-[1080px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
-                          <th className="w-24 px-3 py-2 font-medium">图片</th>
+                          <th className="w-24 px-3 py-2 font-medium">图片/视频</th>
                           <th className="px-3 py-2 font-medium">用户</th>
                           <th className="px-3 py-2 font-medium">请求结果</th>
                           <th className="px-3 py-2 font-medium">源头模型</th>
@@ -4145,7 +4232,11 @@ function AdminView({
                             <td className="px-3 py-3">
                               {item.imageUrl ? (
                                 <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
-                                  <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                                  {isVideoAssetUrl(item.imageUrl) ? (
+                                    <video className="h-full w-full object-cover transition hover:scale-105" src={item.imageUrl} muted preload="metadata" />
+                                  ) : (
+                                    <img alt={item.prompt} className="h-full w-full object-cover transition hover:scale-105" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                                  )}
                                 </button>
                               ) : <span className="text-zinc-600">-</span>}
                             </td>
@@ -4627,12 +4718,13 @@ export default function App() {
     if (!providerRouting.junliaiNanoBanana && selectedModel === 'Nano_Banana_Pro' && imageSize === '1K') {
       setImageSize('2K');
     }
-    if (!providerRouting.junliaiFireflyVideo && creationMode === 'video') {
+    if (!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && creationMode === 'video') {
       setCreationMode('image');
     }
   }, [
     creationMode,
     imageSize,
+    providerRouting.junliaiGeminiVeo31,
     providerRouting.junliaiFireflyVideo,
     providerRouting.junliaiNanoBanana,
     selectedModel,
@@ -5151,8 +5243,10 @@ export default function App() {
         : key === 'junliaiGptImage2Economy'
           ? 'Junliai GPT Image 2（低价）'
           : key === 'junliaiGptImage2'
-            ? 'Junliai Firefly GPT Image 2'
-            : 'Junliai Firefly Video'
+          ? 'Junliai Firefly GPT Image 2'
+            : key === 'junliaiGeminiVeo31'
+              ? 'Junliai Gemini Veo 3.1'
+              : 'Junliai Firefly Video'
     }`);
   }
 
@@ -6157,6 +6251,7 @@ export default function App() {
           {activeTab === 'create' && creationMode === 'video' ? (
             <VideoCreateView
               user={user}
+              providerRouting={providerRouting}
               onSwitchImage={() => setCreationMode('image')}
               onLogin={() => {
                 setAuthMode('login');
@@ -6181,13 +6276,13 @@ export default function App() {
                 </button>
                 <button
                   className={`flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black transition ${
-                    providerRouting.junliaiFireflyVideo
+                    providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo
                       ? 'text-zinc-500 hover:text-zinc-200'
                       : 'cursor-not-allowed text-zinc-700'
                   }`}
                   type="button"
-                  disabled={!providerRouting.junliaiFireflyVideo}
-                  title={providerRouting.junliaiFireflyVideo ? undefined : '管理员已关闭生视频接口'}
+                  disabled={!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo}
+                  title={providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo ? undefined : '管理员已关闭全部视频接口'}
                   onClick={() => setCreationMode('video')}
                 >
                   <Film size={13} />
@@ -6540,7 +6635,17 @@ export default function App() {
           </aside>
 
           {activeTab === 'create' && creationMode === 'video' ? null : activeTab === 'home' ? (
-            <HomeView onNavigate={handleTabChange} />
+            <HomeView
+              onNavigate={handleTabChange}
+              onStartImage={() => {
+                setCreationMode('image');
+                handleTabChange('create');
+              }}
+              onStartVideo={() => {
+                setCreationMode('video');
+                handleTabChange('create');
+              }}
+            />
           ) : activeTab === 'create' ? (
             <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
               <div className="custom-scrollbar grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-y-auto lg:pr-1">
