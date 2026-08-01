@@ -1,8 +1,10 @@
 import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
+  Bell,
   Bookmark,
   Clock3,
+  CheckCheck,
   ChevronDown,
   Code2 as CodeIcon,
   Copy,
@@ -31,23 +33,25 @@ import {
 import {
   clearSession,
   cleanupAdminImages,
+  createAdminNotification,
   createPublicApiKey,
   createUserApiKey,
   createInviteCode,
   createInviteCodesBatch,
   deleteAdminUser,
+  deleteAdminNotification,
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   deleteInviteCodesBatch,
   deductPublicApiKeyCredits,
   deductAdminUserCredits,
   fetchAdminDashboard,
+  fetchAdminNotifications,
   fetchAdminInviteCodes,
   fetchAdminOverview,
   fetchAdminRecords,
   fetchAdminUserInviteRedemptions,
   fetchAdminUsers,
-  fetchCreationActivity,
   fetchPublicApiKeyBalance,
   fetchPublicApiKeys,
   fetchUserApiKeys,
@@ -55,6 +59,7 @@ import {
   acknowledgePromoCoupon,
   claimInvitePopup,
   fetchHealth,
+  fetchNotifications,
   fetchMe,
   fetchModels,
   fetchPromoCoupon,
@@ -65,6 +70,9 @@ import {
   getStoredUser,
   login,
   loginWithInvite,
+  markAllNotificationsRead,
+  markNotificationPopupShown,
+  markNotificationRead,
   moveImage,
   rechargeAdminUserCredits,
   rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
@@ -72,9 +80,11 @@ import {
   redeemInviteCode,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
   register,
+  publishAdminNotification,
   revokePublicApiKey,
   rotateUserApiKey,
   updateUserApiKey,
+  updateAdminNotification,
   updateAdminProviderRouting,
   startGenerateImageJob,
   startGenerateVideoJob,
@@ -83,7 +93,6 @@ import {
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
-  type CreationActivity,
   type GeneratedImagePayload,
   type GenerationJobInfo,
   type VideoGenerationJobInfo,
@@ -92,6 +101,7 @@ import {
   type InviteCodeInfo,
   type InviteRedemptionRecord,
   type ModelInfo,
+  type NotificationPayload,
   type PaginationInfo,
   type PromoCouponInfo,
   type ProviderMetricRow,
@@ -100,6 +110,7 @@ import {
   type PublicApiKeyInfo,
   type ReferenceUploadInput,
   type SavedImage,
+  type SiteNotification,
   type UserInfo,
   type UserApiKeyInfo,
   type VisionaryDocSyncStatus,
@@ -147,7 +158,7 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'batchCreate' | 'chat' | 'history' | 'apiDocs' | 'admin';
-type AdminSection = 'dashboard' | 'invites' | 'users' | 'records' | 'apiKeys';
+type AdminSection = 'dashboard' | 'notifications' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
   home: '/',
@@ -327,6 +338,20 @@ function formatTime(value: string) {
   }).format(date);
 }
 
+function formatNotificationTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).replace(/\//g, '/');
+}
+
 const ORIGINAL_IMAGE_RETENTION_MS = 5 * 24 * 60 * 60 * 1000;
 
 function isOriginalImageExpired(createdAt: string) {
@@ -434,7 +459,7 @@ function createActivityPreviewCount() {
 }
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
-const SHOW_CREATION_ACTIVITY = false;
+const SHOW_CREATION_ACTIVITY = true;
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -548,7 +573,6 @@ function StageCard({
   onDelete,
   onPreview,
   showActivity,
-  activity,
   activityPreviewCount,
 }: {
   item: DisplayImage | null;
@@ -560,7 +584,6 @@ function StageCard({
   onDelete?: () => void;
   onPreview?: (item: DisplayImage) => void;
   showActivity?: boolean;
-  activity?: CreationActivity | null;
   activityPreviewCount?: number;
 }) {
   const percent = loading ? getGenerationPercent(progress || null) : 0;
@@ -620,7 +643,7 @@ function StageCard({
           <div className="relative mt-2 text-[11px] font-semibold text-[#ffd9ef]/90">
             {getGenerationHint(percent)}
           </div>
-          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
+          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       ) : item ? (
         <div className="relative flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3" style={{ paddingRight: showActivity ? 145 : undefined }}>
@@ -673,24 +696,19 @@ function StageCard({
               </button>
             </div>
           ) : null}
-          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
+          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       ) : (
         <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[18px] border border-white/6 bg-black/45 px-4 py-3 text-[12px] font-black text-zinc-200 sm:ml-3 sm:py-0" style={{ paddingRight: showActivity ? 145 : undefined }}>
           等待下单...
-          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
+          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       )}
     </article>
   );
 }
 
-function CreationActivitySlot({ activity, previewCount }: { activity: CreationActivity | null; previewCount?: number }) {
-  const activeCreators = activity?.activeCreators ?? 0;
-  const isPreview = typeof previewCount === 'number';
-  const activityReady = isPreview || Boolean(activity);
-  const displayCount = isPreview ? previewCount : activeCreators;
-
+function CreationHeatSlot({ count }: { count: number }) {
   return (
     <span
       className="absolute right-2 top-1/2 flex h-[60px] -translate-y-1/2 items-center gap-1 overflow-hidden rounded-lg border border-sky-400/10 bg-sky-400/[0.045] px-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
@@ -698,7 +716,7 @@ function CreationActivitySlot({ activity, previewCount }: { activity: CreationAc
     >
       <UserRound size={12} className="shrink-0 text-sky-400" />
       <span className="whitespace-nowrap text-[9px] font-black text-sky-200" aria-live="polite">
-        当前下单人数：<span className="text-amber-400">{activityReady ? displayCount.toLocaleString('zh-CN') : '--'}</span>人
+        当前下单人数：<span className="text-amber-400">{count.toLocaleString('zh-CN')}</span>
       </span>
     </span>
   );
@@ -2473,6 +2491,137 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
   );
 }
 
+function AdminNotificationsPanel({ onNotice }: { onNotice: (message: string) => void }) {
+  const emptyForm = {
+    content: '',
+  };
+  const [items, setItems] = useState<SiteNotification[]>([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [actingId, setActingId] = useState('');
+
+  async function loadItems() {
+    setLoading(true);
+    try {
+      const result = await fetchAdminNotifications();
+      setItems(result.notifications);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u83b7\u53d6\u901a\u77e5\u5931\u8d25');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadItems();
+  }, []);
+
+  function resetForm() {
+    setEditingId('');
+    setForm(emptyForm);
+  }
+
+  async function saveDraft(publishAfterSave: boolean) {
+    if (!form.content.trim()) {
+      onNotice('\u8bf7\u586b\u5199\u901a\u77e5\u5185\u5bb9');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = { content: form.content.trim() };
+      const result = editingId
+        ? await updateAdminNotification(editingId, payload)
+        : await createAdminNotification(payload);
+      if (publishAfterSave) await publishAdminNotification(result.notification.id);
+      onNotice(publishAfterSave ? '\u901a\u77e5\u5df2\u53d1\u5e03' : '\u8349\u7a3f\u5df2\u4fdd\u5b58');
+      resetForm();
+      await loadItems();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u4fdd\u5b58\u901a\u77e5\u5931\u8d25');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function editItem(item: SiteNotification) {
+    setEditingId(item.id);
+    setForm({
+      content: item.content || item.title,
+    });
+  }
+
+  async function runAction(id: string, action: 'publish' | 'delete') {
+    if (action === 'delete' && !window.confirm('\u786e\u5b9a\u5220\u9664\u8fd9\u6761\u901a\u77e5\u5417\uff1f')) return;
+    setActingId(id);
+    try {
+      if (action === 'publish') await publishAdminNotification(id);
+      if (action === 'delete') await deleteAdminNotification(id);
+      onNotice(action === 'publish' ? '\u901a\u77e5\u5df2\u53d1\u5e03' : '\u901a\u77e5\u5df2\u5220\u9664');
+      if (editingId === id) resetForm();
+      await loadItems();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '\u64cd\u4f5c\u5931\u8d25');
+    } finally {
+      setActingId('');
+    }
+  }
+
+  const statusLabels = { draft: '\u8349\u7a3f', published: '\u5df2\u53d1\u5e03', archived: '\u5df2\u5f52\u6863' };
+
+  return (
+    <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.8fr)_minmax(420px,1.2fr)]">
+      <section className="rounded-[22px] border border-white/8 bg-black/35 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-white">{'\u53d1\u5e03\u901a\u77e5'}</h2>
+            <p className="mt-1 text-xs leading-5 text-zinc-500">{'\u65b0\u901a\u77e5\u53d1\u5e03\u540e\u4f1a\u51fa\u73b0\u5728\u7528\u6237\u9876\u90e8\u7684\u901a\u77e5\u4e2d\u5fc3\u3002'}</p>
+          </div>
+          {editingId ? <button className="text-xs font-bold text-zinc-400 hover:text-white" type="button" onClick={resetForm}>{'\u53d6\u6d88\u7f16\u8f91'}</button> : null}
+        </div>
+        <div className="mt-5 grid gap-4">
+          <label className="grid gap-2 text-sm font-bold text-zinc-300">
+            {'\u901a\u77e5\u5185\u5bb9'}
+            <textarea className="input min-h-64 resize-y leading-6" maxLength={5000} placeholder={'\u8bf7\u8f93\u5165\u901a\u77e5\u5185\u5bb9'} value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} />
+          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button className="btn-secondary px-4 py-3 text-sm font-black disabled:opacity-50" disabled={submitting} type="button" onClick={() => void saveDraft(false)}>{submitting ? '\u4fdd\u5b58\u4e2d...' : editingId ? '\u4fdd\u5b58\u4fee\u6539' : '\u4fdd\u5b58\u8349\u7a3f'}</button>
+            <button className="btn-primary px-4 py-3 text-sm font-black disabled:opacity-50" disabled={submitting} type="button" onClick={() => void saveDraft(true)}>{submitting ? '\u53d1\u5e03\u4e2d...' : '\u7acb\u5373\u53d1\u5e03'}</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="custom-scrollbar min-h-0 overflow-y-auto rounded-[22px] border border-white/8 bg-black/35 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div><h2 className="text-lg font-black text-white">{'\u901a\u77e5\u8bb0\u5f55'}</h2><p className="mt-1 text-xs text-zinc-500">{`\u5171 ${items.length} \u6761`}</p></div>
+          <button className="btn-secondary min-h-0 p-2" disabled={loading} type="button" onClick={() => void loadItems()}><RotateCw className={loading ? 'animate-spin' : ''} size={15} /></button>
+        </div>
+        <div className="mt-4 grid gap-3">
+          {items.length ? items.map((item) => (
+            <article className="rounded-[18px] border border-white/8 bg-white/[0.025] p-4" key={item.id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${item.status === 'published' ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : item.status === 'archived' ? 'border-zinc-500/25 bg-zinc-500/10 text-zinc-400' : 'border-amber-400/25 bg-amber-500/10 text-amber-200'}`}>{statusLabels[item.status]}</span>
+                  </div>
+                  <p className="mt-3 line-clamp-4 whitespace-pre-wrap break-words text-base font-black leading-7 text-white">{item.content || item.title}</p>
+                  <p className="mt-3 text-[11px] text-zinc-600">{item.publishedAt ? `\u53d1\u5e03\u4e8e ${formatTime(item.publishedAt)}` : `\u521b\u5efa\u4e8e ${formatTime(item.createdAt)}`}</p>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 border-t border-white/8 pt-3">
+                <button className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-bold text-zinc-300 hover:text-white" type="button" onClick={() => editItem(item)}>{'\u7f16\u8f91'}</button>
+                {item.status !== 'published' ? <button className="rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-200 disabled:opacity-50" disabled={actingId === item.id} type="button" onClick={() => void runAction(item.id, 'publish')}>{'\u53d1\u5e03'}</button> : null}
+                <button className="rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-200 disabled:opacity-50" disabled={actingId === item.id} type="button" onClick={() => void runAction(item.id, 'delete')}>{'\u5220\u9664'}</button>
+              </div>
+            </article>
+          )) : <div className="rounded-2xl border border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">{loading ? '\u52a0\u8f7d\u4e2d...' : '\u8fd8\u6ca1\u6709\u901a\u77e5'}</div>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AdminView({
   users,
   usersPage,
@@ -3094,6 +3243,7 @@ function AdminView({
 
   const menuItems: Array<{ id: AdminSection; label: string }> = [
     { id: 'dashboard', label: '看板' },
+    { id: 'notifications', label: '通知管理' },
     { id: 'invites', label: '邀请码' },
     { id: 'apiKeys', label: 'API Key' },
     { id: 'users', label: '用户' },
@@ -3504,6 +3654,8 @@ function AdminView({
             </div>
             </>
             ) : null}
+
+            {section === 'notifications' ? <AdminNotificationsPanel onNotice={onNotice} /> : null}
 
             {section === 'invites' ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
@@ -4250,7 +4402,6 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
-  const [creationActivity, setCreationActivity] = useState<CreationActivity | null>(null);
   const [activityPreviewCount, setActivityPreviewCount] = useState(createActivityPreviewCount);
   const [pendingGenerationSlot, setPendingGenerationSlot] = useState(false);
   const [loadingUserData, setLoadingUserData] = useState(false);
@@ -4272,6 +4423,9 @@ export default function App() {
   const [redeemingInvite, setRedeemingInvite] = useState(false);
   const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
   const [promoCouponOpen, setPromoCouponOpen] = useState(false);
+  const [notificationPayload, setNotificationPayload] = useState<NotificationPayload>({ notifications: [], unreadCount: 0, popup: null });
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const shownNotificationIdsRef = useRef(new Set<string>());
   const hasVisitedCreateRef = useRef(false);
 
   const sideFavoriteItems = user ? favorites : [];
@@ -4300,7 +4454,7 @@ export default function App() {
   const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
 
   useEffect(() => {
-    if (!SHOW_CREATION_ACTIVITY || !import.meta.env.DEV || activeTab !== 'create' || creationMode !== 'image') return;
+    if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
     const timer = window.setInterval(() => {
       setActivityPreviewCount((current) => {
         const { min, max } = getActivityPreviewRange();
@@ -4310,26 +4464,6 @@ export default function App() {
       });
     }, 2_500);
     return () => window.clearInterval(timer);
-  }, [activeTab, creationMode]);
-
-  useEffect(() => {
-    if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
-    let cancelled = false;
-
-    const refreshActivity = () => {
-      void fetchCreationActivity()
-        .then((activity) => {
-          if (!cancelled) setCreationActivity(activity);
-        })
-        .catch(() => undefined);
-    };
-
-    refreshActivity();
-    const timer = window.setInterval(refreshActivity, 3_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
   }, [activeTab, creationMode]);
 
   useEffect(() => {
@@ -4402,6 +4536,49 @@ export default function App() {
 
     void loadPrivateData();
   }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setNotificationPayload({ notifications: [], unreadCount: 0, popup: null });
+      setNotificationOpen(false);
+      shownNotificationIdsRef.current.clear();
+      return;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      void fetchNotifications()
+        .then((payload) => {
+          if (!cancelled) setNotificationPayload(payload);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    const item = notificationPayload.popup;
+    if (!item || loading || authOpen || promoCouponOpen || shownNotificationIdsRef.current.has(item.id)) return;
+    shownNotificationIdsRef.current.add(item.id);
+    setNotificationOpen(true);
+    setNotificationPayload((current) => ({
+      ...current,
+      popup: current.popup?.id === item.id ? null : current.popup,
+      notifications: current.notifications.map((candidate) => candidate.id === item.id ? { ...candidate, popupShown: true } : candidate),
+    }));
+    void markNotificationPopupShown(item.id).catch(() => {
+      shownNotificationIdsRef.current.delete(item.id);
+    });
+  }, [authOpen, loading, notificationPayload.popup, promoCouponOpen]);
 
   useEffect(() => {
     if (!user) return;
@@ -5489,6 +5666,36 @@ export default function App() {
     }
   }
 
+  function setNotificationReadLocally(id: string) {
+    setNotificationPayload((current) => ({
+      ...current,
+      unreadCount: Math.max(0, current.unreadCount - (current.notifications.some((item) => item.id === id && !item.read) ? 1 : 0)),
+      notifications: current.notifications.map((item) => item.id === id ? { ...item, read: true } : item),
+    }));
+  }
+
+  async function handleReadNotification(id: string) {
+    setNotificationReadLocally(id);
+    try {
+      await markNotificationRead(id);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '\u66f4\u65b0\u901a\u77e5\u5931\u8d25');
+    }
+  }
+
+  async function handleReadAllNotifications() {
+    setNotificationPayload((current) => ({
+      ...current,
+      unreadCount: 0,
+      notifications: current.notifications.map((item) => ({ ...item, read: true })),
+    }));
+    try {
+      await markAllNotificationsRead();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '\u66f4\u65b0\u901a\u77e5\u5931\u8d25');
+    }
+  }
+
   function logout() {
     hasVisitedCreateRef.current = true;
     clearSession();
@@ -5499,6 +5706,8 @@ export default function App() {
     setHistoryRecords([]);
     setPromoCoupon(null);
     setPromoCouponOpen(false);
+    setNotificationPayload({ notifications: [], unreadCount: 0, popup: null });
+    setNotificationOpen(false);
     setAdminOverview({
       users: [],
       usersPage: emptyPage,
@@ -5887,6 +6096,19 @@ export default function App() {
             >
               <span className={healthError ? 'h-2.5 w-2.5 rounded-full bg-rose-400' : 'h-2.5 w-2.5 rounded-full bg-emerald-400'} />
             </div>
+            {user ? (
+              <button
+                className="relative inline-flex min-h-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-black text-rose-200 transition hover:bg-rose-400/10 hover:text-rose-100"
+                type="button"
+                aria-label={'\u6253\u5f00\u901a\u77e5'}
+                onClick={() => setNotificationOpen((current) => !current)}
+              >
+                <Bell size={14} strokeWidth={2.2} />
+                <span className={`inline-flex min-w-5 items-center justify-center rounded-full border px-1 py-0.5 text-[9px] leading-none ${notificationPayload.unreadCount > 0 ? 'border-rose-300/35 bg-rose-500/20 text-rose-100' : 'border-white/10 bg-white/[0.04] text-zinc-500'}`}>
+                  {notificationPayload.unreadCount > 99 ? '99+' : notificationPayload.unreadCount}
+                </span>
+              </button>
+            ) : null}
             {user ? (
               <div className="flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
                 <div className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
@@ -6330,8 +6552,7 @@ export default function App() {
                       progress={index === activeGenerationStageIndex && loading ? generationProgress : null}
                       showActions={Boolean(item && !(index === activeGenerationStageIndex && loading) && user)}
                       showActivity={SHOW_CREATION_ACTIVITY && index === 0}
-                      activity={creationActivity}
-                      activityPreviewCount={import.meta.env.DEV ? activityPreviewCount : undefined}
+                      activityPreviewCount={activityPreviewCount}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                       onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}
@@ -6482,6 +6703,46 @@ export default function App() {
           </aside>
         </div>
       </div>
+
+      {notificationOpen && user ? (
+        <section
+          className="fixed right-3 top-[62px] z-[60] flex h-[min(380px,calc(100dvh-76px))] w-[min(320px,calc(100vw-24px))] flex-col overflow-hidden rounded-[17px] border border-[#2a2a2d] bg-[#090909]/[0.99] shadow-[0_18px_48px_rgba(0,0,0,0.56)] sm:right-5 sm:top-[58px]"
+          style={{ fontFamily: 'Inter, "PingFang SC", "Microsoft YaHei", sans-serif' }}
+        >
+          <header className="flex h-[54px] shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3.5">
+            <div className="flex min-w-0 items-center gap-3">
+              <div
+                className="tracking-[-0.01em]"
+                style={{ color: '#ff5966', fontSize: 15, fontWeight: 800, lineHeight: '20px' }}
+              >
+                {'\u901a\u77e5'}
+              </div>
+              {notificationPayload.unreadCount > 0 ? <span className="rounded-full border border-[#ff5966]/30 bg-[#ff5966]/10 px-1.5 py-0.5 text-[9px] font-extrabold text-[#ff8992]">{`${notificationPayload.unreadCount} \u6761\u672a\u8bfb`}</span> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {notificationPayload.unreadCount > 0 ? <button className="inline-flex min-h-0 items-center gap-1 px-1.5 py-1 text-[10px] font-semibold text-[#6f7079] transition hover:text-[#d4d4d8]" type="button" onClick={() => void handleReadAllNotifications()}><CheckCheck size={12} />{'\u5168\u90e8\u5df2\u8bfb'}</button> : null}
+              <button className="flex h-8 w-8 items-center justify-center rounded-full border border-[#2b2b2e] text-[#696a73] transition hover:border-[#444449] hover:text-[#f4f4f5]" type="button" aria-label={'\u5173\u95ed\u901a\u77e5\u4e2d\u5fc3'} onClick={() => setNotificationOpen(false)}><X size={16} /></button>
+            </div>
+          </header>
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+            {notificationPayload.notifications.length ? notificationPayload.notifications.map((item) => (
+              <button
+                className="block w-full border-b border-[#202023] px-3.5 py-4 text-left transition last:border-b-0 hover:bg-white/[0.035]"
+                key={item.id}
+                type="button"
+                onClick={() => { if (!item.read) void handleReadNotification(item.id); }}
+              >
+                <span className="block min-w-0">
+                  <span className="block whitespace-pre-wrap break-words tracking-[-0.01em]" style={{ color: '#f2f2f5', fontSize: 14, fontWeight: 800, lineHeight: '23px' }}>
+                    {'\u901a\u77e5\uff1a'}{item.content || item.title}
+                  </span>
+                  <span className="mt-2 block" style={{ color: '#666873', fontSize: 11, fontWeight: 500, lineHeight: '16px' }}>{formatNotificationTime(item.publishedAt || item.createdAt)}</span>
+                </span>
+              </button>
+            )) : <div className="flex h-full min-h-52 flex-col items-center justify-center px-5 text-center"><Bell className="text-[#45464e]" size={25} /><p className="mt-3 text-xs font-semibold text-[#686a74]">{'\u6682\u65f6\u6ca1\u6709\u901a\u77e5'}</p></div>}
+          </div>
+        </section>
+      ) : null}
 
       {previewImage ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-3 py-3 sm:px-4 sm:py-6">

@@ -41,6 +41,7 @@ import {
 } from './provider-routing.js';
 import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
+import { createNotificationService } from './notifications.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -4687,6 +4688,7 @@ async function start() {
       });
     },
   };
+  const notificationService = createNotificationService(visionaryDocSyncStore);
   providerRouting = createProviderRouting({
     store: visionaryDocSyncStore,
     defaults: DEFAULT_PROVIDER_ROUTING,
@@ -4800,7 +4802,7 @@ async function start() {
       res.setHeader('Vary', 'Origin');
     }
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-API-Key, Idempotency-Key');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
@@ -4851,6 +4853,110 @@ async function start() {
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
     });
+  });
+
+  app.get('/api/notifications', requireAuth, async (req, res) => {
+    try {
+      res.json(await notificationService.listForUser(req.authUser!.userId));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '获取通知失败' });
+    }
+  });
+
+  app.post('/api/notifications/read-all', requireAuth, async (req, res) => {
+    try {
+      await notificationService.markAllRead(req.authUser!.userId);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '更新通知失败' });
+    }
+  });
+
+  app.post('/api/notifications/:id/read', requireAuth, async (req, res) => {
+    try {
+      await notificationService.mark(req.authUser!.userId, String(req.params.id), 'readIds');
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '更新通知失败' });
+    }
+  });
+
+  app.post('/api/notifications/:id/popup-shown', requireAuth, async (req, res) => {
+    try {
+      await notificationService.mark(req.authUser!.userId, String(req.params.id), 'popupShownIds');
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '更新通知失败' });
+    }
+  });
+
+  app.get('/api/admin/notifications', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      res.json(await notificationService.listAdmin());
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '获取通知失败' });
+    }
+  });
+
+  app.post('/api/admin/notifications', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const notification = await notificationService.create(req.body || {}, req.authUser!.username);
+      res.status(201).json({ notification });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : '创建通知失败' });
+    }
+  });
+
+  app.put('/api/admin/notifications/:id', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const notification = await notificationService.update(String(req.params.id), req.body || {});
+      if (!notification) {
+        res.status(404).json({ error: '通知不存在' });
+        return;
+      }
+      res.json({ notification });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : '更新通知失败' });
+    }
+  });
+
+  app.post('/api/admin/notifications/:id/publish', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const notification = await notificationService.setStatus(String(req.params.id), 'published');
+      if (!notification) {
+        res.status(404).json({ error: '通知不存在' });
+        return;
+      }
+      res.json({ notification });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : '发布通知失败' });
+    }
+  });
+
+  app.post('/api/admin/notifications/:id/archive', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const notification = await notificationService.setStatus(String(req.params.id), 'archived');
+      if (!notification) {
+        res.status(404).json({ error: '通知不存在' });
+        return;
+      }
+      res.json({ notification });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : '归档通知失败' });
+    }
+  });
+
+  app.delete('/api/admin/notifications/:id', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const removed = await notificationService.remove(String(req.params.id));
+      if (!removed) {
+        res.status(404).json({ error: '通知不存在' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '删除通知失败' });
+    }
   });
 
   app.post('/api/ui/invite-popup/claim', async (req, res) => {
@@ -6361,43 +6467,6 @@ async function start() {
   const generationJobs = new Map<string, AuthenticatedGenerationJob>();
   const generationJobTtlMs = 2 * 60 * 60 * 1000;
   const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
-  let creationActivityCache: {
-    expiresAt: number;
-    payload: { activeCreators: number; activeTasks: number; updatedAt: string };
-  } | null = null;
-
-  app.get('/api/public/creation-activity', async (_req, res) => {
-    try {
-      if (creationActivityCache && creationActivityCache.expiresAt > Date.now()) {
-        res.setHeader('Cache-Control', 'public, max-age=2, stale-while-revalidate=3');
-        res.json(creationActivityCache.payload);
-        return;
-      }
-      cleanupGenerationJobs();
-      const publicTasks = await readPublicAsyncTasks();
-      const activeAuthenticatedJobs = [...generationJobs.values()].filter(
-        (job) => job.status === 'queued' || job.status === 'processing',
-      );
-      const activePublicTasks = publicTasks.filter(
-        (task) => task.status === 'queued' || task.status === 'running',
-      );
-      const activeCreators = new Set([
-        ...activeAuthenticatedJobs.map((job) => `user:${job.userId}`),
-        ...activePublicTasks.map((task) => `api:${task.apiKeyId}`),
-      ]).size;
-      const payload = {
-        activeCreators,
-        activeTasks: activeAuthenticatedJobs.length + activePublicTasks.length,
-        updatedAt: nowIso(),
-      };
-      creationActivityCache = { expiresAt: Date.now() + 2_500, payload };
-      res.setHeader('Cache-Control', 'public, max-age=2, stale-while-revalidate=3');
-      res.json(payload);
-    } catch (error) {
-      console.error('[creation-activity]', error);
-      res.status(503).json({ error: '创作动态暂时不可用' });
-    }
-  });
 
   function publicGenerationJob(job: AuthenticatedGenerationJob) {
     const elapsedMs = job.startedAt ? Math.max(0, Date.now() - new Date(job.startedAt).getTime()) : 0;

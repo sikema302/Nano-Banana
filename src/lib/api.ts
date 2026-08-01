@@ -10,6 +10,31 @@ export interface UserInfo {
   creditsRemaining?: number;
 }
 
+export type NotificationKind = 'normal' | 'update' | 'maintenance' | 'urgent';
+export type NotificationStatus = 'draft' | 'published' | 'archived';
+
+export interface SiteNotification {
+  id: string;
+  title: string;
+  content: string;
+  kind: NotificationKind;
+  status: NotificationStatus;
+  popupOnFirstView: boolean;
+  publishedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  read?: boolean;
+  popupShown?: boolean;
+}
+
+export interface NotificationPayload {
+  notifications: SiteNotification[];
+  unreadCount: number;
+  popup: SiteNotification | null;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -476,14 +501,54 @@ export async function fetchHealth() {
   return request<{ ok: boolean; userStorage: string }>('/api/health');
 }
 
-export type CreationActivity = {
-  activeCreators: number;
-  activeTasks: number;
-  updatedAt: string;
-};
+export async function fetchNotifications() {
+  return request<NotificationPayload>('/api/notifications', {}, true);
+}
 
-export async function fetchCreationActivity() {
-  return request<CreationActivity>('/api/public/creation-activity');
+export async function markNotificationRead(id: string) {
+  return request<{ ok: boolean }>(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' }, true);
+}
+
+export async function markNotificationPopupShown(id: string) {
+  return request<{ ok: boolean }>(`/api/notifications/${encodeURIComponent(id)}/popup-shown`, { method: 'POST', body: '{}' }, true);
+}
+
+export async function markAllNotificationsRead() {
+  return request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST', body: '{}' }, true);
+}
+
+export async function fetchAdminNotifications() {
+  return request<{ notifications: SiteNotification[] }>('/api/admin/notifications', {}, true);
+}
+
+export async function createAdminNotification(input: {
+  content: string;
+}) {
+  return request<{ notification: SiteNotification }>('/api/admin/notifications', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, true);
+}
+
+export async function updateAdminNotification(id: string, input: {
+  content: string;
+}) {
+  return request<{ notification: SiteNotification }>(`/api/admin/notifications/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  }, true);
+}
+
+export async function publishAdminNotification(id: string) {
+  return request<{ notification: SiteNotification }>(`/api/admin/notifications/${encodeURIComponent(id)}/publish`, { method: 'POST', body: '{}' }, true);
+}
+
+export async function archiveAdminNotification(id: string) {
+  return request<{ notification: SiteNotification }>(`/api/admin/notifications/${encodeURIComponent(id)}/archive`, { method: 'POST', body: '{}' }, true);
+}
+
+export async function deleteAdminNotification(id: string) {
+  return request<{ ok: boolean }>(`/api/admin/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
 }
 
 export async function fetchChatConversations() {
