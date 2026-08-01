@@ -6361,6 +6361,43 @@ async function start() {
   const generationJobs = new Map<string, AuthenticatedGenerationJob>();
   const generationJobTtlMs = 2 * 60 * 60 * 1000;
   const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
+  let creationActivityCache: {
+    expiresAt: number;
+    payload: { activeCreators: number; activeTasks: number; updatedAt: string };
+  } | null = null;
+
+  app.get('/api/public/creation-activity', async (_req, res) => {
+    try {
+      if (creationActivityCache && creationActivityCache.expiresAt > Date.now()) {
+        res.setHeader('Cache-Control', 'public, max-age=2, stale-while-revalidate=3');
+        res.json(creationActivityCache.payload);
+        return;
+      }
+      cleanupGenerationJobs();
+      const publicTasks = await readPublicAsyncTasks();
+      const activeAuthenticatedJobs = [...generationJobs.values()].filter(
+        (job) => job.status === 'queued' || job.status === 'processing',
+      );
+      const activePublicTasks = publicTasks.filter(
+        (task) => task.status === 'queued' || task.status === 'running',
+      );
+      const activeCreators = new Set([
+        ...activeAuthenticatedJobs.map((job) => `user:${job.userId}`),
+        ...activePublicTasks.map((task) => `api:${task.apiKeyId}`),
+      ]).size;
+      const payload = {
+        activeCreators,
+        activeTasks: activeAuthenticatedJobs.length + activePublicTasks.length,
+        updatedAt: nowIso(),
+      };
+      creationActivityCache = { expiresAt: Date.now() + 2_500, payload };
+      res.setHeader('Cache-Control', 'public, max-age=2, stale-while-revalidate=3');
+      res.json(payload);
+    } catch (error) {
+      console.error('[creation-activity]', error);
+      res.status(503).json({ error: '创作动态暂时不可用' });
+    }
+  });
 
   function publicGenerationJob(job: AuthenticatedGenerationJob) {
     const elapsedMs = job.startedAt ? Math.max(0, Date.now() - new Date(job.startedAt).getTime()) : 0;

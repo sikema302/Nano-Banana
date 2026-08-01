@@ -47,6 +47,7 @@ import {
   fetchAdminRecords,
   fetchAdminUserInviteRedemptions,
   fetchAdminUsers,
+  fetchCreationActivity,
   fetchPublicApiKeyBalance,
   fetchPublicApiKeys,
   fetchUserApiKeys,
@@ -82,6 +83,7 @@ import {
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
+  type CreationActivity,
   type GeneratedImagePayload,
   type GenerationJobInfo,
   type VideoGenerationJobInfo,
@@ -420,6 +422,17 @@ function getGenerationHint(percent: number) {
   return '最后收尾中，请别刷新页面，好图马上抵达。';
 }
 
+function getActivityPreviewRange(hour = new Date().getHours()) {
+  if (hour >= 6 && hour < 12) return { min: 1_000, max: 2_000 };
+  if (hour >= 12 && hour < 18) return { min: 3_000, max: 4_000 };
+  return { min: 2_000, max: 3_000 };
+}
+
+function createActivityPreviewCount() {
+  const { min, max } = getActivityPreviewRange();
+  return Math.round(min + (max - min) * 0.52);
+}
+
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
 
 function sleep(ms: number) {
@@ -533,6 +546,9 @@ function StageCard({
   onSave,
   onDelete,
   onPreview,
+  showActivity,
+  activity,
+  activityPreviewCount,
 }: {
   item: DisplayImage | null;
   loading?: boolean;
@@ -542,6 +558,9 @@ function StageCard({
   onSave?: (category: ImageCategory) => void;
   onDelete?: () => void;
   onPreview?: (item: DisplayImage) => void;
+  showActivity?: boolean;
+  activity?: CreationActivity | null;
+  activityPreviewCount?: number;
 }) {
   const percent = loading ? getGenerationPercent(progress || null) : 0;
   const currentBatch = progress ? Math.min(progress.completed + 1, progress.total) : 1;
@@ -555,21 +574,21 @@ function StageCard({
       >
         {loading ? (
           <div className="generation-orbit flex h-full w-full items-center justify-center">
-            <Sparkles size={18} className="text-pink-100" />
+            <span className="text-center text-[11px] font-black leading-5 text-pink-100">灶台工作中</span>
           </div>
         ) : item ? (
           <button className="h-full w-full" type="button" onClick={() => onPreview?.(item)}>
             <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
           </button>
         ) : (
-          <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-semibold text-zinc-400">
-            待生成
+          <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-black text-zinc-300">
+            灶台空闲中
           </div>
         )}
       </div>
 
       {loading ? (
-        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
+        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0" style={{ paddingRight: showActivity ? 145 : undefined }}>
           <div className="pointer-events-none absolute inset-0 opacity-70">
             <div className="generation-grid h-full w-full" />
           </div>
@@ -600,9 +619,10 @@ function StageCard({
           <div className="relative mt-2 text-[11px] font-semibold text-[#ffd9ef]/90">
             {getGenerationHint(percent)}
           </div>
+          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
         </div>
       ) : item ? (
-        <div className="flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3">
+        <div className="relative flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3" style={{ paddingRight: showActivity ? 145 : undefined }}>
           <div className="min-w-0">
             <button
               className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-pink-200"
@@ -652,13 +672,34 @@ function StageCard({
               </button>
             </div>
           ) : null}
+          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 items-center rounded-[18px] border border-dashed border-white/10 bg-black/45 px-4 py-3 text-[11px] font-semibold text-zinc-400 sm:ml-3 sm:py-0">
-          下一张作品，等你输入灵感
+        <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[18px] border border-white/6 bg-black/45 px-4 py-3 text-[12px] font-black text-zinc-200 sm:ml-3 sm:py-0" style={{ paddingRight: showActivity ? 145 : undefined }}>
+          等待下单...
+          {showActivity ? <CreationActivitySlot activity={activity || null} previewCount={activityPreviewCount} /> : null}
         </div>
       )}
     </article>
+  );
+}
+
+function CreationActivitySlot({ activity, previewCount }: { activity: CreationActivity | null; previewCount?: number }) {
+  const activeCreators = activity?.activeCreators ?? 0;
+  const isPreview = typeof previewCount === 'number';
+  const activityReady = isPreview || Boolean(activity);
+  const displayCount = isPreview ? previewCount : activeCreators;
+
+  return (
+    <span
+      className="absolute right-2 top-1/2 flex h-[60px] -translate-y-1/2 items-center gap-1 overflow-hidden rounded-lg border border-sky-400/10 bg-sky-400/[0.045] px-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
+      aria-label="实时创作动态"
+    >
+      <UserRound size={12} className="shrink-0 text-sky-400" />
+      <span className="whitespace-nowrap text-[9px] font-black text-sky-200" aria-live="polite">
+        当前下单人数：<span className="text-amber-400">{activityReady ? displayCount.toLocaleString('zh-CN') : '--'}</span>人
+      </span>
+    </span>
   );
 }
 
@@ -4182,6 +4223,7 @@ export default function App() {
   const [discarded, setDiscarded] = useState<SavedImage[]>([]);
   const [currentImage, setCurrentImage] = useState<DisplayImage | null>(null);
   const [historyQueue, setHistoryQueue] = useState<DisplayImage[]>([]);
+  const [inFlightGeneratedImages, setInFlightGeneratedImages] = useState<DisplayImage[]>([]);
   const [historyRecords, setHistoryRecords] = useState<GenerationRecord[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverviewState>({
     users: [],
@@ -4207,6 +4249,8 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
+  const [creationActivity, setCreationActivity] = useState<CreationActivity | null>(null);
+  const [activityPreviewCount, setActivityPreviewCount] = useState(createActivityPreviewCount);
   const [pendingGenerationSlot, setPendingGenerationSlot] = useState(false);
   const [loadingUserData, setLoadingUserData] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -4253,6 +4297,39 @@ export default function App() {
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
   const activePromoCoupon = promoCoupon?.active ? promoCoupon : null;
   const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || activeTab !== 'create' || creationMode !== 'image') return;
+    const timer = window.setInterval(() => {
+      setActivityPreviewCount((current) => {
+        const { min, max } = getActivityPreviewRange();
+        const boundedCurrent = current < min || current > max ? Math.round((min + max) / 2) : current;
+        const change = Math.floor(Math.random() * 25) - 12;
+        return Math.max(min, Math.min(max, boundedCurrent + change));
+      });
+    }, 2_500);
+    return () => window.clearInterval(timer);
+  }, [activeTab, creationMode]);
+
+  useEffect(() => {
+    if (activeTab !== 'create' || creationMode !== 'image') return;
+    let cancelled = false;
+
+    const refreshActivity = () => {
+      void fetchCreationActivity()
+        .then((activity) => {
+          if (!cancelled) setCreationActivity(activity);
+        })
+        .catch(() => undefined);
+    };
+
+    refreshActivity();
+    const timer = window.setInterval(refreshActivity, 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeTab, creationMode]);
 
   useEffect(() => {
     fetchHealth()
@@ -4455,10 +4532,10 @@ export default function App() {
     if (nextImages.length === 0) return;
 
     if (autoPlace) {
-      const latestImage = nextImages[nextImages.length - 1];
-      const earlierImages = nextImages.slice(0, -1).reverse();
-      setHistoryQueue((current) => [...earlierImages, ...(currentImage ? [currentImage, ...current] : current)].slice(0, 7));
-      setCurrentImage(latestImage);
+      const firstImage = nextImages[0];
+      const followingImages = nextImages.slice(1);
+      setHistoryQueue((current) => [...followingImages, ...(currentImage ? [currentImage, ...current] : current)].slice(0, 7));
+      setCurrentImage(firstImage);
       return;
     }
 
@@ -5057,6 +5134,7 @@ export default function App() {
 
     setLoading(true);
     setPendingGenerationSlot(true);
+    setInFlightGeneratedImages([]);
     setGenerationProgress({
       completed: 0,
       total: batchCount,
@@ -5110,6 +5188,7 @@ export default function App() {
           : await waitForGenerationJob(job.id, index, batchCount, jobStartedAt);
 
         generatedImages.push(toDisplayImage(image));
+        setInFlightGeneratedImages([...generatedImages]);
         setGenerationProgress((current) =>
           current
             ? {
@@ -5141,6 +5220,7 @@ export default function App() {
       setLoading(false);
       setGenerationProgress(null);
       setPendingGenerationSlot(false);
+      setInFlightGeneratedImages([]);
 
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
@@ -5151,6 +5231,7 @@ export default function App() {
       setLoading(false);
       setGenerationProgress(null);
       setPendingGenerationSlot(false);
+      setInFlightGeneratedImages([]);
     }
   }
   async function saveDisplayImage(targetImage: DisplayImage, category: ImageCategory) {
@@ -5441,10 +5522,11 @@ export default function App() {
   }
 
   const stageSourceCards = currentImage ? [currentImage, ...historyQueue] : historyQueue;
-  const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => {
-    if (pendingGenerationSlot && index === 0) return null;
-    return stageSourceCards[pendingGenerationSlot ? index - 1 : index] || null;
-  });
+  const activeGenerationStageIndex = pendingGenerationSlot ? inFlightGeneratedImages.length : -1;
+  const visibleStageCards = pendingGenerationSlot
+    ? [...inFlightGeneratedImages, null, ...stageSourceCards]
+    : stageSourceCards;
+  const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
 
   function handleTabChange(nextTab: AppTab) {
     if (typeof window !== 'undefined') {
@@ -6238,14 +6320,17 @@ export default function App() {
             <HomeView onNavigate={handleTabChange} />
           ) : activeTab === 'create' ? (
             <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
-              <div className="grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-hidden lg:pr-1">
+              <div className="custom-scrollbar grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-y-auto lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
                       item={item}
-                      loading={index === 0 && loading}
-                      progress={index === 0 && loading ? generationProgress : null}
-                      showActions={Boolean(item && !(index === 0 && loading) && user)}
+                      loading={index === activeGenerationStageIndex && loading}
+                      progress={index === activeGenerationStageIndex && loading ? generationProgress : null}
+                      showActions={Boolean(item && !(index === activeGenerationStageIndex && loading) && user)}
+                      showActivity={index === 0}
+                      activity={creationActivity}
+                      activityPreviewCount={import.meta.env.DEV ? activityPreviewCount : undefined}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                       onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}

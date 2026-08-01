@@ -476,6 +476,16 @@ export async function fetchHealth() {
   return request<{ ok: boolean; userStorage: string }>('/api/health');
 }
 
+export type CreationActivity = {
+  activeCreators: number;
+  activeTasks: number;
+  updatedAt: string;
+};
+
+export async function fetchCreationActivity() {
+  return request<CreationActivity>('/api/public/creation-activity');
+}
+
 export async function fetchChatConversations() {
   return request<{ conversations: ChatConversation[]; models: ChatModel[] }>('/api/chat/conversations', {}, true);
 }

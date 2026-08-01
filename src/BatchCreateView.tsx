@@ -349,7 +349,7 @@ export default function BatchCreateView({
   );
   const [mode, setMode] = useState<BatchMode>('unified');
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
-  const [imageSize, setImageSize] = useState<ImageSize>('2K');
+  const [imageSize, setImageSize] = useState<ImageSize>('STANDARD');
   const [quality, setQuality] = useState<ImageQuality>('auto');
   const [dimensions, setDimensions] = useState<(typeof dimensionOptions)[number]>('3:2');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
@@ -424,7 +424,7 @@ export default function BatchCreateView({
   function changeModel(modelId: string) {
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
-      setImageSize('2K');
+      setImageSize('STANDARD');
       setQuality('auto');
       setOptimizeChineseText(false);
     } else {
