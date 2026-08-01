@@ -134,7 +134,12 @@ function getCredits(
   if (model.id === 'gpt-image-2') return getGptImageCredits(imageSize, quality, pricing);
   if (model.id === 'Nano_Banana_Pro') {
     const base = imageSize === '1K' ? 20 : typeof model.creditsCost === 'number' ? model.creditsCost : 24;
-    return base + (optimizeChineseText ? 8 : 0);
+    const enhancementCredits = optimizeChineseText
+      ? imageSize === '1K' || imageSize === '2K' || imageSize === '4K'
+        ? 8
+        : 0
+      : 0;
+    return base + enhancementCredits;
   }
   return typeof model.creditsCost === 'number' ? model.creditsCost : 1;
 }
@@ -361,10 +366,11 @@ export default function BatchCreateView({
 
   const model = availableModels.find((item) => item.id === selectedModel) || availableModels[0];
   const isNano = model?.id === 'Nano_Banana_Pro';
+  const effectiveOptimizeChineseText = isNano && optimizeChineseText;
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
   const taskCount = mode === 'unified' ? sourceImages.length : activePrompts.length;
-  const creditsPerTask = getCredits(model, imageSize, quality, optimizeChineseText, gptImagePricing);
+  const creditsPerTask = getCredits(model, imageSize, quality, effectiveOptimizeChineseText, gptImagePricing);
   const estimatedCredits = creditsPerTask * taskCount;
   const creditsRemaining = user?.creditsRemaining || 0;
   const hasEnoughCredits = !user || creditsRemaining >= estimatedCredits;
@@ -422,7 +428,8 @@ export default function BatchCreateView({
       setQuality('auto');
       setOptimizeChineseText(false);
     } else {
-      setImageSize(providerRouting.junliaiNanoBanana ? '1K' : '2K');
+      const nextImageSize = providerRouting.junliaiNanoBanana ? '1K' : '2K';
+      setImageSize(nextImageSize);
     }
   }
 
@@ -550,7 +557,7 @@ export default function BatchCreateView({
           dimensions,
           imageSize,
           quality: model.id === 'gpt-image-2' ? quality : undefined,
-          optimizeChineseText: model.id === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+          optimizeChineseText: effectiveOptimizeChineseText,
           reference_images: spec.references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         });
         const image = job.status === 'succeeded' && job.image ? job.image : await waitForJob(job, spec.id, startedAt);

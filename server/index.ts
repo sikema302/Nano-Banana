@@ -1555,6 +1555,16 @@ function getModelCredits(modelId: string, imageSize = '', quality = '') {
   return 1;
 }
 
+function getNanoBananaEnhancementCredits(modelId: string, imageSize: string, enabled: boolean) {
+  if (!enabled || modelId !== 'Nano_Banana_Pro') return 0;
+  if (imageSize === '1K' || imageSize === '2K' || imageSize === '4K') return 8;
+  return 0;
+}
+
+function shouldEnhanceNanoBanana(modelId: string, imageSize: string, requested: boolean) {
+  return requested && getNanoBananaEnhancementCredits(modelId, imageSize, true) > 0;
+}
+
 function normalizeImageSize(value: string, modelId: string) {
   if (modelId === 'gpt-image-2') {
     if (value === '2K' || value === '4K') return value;
@@ -3916,10 +3926,19 @@ async function callImageGeneration(input: ImageGenerationInput) {
     const routedImageSize = applyProviderRoutingToImageSize(input.modelId, input.imageSize, routing);
     if (routedImageSize !== input.imageSize) routedInput = { ...input, imageSize: routedImageSize };
   }
-  const effectiveInput =
-    routedInput.modelId === 'Nano_Banana_Pro' && routedInput.optimizeChineseText
-      ? { ...routedInput, prompt: await enhanceNanoBananaPrompt(routedInput.prompt) }
-      : routedInput;
+  const enhancedPrompt = shouldEnhanceNanoBanana(
+    routedInput.modelId,
+    routedInput.imageSize,
+    routedInput.optimizeChineseText,
+  )
+    ? await enhanceNanoBananaPrompt(routedInput.prompt)
+    : routedInput.prompt;
+  const effectiveInput = {
+    ...routedInput,
+    prompt: enhancedPrompt,
+    // AI enhancement is handled by PIXORY. Never enable the upstream provider's paid/native option.
+    optimizeChineseText: false,
+  };
   if (!imageProviderRouter) {
     return callVisionaryGeneration(effectiveInput);
   }
@@ -5435,7 +5454,9 @@ async function start() {
       const modelName = modelNameFromId(modelId);
       const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
-      creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
+      creditsUsed = getModelCredits(modelId, imageSize, quality)
+        + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const createdAt = nowIso();
@@ -5451,7 +5472,7 @@ async function start() {
         ratio,
         imageSize,
         quality,
-        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+        optimizeChineseText: effectiveOptimizeChineseText,
         images: Array.from(new Set(referenceImages)),
         requestContext,
       });
@@ -6139,7 +6160,9 @@ async function start() {
       const modelName = modelNameFromId(modelId);
       const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
-      creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
+      creditsUsed = getModelCredits(modelId, imageSize, quality)
+        + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const publicTask: PublicAsyncGenerationTask = {
@@ -6158,7 +6181,7 @@ async function start() {
         dimensions: ratio,
         imageSize,
         quality,
-        optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+        optimizeChineseText: effectiveOptimizeChineseText,
         referenceImages: Array.from(new Set(referenceImages)),
         temporaryReferenceImages,
         createdAt: nowIso(),
@@ -6716,7 +6739,9 @@ async function start() {
       let modelName = modelNameFromId(modelId);
       let imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
-      let creditsUsed = getModelCredits(modelId, imageSize, quality) + (modelId === 'Nano_Banana_Pro' && optimizeChineseText ? 8 : 0);
+      const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
+      let creditsUsed = getModelCredits(modelId, imageSize, quality)
+        + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
 
       // Credits check
       if (creditsUsed > 0) {
@@ -6777,7 +6802,7 @@ async function start() {
           ratio,
           imageSize,
           quality,
-          optimizeChineseText: modelId === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+          optimizeChineseText: effectiveOptimizeChineseText,
           images: uniqueModelReferenceImages,
           requestContext,
         });
