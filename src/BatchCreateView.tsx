@@ -133,7 +133,13 @@ function getCredits(
   if (!model) return 0;
   if (model.id === 'gpt-image-2') return getGptImageCredits(imageSize, quality, pricing);
   if (model.id === 'Nano_Banana_Pro') {
-    const base = imageSize === '1K' ? 20 : typeof model.creditsCost === 'number' ? model.creditsCost : 24;
+    const base = imageSize === '1K'
+      ? 20
+      : imageSize === '4K'
+        ? 30
+        : typeof model.creditsCost === 'number'
+          ? model.creditsCost
+          : 24;
     const enhancementCredits = optimizeChineseText
       ? imageSize === '1K' || imageSize === '2K' || imageSize === '4K'
         ? 8

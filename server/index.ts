@@ -1567,7 +1567,11 @@ function getModelCredits(modelId: string, imageSize = '', quality = '') {
   if (modelId === 'gpt-image-2') {
     return getGptImageCredits(imageSize, quality, getActiveGptImagePricing());
   }
-  if (modelId === 'Nano_Banana_Pro') return imageSize === '1K' ? 20 : 24;
+  if (modelId === 'Nano_Banana_Pro') {
+    if (imageSize === '1K') return 20;
+    if (imageSize === '4K') return 30;
+    return 24;
+  }
   return 1;
 }
 

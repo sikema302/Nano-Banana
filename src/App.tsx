@@ -508,9 +508,11 @@ function getModelCredits(
   if (model.id === 'Nano_Banana_Pro') {
     const baseCredits = options?.imageSize === '1K'
       ? 20
-      : typeof model.creditsCost === 'number'
-        ? model.creditsCost
-        : 24;
+      : options?.imageSize === '4K'
+        ? 30
+        : typeof model.creditsCost === 'number'
+          ? model.creditsCost
+          : 24;
     const enhancementCredits = options?.optimizeChineseText
       ? options.imageSize === '1K' || options.imageSize === '2K' || options.imageSize === '4K'
         ? 8
@@ -1523,7 +1525,7 @@ function ApiDocsView({
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 24；AI 增强 +8', note: 'AI 增强支持全部分辨率，由 PIXORY 处理；1K 失败时回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强支持全部分辨率，由 PIXORY 处理；1K 失败时回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。' },
   ];
   const gptPixelGroups = [
     {
@@ -1585,7 +1587,8 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       rows: [
         ['1K 基础生成', '20 点 / 张', '支持文生图与参考图生成'],
-        ['2K / 4K 基础生成', '24 点 / 张', '保持原有计费'],
+        ['2K 基础生成', '24 点 / 张', '保持原有计费'],
+        ['4K 基础生成', '30 点 / 张', '4K 新计费'],
         ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '由 PIXORY 增强提示词，不启用图片上游的原生增强参数'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
