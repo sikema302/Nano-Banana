@@ -22,6 +22,9 @@ export type PrimaryCircuitState = {
   updatedAt: string;
 };
 
+export const NANO_BANANA_1K_UNAVAILABLE_MESSAGE =
+  'Nano Banana 1K 服务暂时不可用，请尝试选择 2K 后重新生成。';
+
 type StateStore = {
   get: (upstreamModel?: string) => Promise<PrimaryCircuitState | null>;
   set: (state: PrimaryCircuitState, upstreamModel?: string) => Promise<void>;
@@ -325,6 +328,8 @@ export function createImageProviderRouter(options: RouterOptions) {
   async function generate(input: ImageGenerationInput) {
     const traceId = crypto.randomUUID();
     const junliaiOnly = input.providerRouting === 'junliai_only';
+    const requiresJunliaiNanoBanana1K =
+      input.modelId === 'Nano_Banana_Pro' && input.imageSize === '1K';
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
     const candidates = primaryCandidates(input);
@@ -334,6 +339,9 @@ export function createImageProviderRouter(options: RouterOptions) {
       (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro') &&
       candidates.length > 0;
     if (!primaryEligible) {
+      if (requiresJunliaiNanoBanana1K) {
+        throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
+      }
       if (junliaiOnly) {
         throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');
       }
@@ -381,6 +389,9 @@ export function createImageProviderRouter(options: RouterOptions) {
             updatedAt: new Date(currentTime).toISOString(),
           });
           logger.warn(`[image-provider] ${upstreamModel} result is uncertain; failover suppressed`);
+          if (requiresJunliaiNanoBanana1K) {
+            throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
+          }
           throw new Error(
             '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试。',
           );
@@ -399,6 +410,10 @@ export function createImageProviderRouter(options: RouterOptions) {
           reason: failure.kind,
           updatedAt: new Date(currentTime).toISOString(),
         });
+        if (requiresJunliaiNanoBanana1K) {
+          logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); Nano Banana 1K fallback disabled`);
+          throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
+        }
         if (junliaiOnly) {
           logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
           throw new Error('Junliai image provider failed; provider switching is disabled for this API key');
@@ -407,6 +422,9 @@ export function createImageProviderRouter(options: RouterOptions) {
           `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 60000)}m cooldown` : ''}`,
         );
       }
+    }
+    if (requiresJunliaiNanoBanana1K) {
+      throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
     }
     if (junliaiOnly) {
       throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');

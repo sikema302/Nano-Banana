@@ -37,6 +37,7 @@ import {
 } from './visionary-doc-sync.js';
 import {
   createImageProviderRouter,
+  NANO_BANANA_1K_UNAVAILABLE_MESSAGE,
   type ImageGenerationInput,
 } from './image-provider-router.js';
 import { createProviderMetrics } from './provider-metrics.js';
@@ -46,7 +47,6 @@ import {
   createProviderRouting,
   type ProviderRoutingConfig,
 } from './provider-routing.js';
-import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 import { createNotificationService } from './notifications.js';
 import { resolveApiKeyDisplayCredits, type CreditValues } from './api-key-credits.js';
@@ -397,13 +397,9 @@ const PUBLIC_ASYNC_CONCURRENCY = Math.max(
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
-const VISIONARY_NANO_LITE_BASE_URL = (
-  process.env.VISIONARY_NANO_LITE_BASE_URL || 'https://api.visionary.beer'
-).replace(/\/+$/, '');
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
 const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_KEY);
 const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
-const VISIONARY_NANO_LITE_API_KEY = normalizeEnvValue(process.env.VISIONARY_NANO_LITE_API_KEY);
 const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
 const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
 // Previous Chat2API primary integration is intentionally disabled:
@@ -1631,9 +1627,6 @@ function normalizeGptQuality(value: string, imageSize: string) {
 
 function getVisionaryApiKey(modelId: string, imageSize: string) {
   if (modelId === 'Nano_Banana_Pro') {
-    if (imageSize === '1K') {
-      return VISIONARY_NANO_LITE_API_KEY || VISIONARY_BANANA_PRO_API_KEY || VISIONARY_FALLBACK_API_KEY;
-    }
     return VISIONARY_BANANA_PRO_API_KEY || VISIONARY_FALLBACK_API_KEY;
   }
 
@@ -1649,7 +1642,6 @@ function getVisionaryApiKey(modelId: string, imageSize: string) {
 }
 
 function getVisionaryApiKeyLabel(modelId: string, imageSize: string) {
-  if (modelId === 'Nano_Banana_Pro' && imageSize === '1K') return 'VISIONARY_NANO_LITE_API_KEY';
   if (modelId === 'Nano_Banana_Pro') return 'VISIONARY_BANANA_PRO_API_KEY';
   if (modelId === 'gpt-image-2' && (imageSize === '2K' || imageSize === '4K')) return 'VISIONARY_GPT_IMAGE_2_HD_API_KEY';
   if (modelId === 'gpt-image-2') return 'VISIONARY_GPT_IMAGE_2_API_KEY';
@@ -3941,22 +3933,7 @@ async function callVisionaryGeneration({
   images: string[];
 }) {
   if (modelId === 'Nano_Banana_Pro' && imageSize === '1K') {
-    const apiKey = getVisionaryApiKey(modelId, imageSize);
-    if (!apiKey) {
-      throw new Error(`${getVisionaryApiKeyLabel(modelId, imageSize)} is not configured`);
-    }
-    return generateVisionaryNanoLite(
-      {
-        prompt,
-        ratio,
-        images,
-      },
-      {
-        baseUrl: VISIONARY_NANO_LITE_BASE_URL,
-        apiKey,
-        fetchImpl: fetchVisionaryWithConnectRetry,
-      },
-    );
+    throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
   }
 
   const task = await callVisionaryAsyncGeneration({

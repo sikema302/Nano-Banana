@@ -75,13 +75,13 @@ test('migrates the legacy GPT switch to both independent GPT routes', async () =
   });
 });
 
-test('removes Nano Banana 1K when the Junliai banana route is disabled', () => {
+test('keeps the user-selected Nano Banana resolution when the Junliai route is disabled', () => {
   assert.equal(
     applyProviderRoutingToImageSize('Nano_Banana_Pro', '1K', {
       ...defaults,
       junliaiNanoBanana: false,
     }),
-    '2K',
+    '1K',
   );
   assert.equal(
     applyProviderRoutingToImageSize('Nano_Banana_Pro', '4K', {

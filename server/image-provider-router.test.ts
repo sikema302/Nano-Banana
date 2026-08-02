@@ -414,6 +414,69 @@ test('uses the mapped Junliai nano-banana-pro model at 1K', async () => {
   });
 });
 
+test('Nano Banana 1K reports 2K guidance and never calls the fallback after a Junliai failure', async () => {
+  const store = createStore();
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModels: {
+      Nano_Banana_Pro: 'nano-banana-pro',
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'visionary-lite';
+    },
+    fetchImpl: async () => {
+      primaryCalls += 1;
+      return new Response(JSON.stringify({ error: { message: 'service unavailable' } }), { status: 503 });
+    },
+  });
+
+  await assert.rejects(
+    router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
+    /1K.*2K/,
+  );
+  assert.equal(primaryCalls, 1);
+  assert.equal(fallbackCalls, 0);
+});
+
+test('Nano Banana 1K reports 2K guidance when the Junliai route is unavailable', async () => {
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: '',
+    authorization: '',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModels: {
+      Nano_Banana_Pro: 'nano-banana-pro',
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'visionary-lite';
+    },
+  });
+
+  await assert.rejects(
+    router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
+    /1K.*2K/,
+  );
+  assert.equal(fallbackCalls, 0);
+});
+
 test('uses the mapped Junliai nano-banana-pro edits endpoint for reference images', async () => {
   const store = createStore();
   let requestUrl = '';

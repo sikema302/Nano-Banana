@@ -11,9 +11,9 @@ export function applyProviderRoutingToImageSize(
   imageSize: string,
   config: ProviderRoutingConfig,
 ) {
-  return modelId === 'Nano_Banana_Pro' && imageSize === '1K' && !config.junliaiNanoBanana
-    ? '2K'
-    : imageSize;
+  void modelId;
+  void config;
+  return imageSize;
 }
 
 type RoutingStore = {
