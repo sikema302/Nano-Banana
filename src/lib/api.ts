@@ -125,6 +125,9 @@ export interface AdminUserSummary {
   usedCredits: number;
   remainingCredits: number;
   apiKeyId?: string;
+  quotaSource?: 'key' | 'account';
+  ownerUserId?: string;
+  ownerUsername?: string;
   lastGeneratedAt: string;
   usageTrend?: number[];
 }
@@ -281,6 +284,10 @@ export interface PublicApiKeyInfo {
   createdAt: string;
   createdBy: string;
   revokedAt: string;
+  billingMode: 'legacy' | 'account';
+  quotaSource: 'key' | 'account';
+  ownerUserId: string;
+  ownerUsername: string;
 }
 
 export interface UserApiKeyInfo {

@@ -2515,8 +2515,15 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                   {!item.copyable ? <div className="mt-1 text-[11px] text-amber-300/80">旧 Key 暂不可复制</div> : null}
                 </td>
                 <td className="px-3 py-3">
-                  <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
-                  <span className="text-zinc-500"> / {item.totalCredits}</span>
+                  <div>
+                    <span className="font-semibold text-sky-200">{item.remainingCredits}</span>
+                    <span className="text-zinc-500"> / {item.totalCredits}</span>
+                  </div>
+                  {item.quotaSource === 'account' ? (
+                    <div className="mt-1 text-[11px] text-emerald-300/80">
+                      账户共享{item.ownerUsername ? ` · ${item.ownerUsername}` : ''}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-3 py-3">{item.revokedAt ? '已停用' : '可用'}</td>
                 <td className="px-3 py-3 text-right">
@@ -2531,7 +2538,8 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                     </button>
                     <button
                       className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-40"
-                      disabled={Boolean(item.revokedAt) || item.remainingCredits <= 0 || deductingKeyId === item.id}
+                      disabled={item.quotaSource === 'account' || Boolean(item.revokedAt) || item.remainingCredits <= 0 || deductingKeyId === item.id}
+                      title={item.quotaSource === 'account' ? '请在用户管理中调整所属账户积分' : undefined}
                       type="button"
                       onClick={() => void handleDeductApiKeyCredits(item)}
                     >
@@ -2539,7 +2547,8 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                     </button>
                     <button
                       className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40"
-                      disabled={Boolean(item.revokedAt) || rechargingKeyId === item.id}
+                      disabled={item.quotaSource === 'account' || Boolean(item.revokedAt) || rechargingKeyId === item.id}
+                      title={item.quotaSource === 'account' ? '请在用户管理中调整所属账户积分' : undefined}
                       type="button"
                       onClick={() => void handleRechargeApiKeyCredits(item)}
                     >
@@ -4057,6 +4066,11 @@ function AdminView({
                                   <span className="font-semibold text-white">{item.remainingCredits}</span>
                                   <span className="text-zinc-500">/ {item.totalCredits}</span>
                                 </div>
+                                {item.quotaSource === 'account' ? (
+                                  <div className="mt-1 text-[11px] text-emerald-300/80">
+                                    账户共享{item.ownerUsername ? ` · ${item.ownerUsername}` : ''}
+                                  </div>
+                                ) : null}
                                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/8">
                                   <div className="h-full rounded-full bg-[linear-gradient(90deg,#38bdf8_0%,#22d3ee_100%)]" style={{ width: `${100 - usageRate}%` }} />
                                 </div>

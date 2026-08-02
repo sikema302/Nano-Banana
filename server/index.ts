@@ -49,6 +49,7 @@ import {
 import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 import { createNotificationService } from './notifications.js';
+import { resolveApiKeyDisplayCredits, type CreditValues } from './api-key-credits.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -1356,6 +1357,9 @@ type AdminUserSummaryRow = {
   usedCredits: number;
   remainingCredits: number;
   apiKeyId?: string;
+  quotaSource?: 'key' | 'account';
+  ownerUserId?: string;
+  ownerUsername?: string;
   lastGeneratedAt: string;
   usageTrend?: number[];
 };
@@ -1421,6 +1425,12 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
     readPublicApiKeyRecords(),
   ]);
   const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
+  const creditsByUserId = new Map<string, CreditValues>(
+    creditRows.map((row) => [
+      row.user_id,
+      { totalCredits: row.total_credits, usedCredits: row.used_credits },
+    ]),
+  );
   const summaryByUserId = new Map(
     generationSummaries.map((row) => [
       row.user_id,
@@ -1477,18 +1487,25 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
       ? summary.userId.slice('api-key:'.length)
       : '';
     const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+    const apiKeyCredits = apiKey
+      ? resolveApiKeyDisplayCredits(
+          apiKey,
+          apiKey.ownerUserId ? creditsByUserId.get(apiKey.ownerUserId) : undefined,
+        )
+      : undefined;
     userMap.set(summary.userId, {
       userId: summary.userId,
       username: current?.username || summary.username,
       inviteCode: current?.inviteCode || inviteCodeByUserId.get(summary.userId) || '',
       generations: summary.generations,
       creditsUsed: summary.creditsUsed,
-      totalCredits: apiKey?.totalCredits ?? current?.totalCredits ?? 0,
-      usedCredits: apiKey?.usedCredits ?? current?.usedCredits ?? 0,
-      remainingCredits: apiKey
-        ? Math.max(0, apiKey.totalCredits - apiKey.usedCredits)
-        : current?.remainingCredits || 0,
+      totalCredits: apiKeyCredits?.totalCredits ?? current?.totalCredits ?? 0,
+      usedCredits: apiKeyCredits?.usedCredits ?? current?.usedCredits ?? 0,
+      remainingCredits: apiKeyCredits?.remainingCredits ?? current?.remainingCredits ?? 0,
       apiKeyId: apiKey?.id,
+      quotaSource: apiKeyCredits?.quotaSource,
+      ownerUserId: apiKey?.ownerUserId,
+      ownerUsername: apiKey?.ownerUsername,
       lastGeneratedAt: summary.lastGeneratedAt,
     });
   }
@@ -2407,24 +2424,70 @@ function serializeApiKeyRecords(records: PublicApiKeyRecord[]) {
   return JSON.stringify(records.map((item) => normalizeApiKeyRecord(item)).filter(Boolean));
 }
 
-function publicApiKeyRecord(record: PublicApiKeyRecord) {
+function publicApiKeyRecord(record: PublicApiKeyRecord, ownerCredits?: CreditValues) {
   const plainKey = decryptPublicApiKey(record.encryptedKey);
+  const credits = resolveApiKeyDisplayCredits(record, ownerCredits);
   return {
     id: record.id,
     name: record.name,
     keyPreview: record.keyPreview,
     plainKey,
     copyable: Boolean(plainKey),
-    totalCredits: record.totalCredits,
-    usedCredits: record.usedCredits,
-    remainingCredits: Math.max(0, record.totalCredits - record.usedCredits),
+    totalCredits: credits.totalCredits,
+    usedCredits: credits.usedCredits,
+    remainingCredits: credits.remainingCredits,
     createdAt: record.createdAt,
     createdBy: record.createdBy,
     revokedAt: record.revokedAt || '',
     billingMode: record.billingMode || 'legacy',
+    quotaSource: credits.quotaSource,
+    ownerUserId: record.ownerUserId || '',
+    ownerUsername: record.ownerUsername || '',
     pausedAt: record.pausedAt || '',
     lastUsedAt: record.lastUsedAt || '',
   };
+}
+
+async function publicApiKeyRecordsForAdmin(records: PublicApiKeyRecord[]) {
+  const ownerIds = new Set(
+    records
+      .filter((record) => record.billingMode === 'account' && record.ownerUserId)
+      .map((record) => record.ownerUserId!),
+  );
+  const ownerCredits = new Map<string, CreditValues>();
+
+  if (ownerIds.size > 0) {
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      const creditRows = await db.getAllCreditRows();
+      for (const row of creditRows) {
+        if (!ownerIds.has(row.user_id)) continue;
+        ownerCredits.set(row.user_id, {
+          totalCredits: row.total_credits,
+          usedCredits: row.used_credits,
+        });
+      }
+    } else {
+      await withReadDb((db) => {
+        ensureSchema(db);
+        for (const row of runQuery<Record<string, unknown>>(
+          db,
+          'SELECT user_id, total_credits, used_credits FROM user_credits',
+        )) {
+          const userId = String(row.user_id || '');
+          if (!ownerIds.has(userId)) continue;
+          ownerCredits.set(userId, {
+            totalCredits: Number(row.total_credits || 0),
+            usedCredits: Number(row.used_credits || 0),
+          });
+        }
+      });
+    }
+  }
+
+  return records.map((record) =>
+    publicApiKeyRecord(record, record.ownerUserId ? ownerCredits.get(record.ownerUserId) : undefined),
+  );
 }
 
 function userApiKeyRecord(record: PublicApiKeyRecord) {
@@ -2645,6 +2708,9 @@ async function deductPublicApiKeyCreditsUnlocked(id: string, credits: number) {
   if (index < 0) return null;
 
   const record = records[index];
+  if (record.billingMode === 'account' && record.ownerUserId) {
+    throw new Error('账户共享型 API Key 请在用户管理中调整所属账户积分');
+  }
   const remainingCredits = Math.max(0, record.totalCredits - record.usedCredits);
   const deductedCredits = Math.min(requestedCredits, remainingCredits);
   if (deductedCredits <= 0) {
@@ -2673,6 +2739,9 @@ async function rechargePublicApiKeyCreditsUnlocked(id: string, credits: number) 
   const records = await readPublicApiKeyRecords();
   const index = records.findIndex((record) => record.id === targetId);
   if (index < 0) return null;
+  if (records[index].billingMode === 'account' && records[index].ownerUserId) {
+    throw new Error('账户共享型 API Key 请在用户管理中调整所属账户积分');
+  }
 
   const previousRecords = records.map((item) => ({ ...item }));
   records[index] = {
@@ -7162,6 +7231,12 @@ async function start() {
           readPublicApiKeyRecords(),
         ]);
         const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
+        const creditsByUserId = new Map<string, CreditValues>(
+          creditRows.map((row) => [
+            row.user_id,
+            { totalCredits: row.total_credits, usedCredits: row.used_credits },
+          ]),
+        );
 
         const summaryByUserId = new Map(
           generationSummaries.map((row) => [
@@ -7187,6 +7262,9 @@ async function start() {
             usedCredits: number;
             remainingCredits: number;
             apiKeyId?: string;
+            quotaSource?: 'key' | 'account';
+            ownerUserId?: string;
+            ownerUsername?: string;
             lastGeneratedAt: string;
           }
         >();
@@ -7225,17 +7303,24 @@ async function start() {
             ? summary.userId.slice('api-key:'.length)
             : '';
           const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+          const apiKeyCredits = apiKey
+            ? resolveApiKeyDisplayCredits(
+                apiKey,
+                apiKey.ownerUserId ? creditsByUserId.get(apiKey.ownerUserId) : undefined,
+              )
+            : undefined;
           userMap.set(summary.userId, {
             userId: summary.userId,
             username: current?.username || summary.username,
             generations: summary.generations,
             creditsUsed: summary.creditsUsed,
-            totalCredits: apiKey?.totalCredits ?? current?.totalCredits ?? 0,
-            usedCredits: apiKey?.usedCredits ?? current?.usedCredits ?? 0,
-            remainingCredits: apiKey
-              ? Math.max(0, apiKey.totalCredits - apiKey.usedCredits)
-              : current?.remainingCredits || 0,
+            totalCredits: apiKeyCredits?.totalCredits ?? current?.totalCredits ?? 0,
+            usedCredits: apiKeyCredits?.usedCredits ?? current?.usedCredits ?? 0,
+            remainingCredits: apiKeyCredits?.remainingCredits ?? current?.remainingCredits ?? 0,
             apiKeyId: apiKey?.id,
+            quotaSource: apiKeyCredits?.quotaSource,
+            ownerUserId: apiKey?.ownerUserId,
+            ownerUsername: apiKey?.ownerUsername,
             lastGeneratedAt: summary.lastGeneratedAt,
           });
         }
@@ -7339,6 +7424,19 @@ async function start() {
           db,
           "SELECT user_id, username, total_credits, used_credits FROM user_credits WHERE username != 'demo'",
         );
+        const apiKeys = normalizeApiKeyRecords(
+          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+        );
+        const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
+        const creditsByUserId = new Map<string, CreditValues>(
+          creditRows.map((row) => [
+            String(row.user_id || ''),
+            {
+              totalCredits: Number(row.total_credits || 0),
+              usedCredits: Number(row.used_credits || 0),
+            },
+          ]),
+        );
         const userMap = new Map<
           string,
           {
@@ -7349,6 +7447,10 @@ async function start() {
             totalCredits: number;
             usedCredits: number;
             remainingCredits: number;
+            apiKeyId?: string;
+            quotaSource?: 'key' | 'account';
+            ownerUserId?: string;
+            ownerUsername?: string;
             lastGeneratedAt: string;
           }
         >();
@@ -7389,14 +7491,28 @@ async function start() {
 
         for (const summary of summaryByUserId.values()) {
           const current = userMap.get(summary.userId);
+          const apiKeyId = summary.userId.startsWith('api-key:')
+            ? summary.userId.slice('api-key:'.length)
+            : '';
+          const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+          const apiKeyCredits = apiKey
+            ? resolveApiKeyDisplayCredits(
+                apiKey,
+                apiKey.ownerUserId ? creditsByUserId.get(apiKey.ownerUserId) : undefined,
+              )
+            : undefined;
           userMap.set(summary.userId, {
             userId: summary.userId,
             username: current?.username || summary.username,
             generations: summary.generations,
             creditsUsed: summary.creditsUsed,
-            totalCredits: current?.totalCredits || 0,
-            usedCredits: current?.usedCredits || 0,
-            remainingCredits: current?.remainingCredits || 0,
+            totalCredits: apiKeyCredits?.totalCredits ?? current?.totalCredits ?? 0,
+            usedCredits: apiKeyCredits?.usedCredits ?? current?.usedCredits ?? 0,
+            remainingCredits: apiKeyCredits?.remainingCredits ?? current?.remainingCredits ?? 0,
+            apiKeyId: apiKey?.id,
+            quotaSource: apiKeyCredits?.quotaSource,
+            ownerUserId: apiKey?.ownerUserId,
+            ownerUsername: apiKey?.ownerUsername,
             lastGeneratedAt: summary.lastGeneratedAt,
           });
         }
@@ -7556,7 +7672,7 @@ async function start() {
   app.get('/api/admin/api-keys', requireAuth, requireAdmin, async (_req, res) => {
     try {
       const keys = await readPublicApiKeyRecords();
-      res.json({ keys: keys.map(publicApiKeyRecord) });
+      res.json({ keys: await publicApiKeyRecordsForAdmin(keys) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch API keys failed' });
     }
@@ -7611,7 +7727,7 @@ async function start() {
         return;
       }
 
-      res.json({ key: publicApiKeyRecord(key) });
+      res.json({ key: (await publicApiKeyRecordsForAdmin([key]))[0] });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Revoke API key failed' });
     }
