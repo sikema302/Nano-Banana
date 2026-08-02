@@ -6,6 +6,7 @@ export type ImageGenerationInput = {
   quality: string;
   optimizeChineseText: boolean;
   images: string[];
+  providerRouting?: 'junliai_only';
   requestContext?: {
     userId: string;
     username: string;
@@ -323,6 +324,7 @@ export function createImageProviderRouter(options: RouterOptions) {
 
   async function generate(input: ImageGenerationInput) {
     const traceId = crypto.randomUUID();
+    const junliaiOnly = input.providerRouting === 'junliai_only';
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
     const candidates = primaryCandidates(input);
@@ -331,7 +333,12 @@ export function createImageProviderRouter(options: RouterOptions) {
       primaryEnabled &&
       (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro') &&
       candidates.length > 0;
-    if (!primaryEligible) return callFallback(input, traceId);
+    if (!primaryEligible) {
+      if (junliaiOnly) {
+        throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');
+      }
+      return callFallback(input, traceId);
+    }
 
     const currentTime = now();
     for (const upstreamModel of candidates) {
@@ -392,10 +399,17 @@ export function createImageProviderRouter(options: RouterOptions) {
           reason: failure.kind,
           updatedAt: new Date(currentTime).toISOString(),
         });
+        if (junliaiOnly) {
+          logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
+          throw new Error('Junliai image provider failed; provider switching is disabled for this API key');
+        }
         logger.warn(
           `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 60000)}m cooldown` : ''}`,
         );
       }
+    }
+    if (junliaiOnly) {
+      throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');
     }
     return callFallback(input, traceId);
   }

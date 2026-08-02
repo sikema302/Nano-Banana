@@ -245,6 +245,7 @@ type PublicAsyncGenerationTask = {
   imageSize: string;
   quality?: string;
   optimizeChineseText?: boolean;
+  providerRouting?: 'junliai_only';
   referenceImages: string[];
   temporaryReferenceImages?: string[];
   createdAt: string;
@@ -299,6 +300,7 @@ type PublicApiKeyRecord = {
   pausedAt?: string;
   lastUsedAt?: string;
   rotatedFromId?: string;
+  providerRouting?: 'junliai_only';
 };
 
 type PublicGenerateInput = {
@@ -1590,8 +1592,13 @@ function normalizeImageSize(value: string, modelId: string) {
   return '2K';
 }
 
-async function normalizeRoutedImageSize(value: string, modelId: string) {
+async function normalizeRoutedImageSize(
+  value: string,
+  modelId: string,
+  apiKeyProviderRouting?: PublicApiKeyRecord['providerRouting'],
+) {
   const imageSize = normalizeImageSize(value, modelId);
+  if (apiKeyProviderRouting === 'junliai_only') return imageSize;
   if (modelId !== 'Nano_Banana_Pro' || imageSize !== '1K' || !providerRouting) return imageSize;
   const routing = await providerRouting.get();
   return applyProviderRoutingToImageSize(modelId, imageSize, routing);
@@ -2381,6 +2388,7 @@ function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKey
     pausedAt: normalizeString(value.pausedAt) || undefined,
     lastUsedAt: normalizeString(value.lastUsedAt) || undefined,
     rotatedFromId: normalizeString(value.rotatedFromId) || undefined,
+    providerRouting: value.providerRouting === 'junliai_only' ? 'junliai_only' : undefined,
   };
 }
 
@@ -2773,6 +2781,12 @@ async function getPublicApiKeyBalance(plainKey: string) {
   };
 }
 
+async function getPublicApiKeyProviderRouting(plainKey: string) {
+  const keyHash = hashPublicApiKey(plainKey);
+  const records = await readPublicApiKeyRecords();
+  return records.find((item) => item.keyHash === keyHash)?.providerRouting;
+}
+
 function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): PublicAsyncGenerationTask | null {
   const id = normalizeString(value.id);
   const upstreamId = normalizeString(value.upstreamId);
@@ -2802,6 +2816,7 @@ function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): Pu
     imageSize: normalizeString(value.imageSize),
     quality: normalizeString(value.quality) || undefined,
     optimizeChineseText: Boolean(value.optimizeChineseText),
+    providerRouting: value.providerRouting === 'junliai_only' ? 'junliai_only' : undefined,
     referenceImages: Array.isArray(value.referenceImages)
       ? value.referenceImages.map(normalizeString).filter(Boolean)
       : [],
@@ -5573,7 +5588,8 @@ async function start() {
     try {
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
+      const apiKeyProviderRouting = await getPublicApiKeyProviderRouting(apiKey);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId, apiKeyProviderRouting);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       creditsUsed = getModelCredits(modelId, imageSize, quality)
@@ -5595,6 +5611,7 @@ async function start() {
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
         images: Array.from(new Set(referenceImages)),
+        providerRouting: reservedKey.providerRouting,
         requestContext,
       });
       const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
@@ -6147,6 +6164,7 @@ async function start() {
           quality: current.quality || '',
           optimizeChineseText: Boolean(current.optimizeChineseText),
           images: current.referenceImages,
+          providerRouting: current.providerRouting,
           requestContext,
         });
         const imagePath = await persistGeneratedImage(generatedImageSource);
@@ -6279,7 +6297,8 @@ async function start() {
 
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
+      const apiKeyProviderRouting = await getPublicApiKeyProviderRouting(apiKey);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId, apiKeyProviderRouting);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       creditsUsed = getModelCredits(modelId, imageSize, quality)
@@ -6303,6 +6322,7 @@ async function start() {
         imageSize,
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
+        providerRouting: reservedKey.providerRouting,
         referenceImages: Array.from(new Set(referenceImages)),
         temporaryReferenceImages,
         createdAt: nowIso(),

@@ -569,3 +569,89 @@ test('calls the fallback when Junliai returns success without an image', async (
   assert.equal(await router.generate(input), 'fallback');
   assert.equal(fallbackCalls, 1);
 });
+
+test('a Junliai-only API key never switches to another model or fallback provider', async () => {
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'test-key',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModelChains: {
+      'gpt-image-2': ['gpt-image-2', 'firefly-gpt-image-2'],
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: {
+      get: async () => null,
+      set: async () => undefined,
+    },
+    fetchImpl: async () => {
+      primaryCalls += 1;
+      return new Response(JSON.stringify({ error: { message: 'upstream failed' } }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+  });
+
+  await assert.rejects(
+    router.generate({
+      prompt: 'test',
+      modelId: 'gpt-image-2',
+      ratio: '1:1',
+      imageSize: '1K',
+      quality: '',
+      optimizeChineseText: false,
+      images: [],
+      providerRouting: 'junliai_only',
+    }),
+    /provider switching is disabled/i,
+  );
+  assert.equal(primaryCalls, 1);
+  assert.equal(fallbackCalls, 0);
+});
+
+test('a Junliai-only API key does not fall back when the Junliai route is unavailable', async () => {
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: '',
+    authorization: '',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: {
+      get: async () => null,
+      set: async () => undefined,
+    },
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+  });
+
+  await assert.rejects(
+    router.generate({
+      prompt: 'test',
+      modelId: 'gpt-image-2',
+      ratio: '1:1',
+      imageSize: '1K',
+      quality: '',
+      optimizeChineseText: false,
+      images: [],
+      providerRouting: 'junliai_only',
+    }),
+    /provider switching is disabled/i,
+  );
+  assert.equal(fallbackCalls, 0);
+});
