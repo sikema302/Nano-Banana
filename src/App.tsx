@@ -120,6 +120,7 @@ import {
   getGptImageCredits,
   type GptImagePricing,
 } from './lib/model-pricing';
+import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import {
   getVideoGenerationCredits,
   getVideoModelConfig,
@@ -145,6 +146,7 @@ interface DisplayImage extends GeneratedImagePayload {
   thumbnailUrl?: string;
   savedImageId?: number;
   category?: ImageCategory;
+  editInstruction?: string;
 }
 
 interface GenerationProgress {
@@ -322,6 +324,17 @@ function fileToBase64(file: File) {
     reader.onerror = () => reject(new Error('文件读取失败'));
     reader.readAsDataURL(file);
   });
+}
+
+async function imageToReferenceInput(image: DisplayImage): Promise<ReferenceUploadInput> {
+  const response = await fetch(image.imageUrl);
+  if (!response.ok) throw new Error('读取当前图片失败，请稍后重试');
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('当前结果不是可编辑的图片格式');
+  if (blob.size > 10 * 1024 * 1024) throw new Error('当前图片超过 10MB，暂时无法连续编辑');
+  const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+  const preview = await fileToBase64(new File([blob], `edit-source.${extension}`, { type: blob.type }));
+  return { name: preview.name, mimeType: preview.mimeType, data: preview.data };
 }
 
 function toDisplayImage(payload: GeneratedImagePayload): DisplayImage {
@@ -580,6 +593,7 @@ function StageCard({
   onSave,
   onDelete,
   onPreview,
+  onEdit,
   showActivity,
   activityPreviewCount,
 }: {
@@ -591,6 +605,7 @@ function StageCard({
   onSave?: (category: ImageCategory) => void;
   onDelete?: () => void;
   onPreview?: (item: DisplayImage) => void;
+  onEdit?: (item: DisplayImage) => void;
   showActivity?: boolean;
   activityPreviewCount?: number;
 }) {
@@ -670,6 +685,16 @@ function StageCard({
           </div>
           {showActions ? (
             <div className="flex flex-wrap gap-2">
+              {onEdit ? (
+                <button
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-100 transition hover:bg-sky-500/20"
+                  type="button"
+                  onClick={() => onEdit(item)}
+                >
+                  <MessageCircle size={13} />
+                  继续修改
+                </button>
+              ) : null}
               <button
                 className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/20"
                 type="button"
@@ -713,6 +738,148 @@ function StageCard({
         </div>
       )}
     </article>
+  );
+}
+
+function ContinuousEditPanel({
+  versions,
+  currentImage,
+  instruction,
+  locks,
+  loading,
+  creditsCost,
+  creditsRemaining,
+  onInstructionChange,
+  onToggleLock,
+  onSelectVersion,
+  onSubmit,
+  onClose,
+}: {
+  versions: DisplayImage[];
+  currentImage: DisplayImage;
+  instruction: string;
+  locks: Set<EditLock>;
+  loading: boolean;
+  creditsCost: number;
+  creditsRemaining: number;
+  onInstructionChange: (value: string) => void;
+  onToggleLock: (lock: EditLock) => void;
+  onSelectVersion: (image: DisplayImage) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onClose: () => void;
+}) {
+  const quickActions = [
+    ['换背景', '只更换背景，其他内容保持不变'],
+    ['删除元素', '删除画面中不需要的元素'],
+    ['调整光线', '调整画面光线和色彩，让整体更有质感'],
+  ] as const;
+  const lockOptions: Array<{ id: EditLock; label: string }> = [
+    { id: 'person', label: '锁定人物' },
+    { id: 'composition', label: '锁定构图' },
+    { id: 'text', label: '锁定文字' },
+  ];
+
+  return (
+    <div className="flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/8 bg-black/25 lg:h-full">
+      <div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-[14px] font-black text-white">继续编辑这张图</h2>
+            <span className="rounded-full border border-sky-400/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-bold text-sky-200">
+              自动引用当前版本
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] leading-5 text-zinc-500">直接描述修改要求，每次生成都会保留一个版本。</p>
+        </div>
+        <button className="btn-ghost min-h-0 shrink-0 px-2 py-1.5 text-[11px] text-zinc-400" type="button" onClick={onClose}>
+          结束编辑
+        </button>
+      </div>
+
+      <div className="custom-scrollbar min-h-[180px] flex-1 space-y-3 overflow-y-auto px-3 py-3">
+        <div className="rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-[11px] leading-5 text-zinc-400">
+          图片已准备好。你不需要下载或重新上传，告诉我下一步想改什么即可。
+        </div>
+        {versions.slice(1).map((item, index) => (
+          <div className="ml-auto max-w-[92%] rounded-xl border border-sky-400/15 bg-sky-400/10 px-3 py-2.5 text-[11px] leading-5 text-zinc-200" key={item.imageUrl}>
+            {item.editInstruction || item.prompt}
+            <div className="mt-1 text-[10px] text-zinc-500">已生成 V{index + 2}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-white/8 px-3 py-3">
+        <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+          {versions.map((item, index) => {
+            const active = item.imageUrl === currentImage.imageUrl;
+            return (
+              <button
+                className={`flex shrink-0 items-center gap-2 rounded-lg border p-1.5 pr-2.5 text-[10px] transition ${
+                  active ? 'border-sky-300/45 bg-sky-400/10 text-white' : 'border-white/8 bg-white/[0.025] text-zinc-500 hover:text-zinc-200'
+                }`}
+                type="button"
+                key={item.imageUrl}
+                onClick={() => onSelectVersion(item)}
+              >
+                <img className="h-8 w-8 rounded-md object-cover" src={item.thumbnailUrl || item.imageUrl} alt="" />
+                {index === 0 ? '原图' : `V${index + 1}`}
+              </button>
+            );
+          })}
+        </div>
+
+        <form className="space-y-2" onSubmit={onSubmit}>
+          <div className="flex flex-wrap gap-1.5">
+            {lockOptions.map((item) => {
+              const active = locks.has(item.id);
+              return (
+                <button
+                  className={`min-h-0 rounded-full border px-2.5 py-1 text-[10px] font-bold transition ${
+                    active ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-white/10 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                  type="button"
+                  key={item.id}
+                  aria-pressed={active}
+                  onClick={() => onToggleLock(item.id)}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {quickActions.map(([label, value]) => (
+              <button
+                className="min-h-0 rounded-full border border-white/8 bg-white/[0.035] px-2.5 py-1 text-[10px] text-zinc-400 transition hover:text-white"
+                type="button"
+                key={label}
+                onClick={() => onInstructionChange(instruction ? `${instruction}；${value}` : value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <textarea
+            className="input h-[82px] resize-none px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
+            placeholder="例如：天空再偏紫一点，人物和构图保持不变……"
+            value={instruction}
+            maxLength={MAX_PROMPT_LENGTH}
+            onChange={(event) => onInstructionChange(event.target.value)}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] text-zinc-500">预计 {creditsCost} 积分 / 剩余 {creditsRemaining} · 失败自动退回</span>
+            <button
+              className="btn-primary min-h-0 px-3 py-2 text-[11px] font-black disabled:cursor-not-allowed disabled:opacity-50"
+              type="submit"
+              disabled={loading || !instruction.trim() || creditsRemaining < creditsCost}
+            >
+              {loading ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}
+              {loading ? '生成中...' : '生成新版本'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -1623,7 +1790,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-      bullets: ['支持 1K / 2K / 4K；1K 主线路失败时回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强，额外消耗 8 积分，由 PIXORY 处理且不启用图片上游的原生增强参数。'],
+                  bullets: ['支持 1K / 2K / 4K；1K 仅使用 Junliai，服务不可用时会提示改用 2K，不切换 Banana Lite；2K/4K 保留现有备用线路。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强，额外消耗 8 积分，由 PIXORY 处理且不启用图片上游的原生增强参数。'],
     },
   ];
   const docNavigation = [
@@ -4484,6 +4651,9 @@ export default function App() {
   const [discarded, setDiscarded] = useState<SavedImage[]>([]);
   const [currentImage, setCurrentImage] = useState<DisplayImage | null>(null);
   const [historyQueue, setHistoryQueue] = useState<DisplayImage[]>([]);
+  const [editVersions, setEditVersions] = useState<DisplayImage[]>([]);
+  const [editInstruction, setEditInstruction] = useState('');
+  const [editLocks, setEditLocks] = useState<Set<EditLock>>(() => new Set(['person', 'composition']));
   const [inFlightGeneratedImages, setInFlightGeneratedImages] = useState<DisplayImage[]>([]);
   const [historyRecords, setHistoryRecords] = useState<GenerationRecord[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverviewState>({
@@ -4550,11 +4720,7 @@ export default function App() {
     optimizeChineseText: effectiveOptimizeChineseText,
     pricing: gptImagePricing,
   });
-  const selectedResolutionOptions = isNanoBananaPro
-    ? providerRouting.junliaiNanoBanana
-      ? imageSizeOptions
-      : imageSizeOptions.filter((item) => item.value !== '1K')
-    : gptImageSizeOptions;
+  const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
@@ -4797,7 +4963,7 @@ export default function App() {
       return;
     }
     setImageSize((current) => {
-      if (modelId === 'Nano_Banana_Pro') return providerRouting.junliaiNanoBanana ? '1K' : '2K';
+      if (modelId === 'Nano_Banana_Pro') return '1K';
       return current === '2K' || current === '4K' ? current : 'STANDARD';
     });
   }
@@ -4821,12 +4987,44 @@ export default function App() {
     if (autoPlace) {
       const firstImage = nextImages[0];
       const followingImages = nextImages.slice(1);
-      setHistoryQueue((current) => [...followingImages, ...(currentImage ? [currentImage, ...current] : current)].slice(0, 7));
+      setHistoryQueue((current) => {
+        const candidates = [...followingImages, ...(currentImage ? [currentImage, ...current] : current)];
+        return candidates.filter((item, index) => candidates.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index).slice(0, 7);
+      });
       setCurrentImage(firstImage);
       return;
     }
 
     setHistoryQueue((current) => [...nextImages.slice().reverse(), ...current].slice(0, 7));
+  }
+
+  function startEditSession(image: DisplayImage) {
+    const normalizedModel = image.modelName.toLowerCase().includes('nano banana') ? 'Nano_Banana_Pro' : 'gpt-image-2';
+    setSelectedModel(normalizedModel);
+    if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
+      setImageSize(image.imageSize as ImageSizeOption);
+    } else {
+      setImageSize(normalizedModel === 'Nano_Banana_Pro' ? '1K' : 'STANDARD');
+    }
+    if (dimensionOptions.some((item) => item.value === image.dimensions)) {
+      setDimensions(image.dimensions as DimensionOption);
+    }
+    setBatchCount(1);
+    setCurrentImage(image);
+    setEditVersions([image]);
+    setEditInstruction('');
+    setEditLocks(new Set(['person', 'composition']));
+    setGenerationError('');
+    setNotice('');
+  }
+
+  function toggleEditLock(lock: EditLock) {
+    setEditLocks((current) => {
+      const next = new Set(current);
+      if (next.has(lock)) next.delete(lock);
+      else next.add(lock);
+      return next;
+    });
   }
 
   async function loadPrivateData() {
@@ -5432,18 +5630,16 @@ export default function App() {
     });
     setNotice('');
     setGenerationError('');
+    setEditVersions([]);
+    setEditInstruction('');
     const generatedImages: DisplayImage[] = [];
 
     try {
-      let requestImageSize = imageSize;
+      const requestImageSize = imageSize;
       if (isNanoBananaPro) {
         const latestModels = await fetchModels();
         const latestRouting = latestModels.providerRouting || defaultProviderRouting;
         setProviderRouting(latestRouting);
-        if (!latestRouting.junliaiNanoBanana && requestImageSize === '1K') {
-          requestImageSize = '2K';
-          setImageSize('2K');
-        }
       }
       const referenceImages: ReferenceUploadInput[] = references.map((item) => ({
         name: item.name,
@@ -5490,6 +5686,10 @@ export default function App() {
       }
 
       commitGeneratedImages(generatedImages);
+      if (generatedImages[0]) {
+        setEditVersions([generatedImages[0]]);
+        setEditLocks(new Set(['person', 'composition']));
+      }
       if (batchCount > 1) {
         setNotice(`\u5df2\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247`);
       }
@@ -5513,6 +5713,7 @@ export default function App() {
 
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
+        setEditVersions([generatedImages[0]]);
       }
       setNotice('');
       setGenerationError(noticeMessage);
@@ -5523,6 +5724,68 @@ export default function App() {
       setInFlightGeneratedImages([]);
     }
   }
+
+  async function handleContinueEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const sourceImage = currentImage;
+    const requestedChange = editInstruction.trim();
+    if (!user || !sourceImage || editVersions.length === 0) return;
+    if (!requestedChange) {
+      setGenerationError('请先描述想修改的内容');
+      return;
+    }
+
+    const effectivePrompt = buildImageEditPrompt(requestedChange, editLocks);
+
+    setLoading(true);
+    setPendingGenerationSlot(true);
+    setInFlightGeneratedImages([]);
+    setGenerationProgress({ completed: 0, total: 1, visual: 6, startedAt: Date.now() });
+    setGenerationError('');
+    setNotice('');
+
+    try {
+      if (selectedModel === 'Nano_Banana_Pro') {
+        const latestModels = await fetchModels();
+        setProviderRouting(latestModels.providerRouting || defaultProviderRouting);
+      }
+      const sourceReference = await imageToReferenceInput(sourceImage);
+      const jobStartedAt = Date.now();
+      const { job } = await startGenerateImageJob({
+        prompt: effectivePrompt,
+        model: selectedModel,
+        dimensions,
+        imageSize,
+        quality: showGptQuality ? gptQuality : undefined,
+        optimizeChineseText: selectedModel === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+        reference_images: [sourceReference],
+      });
+      const image = job.status === 'succeeded' && job.image
+        ? job.image
+        : await waitForGenerationJob(job.id, 0, 1, jobStartedAt);
+      const editedImage: DisplayImage = {
+        ...toDisplayImage(image),
+        prompt: requestedChange,
+        editInstruction: requestedChange,
+      };
+
+      commitGeneratedImages([editedImage]);
+      setEditVersions((current) => [...current, editedImage]);
+      setEditInstruction('');
+      setNotice(`已生成版本 V${editVersions.length + 1}`);
+      void fetchMe().then(setUser).catch(() => undefined);
+      void loadHistory();
+      if (user.isAdmin) void loadAdminSection('dashboard');
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : '连续编辑失败');
+    } finally {
+      setLoading(false);
+      setGenerationProgress(null);
+      setPendingGenerationSlot(false);
+      setInFlightGeneratedImages([]);
+    }
+  }
+
   async function saveDisplayImage(targetImage: DisplayImage, category: ImageCategory) {
     if (!user) return;
 
@@ -6431,9 +6694,7 @@ export default function App() {
               <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
                 <section className="space-y-1.5">
                   <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
-                  <div className={`grid gap-2 ${
-                    isNanoBananaPro && !providerRouting.junliaiNanoBanana ? 'grid-cols-2' : 'grid-cols-3'
-                  }`}>
+                  <div className="grid grid-cols-3 gap-2">
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
 
@@ -6463,6 +6724,9 @@ export default function App() {
                       );
                     })}
                   </div>
+                  {isNanoBananaPro && imageSize === '1K' ? (
+                    <p className="text-[10px] leading-4 text-amber-300/80">1K 仅使用 Junliai；失败时不会切换其他模型，建议改用 2K。</p>
+                  ) : null}
                 </section>
 
                 {showGptQuality ? (
@@ -6679,6 +6943,7 @@ export default function App() {
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                       onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}
                       onPreview={(target) => setPreviewImage(target)}
+                      onEdit={item ? startEditSession : undefined}
                     />
                   </div>
                 ))}
@@ -6763,6 +7028,28 @@ export default function App() {
           )}
 
           <aside className={activeTab === 'create' && creationMode === 'image' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
+            {editVersions.length > 0 && currentImage ? (
+              <ContinuousEditPanel
+                versions={editVersions}
+                currentImage={currentImage}
+                instruction={editInstruction}
+                locks={editLocks}
+                loading={loading}
+                creditsCost={selectedModelCredits}
+                creditsRemaining={user?.creditsRemaining ?? 0}
+                onInstructionChange={(value) => setEditInstruction(value.slice(0, MAX_PROMPT_LENGTH))}
+                onToggleLock={toggleEditLock}
+                onSelectVersion={(image) => {
+                  setCurrentImage(image);
+                  setGenerationError('');
+                }}
+                onSubmit={(event) => void handleContinueEdit(event)}
+                onClose={() => {
+                  setEditVersions([]);
+                  setEditInstruction('');
+                }}
+              />
+            ) : (
             <div className="grid content-start gap-5 lg:h-full">
             <SidePanel
               title="收藏区"
@@ -6822,6 +7109,7 @@ export default function App() {
               </button>
             ) : null}
             </div>
+            )}
           </aside>
         </div>
       </div>
