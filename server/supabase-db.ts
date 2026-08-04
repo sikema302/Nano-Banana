@@ -1545,6 +1545,27 @@ export async function setSetting(key: string, value: string): Promise<void> {
   if (error) throw new Error(`Set setting failed: ${error.message}`);
 }
 
+export async function claimSetting(key: string, value: string): Promise<{ claimed: boolean; value: string }> {
+  const { error } = await getSupabase().from('app_settings').insert({
+    key,
+    value,
+    updated_at: nowIso(),
+  });
+  if (!error) return { claimed: true, value };
+
+  if (error.code !== '23505') {
+    throw new Error(`Claim setting failed: ${error.message}`);
+  }
+
+  const { data, error: readError } = await getSupabase()
+    .from('app_settings')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+  if (readError) throw new Error(`Read claimed setting failed: ${readError.message}`);
+  return { claimed: false, value: data ? String((data as { value: string }).value) : '' };
+}
+
 // ─── 管理概览操作 ───────────────────────────────────────────────────
 
 export async function getRegisteredUsers(): Promise<

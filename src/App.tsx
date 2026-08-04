@@ -57,6 +57,7 @@ import {
   fetchUserApiKeys,
   deleteImage,
   acknowledgePromoCoupon,
+  claimPromoCoupon,
   claimInvitePopup,
   fetchHealth,
   fetchNotifications,
@@ -123,6 +124,7 @@ import {
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
+import { getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
 import {
   getVideoGenerationCredits,
   getVideoModelConfig,
@@ -4703,6 +4705,7 @@ export default function App() {
   const [redeemingInvite, setRedeemingInvite] = useState(false);
   const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
   const [promoCouponOpen, setPromoCouponOpen] = useState(false);
+  const [promoCouponClaiming, setPromoCouponClaiming] = useState(false);
   const [notificationPayload, setNotificationPayload] = useState<NotificationPayload>({ notifications: [], unreadCount: 0, popup: null });
   const [notificationOpen, setNotificationOpen] = useState(false);
   const shownNotificationIdsRef = useRef(new Set<string>());
@@ -4728,6 +4731,8 @@ export default function App() {
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
   const activePromoCoupon = promoCoupon?.active ? promoCoupon : null;
   const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
+  const promoCouponDiscountLabel = activePromoCoupon ? getPromoDiscountLabel(activePromoCoupon.discountPercent) : '';
+  const promoCouponDiscountRate = activePromoCoupon ? getPromoDiscountRate(activePromoCoupon.discountPercent) : '';
 
   useEffect(() => {
     if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
@@ -5499,8 +5504,17 @@ export default function App() {
     setReferences((current) => current.filter((item) => item.id !== id));
   }
 
-  function openPurchasePage() {
+  function openPurchaseDestination() {
     window.open(activePromoCoupon?.purchaseUrl || 'https://pay.ldxp.cn/shop/RHPYAKWG', '_blank', 'noopener,noreferrer');
+  }
+
+  function openPurchasePage() {
+    if (activePromoCoupon) {
+      setPromoCouponOpen(true);
+      return;
+    }
+
+    openPurchaseDestination();
   }
 
   async function closePromoCoupon() {
@@ -5515,9 +5529,60 @@ export default function App() {
     }
   }
 
-  function openPromoPurchasePage() {
-    openPurchasePage();
-    void closePromoCoupon();
+  async function openPromoPurchasePage() {
+    if (!activePromoCoupon || promoCouponClaiming) return;
+
+    const purchaseWindow = window.open('about:blank', '_blank');
+    if (purchaseWindow) purchaseWindow.opener = null;
+    setPromoCouponClaiming(true);
+
+    try {
+      const coupon = activePromoCoupon.redemptionCode
+        ? activePromoCoupon
+        : (await claimPromoCoupon()).coupon;
+      if (!coupon.active || !coupon.redemptionCode) {
+        throw new Error('优惠券已失效，请刷新后重试');
+      }
+
+      setPromoCoupon(coupon);
+      let copied = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(coupon.redemptionCode);
+          copied = true;
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = coupon.redemptionCode;
+          textarea.setAttribute('readonly', 'true');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          copied = document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+      } catch {
+        copied = false;
+      }
+
+      if (purchaseWindow) {
+        purchaseWindow.location.replace(coupon.purchaseUrl);
+      } else {
+        window.open(coupon.purchaseUrl, '_blank', 'noopener,noreferrer');
+      }
+
+      if (copied) {
+        setNotice(`优惠码 ${coupon.redemptionCode} 已复制，请在小铺结算时使用`);
+        void closePromoCoupon();
+      } else {
+        setNotice('优惠券已领取，请手动复制弹窗中的优惠码');
+      }
+    } catch (error) {
+      purchaseWindow?.close();
+      setNotice(error instanceof Error ? error.message : '优惠券领取失败，请稍后再试');
+    } finally {
+      setPromoCouponClaiming(false);
+    }
   }
 
   async function handleCopyWechat() {
@@ -6870,7 +6935,7 @@ export default function App() {
                     onClick={() => setPromoCouponOpen(true)}
                   >
                     <Sparkles size={14} className="shrink-0 text-[#ffb7df]" />
-                    <span className="truncate">今日 9 折优惠券，{promoCouponExpiresText || '今晚 0 点'} 失效</span>
+                    <span className="truncate">限时 {promoCouponDiscountLabel}优惠券，{promoCouponExpiresText || '12 小时后'}失效</span>
                   </button>
                 ) : null}
                 {!user ? (
@@ -7239,7 +7304,7 @@ export default function App() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-[12px] font-black uppercase tracking-[0.24em] text-[#ffb7df]">PIXORY COUPON</p>
-                  <h2 className="mt-2 text-2xl font-black text-white">今日专属 9 折券</h2>
+                  <h2 className="mt-2 text-2xl font-black text-white">今日专属 {promoCouponDiscountLabel}券</h2>
                 </div>
                 <button
                   className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 text-zinc-400 transition hover:border-[#ff8fcd]/40 hover:text-white"
@@ -7255,25 +7320,36 @@ export default function App() {
                 <div className="flex items-end justify-between gap-4">
                   <div>
                     <p className="text-sm font-bold text-[#ffd9ef]">购买积分可用</p>
-                    <p className="mt-1 text-[13px] text-zinc-400">每个账户 2-3 天随机发放一张</p>
+                    <p className="mt-1 text-[13px] text-zinc-400">有效 12 小时，失效后至少 2 天才可能再次获得</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-5xl font-black leading-none text-white">9</p>
+                    <p className="text-5xl font-black leading-none text-white">{promoCouponDiscountRate}</p>
                     <p className="text-sm font-black text-[#ffb7df]">折优惠</p>
                   </div>
                 </div>
                 <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] font-bold text-[#ffd9ef]">
-                  有效期至 {promoCouponExpiresText || '今晚 0 点'}，过期自动失效
+                  有效期至 {promoCouponExpiresText || '12 小时后'}，过期自动失效
                 </div>
+                {activePromoCoupon.redemptionCode ? (
+                  <div className="mt-2 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] text-zinc-300">
+                    结算优惠码：<span className="font-black tracking-[0.08em] text-white">{activePromoCoupon.redemptionCode}</span>
+                  </div>
+                ) : null}
               </div>
 
               <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]">
                 <button
-                  className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110"
+                  className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70"
                   type="button"
-                  onClick={openPromoPurchasePage}
+                  onClick={() => void openPromoPurchasePage()}
+                  disabled={promoCouponClaiming}
+                  aria-busy={promoCouponClaiming}
                 >
-                  立即使用优惠券
+                  {promoCouponClaiming
+                    ? '正在领取优惠券...'
+                    : activePromoCoupon.redemptionCode
+                      ? '复制优惠码并去购买'
+                      : '立即使用优惠券'}
                 </button>
                 <button
                   className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold text-zinc-400 transition hover:border-white/20 hover:text-white"

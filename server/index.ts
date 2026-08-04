@@ -51,6 +51,21 @@ import {
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 import { createNotificationService } from './notifications.js';
 import { resolveApiKeyDisplayCredits, type CreditValues } from './api-key-credits.js';
+import {
+  getPromoCouponPrefix,
+  getPromoCouponSchedule,
+  normalizePromoDiscountPercent,
+  pickPromoDiscountPercent,
+} from '../src/lib/promo-coupon.js';
+import {
+  isSamePromoCouponClaim,
+  orderPromoCouponCodes,
+  parsePromoCouponCodeClaim,
+  parsePromoCouponCodes,
+  promoCouponCodeClaimKey,
+  serializePromoCouponCodeClaim,
+  type PromoCouponDiscountPercent,
+} from './promo-coupon-code-pool.js';
 
 // 鈹€鈹€鈹€ 鐜妫€娴?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -113,6 +128,8 @@ type PromoCouponRecord = {
   expiresAt: string;
   nextEligibleAt: string;
   popupSeenAt?: string;
+  redemptionCode?: string;
+  scheduleVersion: 2;
   source: 'welcome' | 'scheduled';
 };
 
@@ -123,6 +140,7 @@ type PromoCouponPayload = {
   expiresAt: string;
   nextEligibleAt: string;
   purchaseUrl: string;
+  redemptionCode: string;
   active: boolean;
   shouldPopup: boolean;
 };
@@ -376,9 +394,9 @@ const DISK_EMERGENCY_TARGET_PERCENT = Math.max(
 );
 const STORE_REFERENCE_IMAGES = false;
 const PROMO_PURCHASE_URL = 'https://pay.ldxp.cn/shop/RHPYAKWG';
-const PROMO_COUPON_DISCOUNT_PERCENT = 10;
 const PROMO_COUPON_SETTING_PREFIX = 'promo_coupon_v1:';
-const PROMO_COUPON_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
+const PROMO_COUPON_CODE_POOL_SETTING_PREFIX = 'promo_coupon_code_pool_v1:';
+const promoCouponCodeCache = new Map<PromoCouponDiscountPercent, Promise<string[]>>();
 
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
@@ -2182,6 +2200,15 @@ function setSetting(db: SqlDatabase, key: string, value: string) {
   );
 }
 
+function claimSqliteSetting(db: SqlDatabase, key: string, value: string) {
+  const existing = getOne<{ value: string }>(db, 'SELECT value FROM app_settings WHERE key = ?', [key]);
+  if (existing) return { claimed: false, value: String(existing.value) };
+
+  db.run('INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)', [key, value, nowIso()]);
+  const stored = getOne<{ value: string }>(db, 'SELECT value FROM app_settings WHERE key = ?', [key]);
+  return { claimed: stored?.value === value, value: String(stored?.value || '') };
+}
+
 function promoCouponSettingKey(userId: string) {
   return `${PROMO_COUPON_SETTING_PREFIX}${userId}`;
 }
@@ -2192,37 +2219,31 @@ function parsePromoCouponRecord(raw: string): PromoCouponRecord | null {
 
   const couponId = normalizeString(value.couponId);
   const issuedAt = normalizeString(value.issuedAt);
-  const expiresAt = normalizeString(value.expiresAt);
-  const nextEligibleAt = normalizeString(value.nextEligibleAt);
+  let expiresAt = normalizeString(value.expiresAt);
+  let nextEligibleAt = normalizeString(value.nextEligibleAt);
   if (!couponId || !issuedAt || !expiresAt || !nextEligibleAt) return null;
+
+  if (value.scheduleVersion !== 2) {
+    const migratedSchedule = getPromoCouponSchedule(issuedAt, 2);
+    expiresAt = migratedSchedule.expiresAt;
+    nextEligibleAt = migratedSchedule.nextEligibleAt;
+  }
 
   return {
     couponId,
-    discountPercent: Math.max(1, Math.floor(Number(value.discountPercent || PROMO_COUPON_DISCOUNT_PERCENT))),
+    discountPercent: normalizePromoDiscountPercent(value.discountPercent),
     issuedAt,
     expiresAt,
     nextEligibleAt,
     popupSeenAt: normalizeString(value.popupSeenAt) || undefined,
+    redemptionCode: normalizeString(value.redemptionCode) || undefined,
+    scheduleVersion: 2,
     source: value.source === 'welcome' ? 'welcome' : 'scheduled',
   } satisfies PromoCouponRecord;
 }
 
 function serializePromoCouponRecord(record: PromoCouponRecord) {
   return JSON.stringify(record);
-}
-
-function addDaysStrictIso(base: string, days: number) {
-  const date = new Date(base);
-  if (Number.isNaN(date.getTime())) return nowIso();
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function nextChinaMidnightIso(base: string) {
-  const source = new Date(base);
-  const now = Number.isNaN(source.getTime()) ? new Date() : source;
-  const shifted = new Date(now.getTime() + PROMO_COUPON_TIMEZONE_OFFSET_MS);
-  shifted.setUTCHours(24, 0, 0, 0);
-  return new Date(shifted.getTime() - PROMO_COUPON_TIMEZONE_OFFSET_MS).toISOString();
 }
 
 function randomCouponIntervalDays() {
@@ -2239,13 +2260,16 @@ function isPromoCouponActive(record: PromoCouponRecord | null, now = nowIso()) {
 }
 
 function toPromoCouponPayload(record: PromoCouponRecord | null, options?: { shouldPopup?: boolean }): PromoCouponPayload {
+  const discountPercent = normalizePromoDiscountPercent(record?.discountPercent);
+  const couponVariant = discountPercent === 5 ? '95' : '90';
   return {
     couponId: record?.couponId || '',
-    discountPercent: record?.discountPercent || PROMO_COUPON_DISCOUNT_PERCENT,
+    discountPercent,
     issuedAt: record?.issuedAt || '',
     expiresAt: record?.expiresAt || '',
     nextEligibleAt: record?.nextEligibleAt || '',
-    purchaseUrl: PROMO_PURCHASE_URL,
+    purchaseUrl: normalizeString(process.env[`PROMO_COUPON_${couponVariant}_URL`]) || PROMO_PURCHASE_URL,
+    redemptionCode: normalizeString(record?.redemptionCode),
     active: isPromoCouponActive(record),
     shouldPopup: Boolean(options?.shouldPopup),
   };
@@ -2256,14 +2280,17 @@ function shouldShowPromoCouponPopup(record: PromoCouponRecord | null, now = nowI
   return true;
 }
 
-function issuePromoCoupon(now = nowIso()): PromoCouponRecord {
+function issuePromoCoupon(now = nowIso(), source: PromoCouponRecord['source'] = 'scheduled'): PromoCouponRecord {
+  const discountPercent = pickPromoDiscountPercent(Number.parseInt(randomHex(1), 16));
+  const schedule = getPromoCouponSchedule(now, randomCouponIntervalDays());
   return {
-    couponId: `PIXORY90-${randomHex(3).toUpperCase()}`,
-    discountPercent: PROMO_COUPON_DISCOUNT_PERCENT,
+    couponId: `${getPromoCouponPrefix(discountPercent)}-${randomHex(3).toUpperCase()}`,
+    discountPercent,
     issuedAt: now,
-    expiresAt: nextChinaMidnightIso(now),
-    nextEligibleAt: addDaysStrictIso(now, randomCouponIntervalDays()),
-    source: 'scheduled',
+    expiresAt: schedule.expiresAt,
+    nextEligibleAt: schedule.nextEligibleAt,
+    scheduleVersion: 2,
+    source,
   };
 }
 
@@ -2278,7 +2305,8 @@ async function getOrRefreshSupabasePromoCoupon(user: AuthUser) {
   let record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
 
   if (!record) {
-    return toPromoCouponPayload(null);
+    record = issuePromoCoupon(now, 'welcome');
+    await db.setSetting(settingKey, serializePromoCouponRecord(record));
   }
 
   if (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime()) {
@@ -2301,7 +2329,8 @@ async function getOrRefreshSqlitePromoCoupon(db: SqlDatabase, user: AuthUser) {
   let record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
 
   if (!record) {
-    return toPromoCouponPayload(null);
+    record = issuePromoCoupon(now, 'welcome');
+    setSetting(db, settingKey, serializePromoCouponRecord(record));
   }
 
   if (!isPromoCouponActive(record, now) && new Date(now).getTime() >= new Date(record.nextEligibleAt).getTime()) {
@@ -2322,6 +2351,101 @@ async function getOrRefreshPromoCoupon(user: AuthUser) {
   return withWriteDb((db) => {
     ensureSchema(db);
     return getOrRefreshSqlitePromoCoupon(db, user);
+  });
+}
+
+function promoCouponCodesFilePath(discountPercent: PromoCouponDiscountPercent) {
+  const couponVariant = discountPercent === 5 ? '95' : '90';
+  const configured = normalizeString(process.env[`PROMO_COUPON_${couponVariant}_CODES_FILE`]);
+  if (!configured) return path.join(DATA_DIR, 'promo-coupon-codes', `${couponVariant}.txt`);
+  return path.isAbsolute(configured) ? configured : path.resolve(ROOT_DIR, configured);
+}
+
+function promoCouponCodePoolSettingKey(discountPercent: PromoCouponDiscountPercent) {
+  return `${PROMO_COUPON_CODE_POOL_SETTING_PREFIX}${discountPercent}`;
+}
+
+function loadPromoCouponCodes(discountPercent: PromoCouponDiscountPercent) {
+  const cached = promoCouponCodeCache.get(discountPercent);
+  if (cached) return cached;
+
+  const pending = fs
+    .readFile(promoCouponCodesFilePath(discountPercent), 'utf8')
+    .then(parsePromoCouponCodes)
+    .catch((error: unknown) => {
+      promoCouponCodeCache.delete(discountPercent);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`优惠券码池读取失败：${message}`);
+    });
+  promoCouponCodeCache.set(discountPercent, pending);
+  return pending;
+}
+
+async function reservePromoCouponCode(
+  user: AuthUser,
+  record: PromoCouponRecord,
+  storedPool: string,
+  claimSetting: (key: string, value: string) => Promise<{ claimed: boolean; value: string }> | { claimed: boolean; value: string },
+) {
+  if (record.redemptionCode) return record.redemptionCode;
+
+  const discountPercent = normalizePromoDiscountPercent(record.discountPercent);
+  const storedCodes = parsePromoCouponCodes(storedPool);
+  const codes = storedCodes.length > 0 ? storedCodes : await loadPromoCouponCodes(discountPercent);
+  const orderedCodes = orderPromoCouponCodes(codes, `${user.userId}:${record.couponId}`);
+  const expectedClaim = {
+    userId: user.userId,
+    couponId: record.couponId,
+    discountPercent,
+    claimedAt: nowIso(),
+  };
+  const claimValue = serializePromoCouponCodeClaim(expectedClaim);
+
+  for (const code of orderedCodes) {
+    const result = await claimSetting(promoCouponCodeClaimKey(discountPercent, code), claimValue);
+    if (result.claimed || isSamePromoCouponClaim(parsePromoCouponCodeClaim(result.value), expectedClaim)) {
+      return code;
+    }
+  }
+
+  throw new Error(`${discountPercent === 5 ? '95 折' : '9 折'}优惠券已领完，请稍后再试`);
+}
+
+async function claimPromoCoupon(user: AuthUser) {
+  await getOrRefreshPromoCoupon(user);
+  if (isAdminUser(user)) return toPromoCouponPayload(null);
+
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    const settingKey = promoCouponSettingKey(user.userId);
+    const record = parsePromoCouponRecord(await db.getSetting(settingKey, ''));
+    if (!record || !isPromoCouponActive(record)) return toPromoCouponPayload(record);
+    if (!record.redemptionCode) {
+      const discountPercent = normalizePromoDiscountPercent(record.discountPercent);
+      const storedPool = await db.getSetting(promoCouponCodePoolSettingKey(discountPercent), '');
+      record.redemptionCode = await reservePromoCouponCode(user, record, storedPool, db.claimSetting);
+      await db.setSetting(settingKey, serializePromoCouponRecord(record));
+    }
+    return toPromoCouponPayload(record);
+  }
+
+  return withWriteDb(async (db) => {
+    ensureSchema(db);
+    const settingKey = promoCouponSettingKey(user.userId);
+    const record = parsePromoCouponRecord(getSetting(db, settingKey, ''));
+    if (!record || !isPromoCouponActive(record)) return toPromoCouponPayload(record);
+    if (!record.redemptionCode) {
+      const discountPercent = normalizePromoDiscountPercent(record.discountPercent);
+      const storedPool = getSetting(db, promoCouponCodePoolSettingKey(discountPercent), '');
+      record.redemptionCode = await reservePromoCouponCode(
+        user,
+        record,
+        storedPool,
+        (key, value) => claimSqliteSetting(db, key, value),
+      );
+      setSetting(db, settingKey, serializePromoCouponRecord(record));
+    }
+    return toPromoCouponPayload(record);
   });
 }
 
@@ -5383,6 +5507,19 @@ async function start() {
       res.json({ coupon });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Acknowledge promo coupon failed' });
+    }
+  });
+
+  app.post('/api/user/promo-coupon/claim', requireAuth, async (req, res) => {
+    try {
+      const coupon = await claimPromoCoupon(req.authUser!);
+      if (!coupon.active || !coupon.redemptionCode) {
+        res.status(409).json({ error: '优惠券已失效，请刷新后重试' });
+        return;
+      }
+      res.json({ coupon });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : '优惠券领取失败，请稍后再试' });
     }
   });
 

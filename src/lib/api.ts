@@ -152,6 +152,7 @@ export interface PromoCouponInfo {
   expiresAt: string;
   nextEligibleAt: string;
   purchaseUrl: string;
+  redemptionCode: string;
   active: boolean;
   shouldPopup: boolean;
 }
@@ -614,6 +615,16 @@ export async function fetchPromoCoupon() {
 export async function acknowledgePromoCoupon() {
   return request<{ coupon: PromoCouponInfo }>(
     '/api/user/promo-coupon/ack',
+    {
+      method: 'POST',
+    },
+    true,
+  );
+}
+
+export async function claimPromoCoupon() {
+  return request<{ coupon: PromoCouponInfo }>(
+    '/api/user/promo-coupon/claim',
     {
       method: 'POST',
     },
