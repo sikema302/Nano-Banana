@@ -7,9 +7,9 @@ export function normalizePromoDiscountPercent(value: unknown): PromoDiscountPerc
   return Number(value) === 5 ? 5 : 10;
 }
 
-export function pickPromoDiscountPercent(randomByte: number): PromoDiscountPercent {
-  const normalizedByte = Number.isFinite(randomByte) ? Math.abs(Math.floor(randomByte)) : 0;
-  return normalizedByte % 2 === 0 ? 5 : 10;
+export function pickPromoDiscountPercent(randomPercent: number): PromoDiscountPercent {
+  const normalizedPercent = Number.isFinite(randomPercent) ? Math.abs(Math.floor(randomPercent)) % 100 : 0;
+  return normalizedPercent < 80 ? 5 : 10;
 }
 
 export function getPromoDiscountRate(discountPercent: number) {
@@ -40,4 +40,15 @@ export function getPromoCouponSchedule(issuedAt: string, cooldownDays: number) {
     expiresAt: new Date(expiresAtMs).toISOString(),
     nextEligibleAt: new Date(expiresAtMs + normalizedCooldownDays * 24 * 60 * 60 * 1000).toISOString(),
   };
+}
+
+export function formatPromoCouponCountdown(expiresAt: string, nowMs = Date.now()) {
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresAtMs) || !Number.isFinite(nowMs)) return '00:00:00';
+
+  const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
 }

@@ -4,17 +4,21 @@ import test from 'node:test';
 import {
   getPromoCouponPrefix,
   getPromoCouponSchedule,
+  formatPromoCouponCountdown,
   getPromoDiscountLabel,
   getPromoDiscountRate,
   normalizePromoDiscountPercent,
   pickPromoDiscountPercent,
 } from './promo-coupon.js';
 
-test('random coupon selection maps evenly to 95 and 90 percent price rates', () => {
+test('random coupon selection gives 95 discount an 80 percent share', () => {
   assert.equal(pickPromoDiscountPercent(0), 5);
-  assert.equal(pickPromoDiscountPercent(1), 10);
-  assert.equal(pickPromoDiscountPercent(254), 5);
-  assert.equal(pickPromoDiscountPercent(255), 10);
+  assert.equal(pickPromoDiscountPercent(79), 5);
+  assert.equal(pickPromoDiscountPercent(80), 10);
+  assert.equal(pickPromoDiscountPercent(99), 10);
+  const outcomes = Array.from({ length: 100 }, (_, index) => pickPromoDiscountPercent(index));
+  assert.equal(outcomes.filter((discount) => discount === 5).length, 80);
+  assert.equal(outcomes.filter((discount) => discount === 10).length, 20);
 });
 
 test('coupon labels and prefixes match their discount', () => {
@@ -40,4 +44,11 @@ test('coupon expires after 12 hours and waits at least two full days before anot
   });
   assert.equal(getPromoCouponSchedule(issuedAt, 3).nextEligibleAt, '2026-08-07T13:30:00.000Z');
   assert.equal(getPromoCouponSchedule(issuedAt, 0).nextEligibleAt, '2026-08-06T13:30:00.000Z');
+});
+
+test('coupon countdown formats the live remaining time and stops at zero', () => {
+  const now = new Date('2026-08-04T01:30:00.000Z').getTime();
+  assert.equal(formatPromoCouponCountdown('2026-08-04T13:30:00.000Z', now), '12:00:00');
+  assert.equal(formatPromoCouponCountdown('2026-08-04T02:31:02.000Z', now), '01:01:02');
+  assert.equal(formatPromoCouponCountdown('2026-08-04T01:29:59.000Z', now), '00:00:00');
 });

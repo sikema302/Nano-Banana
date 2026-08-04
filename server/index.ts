@@ -2281,7 +2281,7 @@ function shouldShowPromoCouponPopup(record: PromoCouponRecord | null, now = nowI
 }
 
 function issuePromoCoupon(now = nowIso(), source: PromoCouponRecord['source'] = 'scheduled'): PromoCouponRecord {
-  const discountPercent = pickPromoDiscountPercent(Number.parseInt(randomHex(1), 16));
+  const discountPercent = pickPromoDiscountPercent(crypto.randomInt(100));
   const schedule = getPromoCouponSchedule(now, randomCouponIntervalDays());
   return {
     couponId: `${getPromoCouponPrefix(discountPercent)}-${randomHex(3).toUpperCase()}`,

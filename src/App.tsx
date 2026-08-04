@@ -26,6 +26,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  TicketPercent,
   UserRound,
   WalletCards,
   X,
@@ -124,7 +125,7 @@ import {
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
-import { getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
+import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
 import {
   getVideoGenerationCredits,
   getVideoModelConfig,
@@ -483,6 +484,7 @@ function createActivityPreviewCount() {
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
 const SHOW_CREATION_ACTIVITY = true;
+const SHOW_PROMO_COUPON_HEADER_ENTRY = false;
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -4706,6 +4708,7 @@ export default function App() {
   const [promoCoupon, setPromoCoupon] = useState<PromoCouponInfo | null>(null);
   const [promoCouponOpen, setPromoCouponOpen] = useState(false);
   const [promoCouponClaiming, setPromoCouponClaiming] = useState(false);
+  const [promoCouponNowMs, setPromoCouponNowMs] = useState(() => Date.now());
   const [notificationPayload, setNotificationPayload] = useState<NotificationPayload>({ notifications: [], unreadCount: 0, popup: null });
   const [notificationOpen, setNotificationOpen] = useState(false);
   const shownNotificationIdsRef = useRef(new Set<string>());
@@ -4729,10 +4732,37 @@ export default function App() {
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const hasEnoughCredits =
     typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
-  const activePromoCoupon = promoCoupon?.active ? promoCoupon : null;
+  const promoCouponExpiresAtMs = new Date(promoCoupon?.expiresAt || '').getTime();
+  const activePromoCoupon = promoCoupon?.active && Number.isFinite(promoCouponExpiresAtMs) && promoCouponExpiresAtMs > promoCouponNowMs
+    ? promoCoupon
+    : null;
   const promoCouponExpiresText = activePromoCoupon ? formatCouponTime(activePromoCoupon.expiresAt) : '';
   const promoCouponDiscountLabel = activePromoCoupon ? getPromoDiscountLabel(activePromoCoupon.discountPercent) : '';
   const promoCouponDiscountRate = activePromoCoupon ? getPromoDiscountRate(activePromoCoupon.discountPercent) : '';
+  const promoCouponCountdown = activePromoCoupon
+    ? formatPromoCouponCountdown(activePromoCoupon.expiresAt, promoCouponNowMs)
+    : '00:00:00';
+
+  useEffect(() => {
+    if (!promoCoupon?.active || !Number.isFinite(promoCouponExpiresAtMs)) return;
+    const couponId = promoCoupon.couponId;
+    let expired = false;
+    const refreshCountdown = () => {
+      const currentTime = Date.now();
+      setPromoCouponNowMs(currentTime);
+      if (expired || currentTime < promoCouponExpiresAtMs) return;
+      expired = true;
+      setPromoCoupon((current) => current?.couponId === couponId
+        ? { ...current, active: false, shouldPopup: false }
+        : current);
+      setPromoCouponOpen(false);
+      void loadPromoCoupon();
+    };
+
+    refreshCountdown();
+    const timer = window.setInterval(refreshCountdown, 1000);
+    return () => window.clearInterval(timer);
+  }, [promoCoupon?.active, promoCoupon?.couponId, promoCoupon?.expiresAt, promoCouponExpiresAtMs]);
 
   useEffect(() => {
     if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
@@ -5517,6 +5547,23 @@ export default function App() {
     openPurchaseDestination();
   }
 
+  async function openPromoCouponFromHeader() {
+    if (activePromoCoupon) {
+      setPromoCouponOpen(true);
+      return;
+    }
+
+    const refreshedCoupon = await loadPromoCoupon();
+    const refreshedExpiresAt = new Date(refreshedCoupon?.expiresAt || '').getTime();
+    if (refreshedCoupon?.active && Number.isFinite(refreshedExpiresAt) && refreshedExpiresAt > Date.now()) {
+      setPromoCouponNowMs(Date.now());
+      setPromoCouponOpen(true);
+      return;
+    }
+
+    setNotice('暂无可用优惠券，获得新券时会自动提醒你');
+  }
+
   async function closePromoCoupon() {
     setPromoCouponOpen(false);
     if (!promoCoupon?.active) return;
@@ -5582,6 +5629,31 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : '优惠券领取失败，请稍后再试');
     } finally {
       setPromoCouponClaiming(false);
+    }
+  }
+
+  async function copyPromoCouponCode() {
+    const redemptionCode = activePromoCoupon?.redemptionCode;
+    if (!redemptionCode) return;
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(redemptionCode);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = redemptionCode;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error('copy_failed');
+      }
+      setNotice(`优惠码 ${redemptionCode} 已复制`);
+    } catch {
+      setNotice('复制失败，请手动选择优惠码复制');
     }
   }
 
@@ -6541,6 +6613,20 @@ export default function App() {
                 {'\u5151\u6362\u79ef\u5206'}
               </button>
             ) : null}
+            {SHOW_PROMO_COUPON_HEADER_ENTRY && user ? (
+              <button
+                className={`inline-flex min-h-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-black transition ${activePromoCoupon ? 'border-orange-300/35 bg-orange-400/10 text-orange-200 hover:bg-orange-400/20' : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:border-white/20 hover:text-zinc-300'}`}
+                type="button"
+                title={activePromoCoupon ? `打开${promoCouponDiscountLabel}优惠券` : '暂无可用优惠券'}
+                onClick={() => void openPromoCouponFromHeader()}
+              >
+                <TicketPercent size={13} strokeWidth={2.2} />
+                <span>优惠券</span>
+                <span className={`inline-flex min-w-4 items-center justify-center rounded-full border px-1 py-0.5 text-[9px] leading-none ${activePromoCoupon ? 'border-orange-200/35 bg-orange-300/15 text-orange-100' : 'border-white/10 bg-black/20 text-zinc-500'}`}>
+                  {activePromoCoupon ? 1 : 0}
+                </span>
+              </button>
+            ) : null}
             <div
               className="hidden"
               title={healthError || healthText}
@@ -7320,19 +7406,38 @@ export default function App() {
                 <div className="flex items-end justify-between gap-4">
                   <div>
                     <p className="text-sm font-bold text-[#ffd9ef]">购买积分可用</p>
-                    <p className="mt-1 text-[13px] text-zinc-400">有效 12 小时，失效后至少 2 天才可能再次获得</p>
                   </div>
                   <div className="text-right">
                     <p className="text-5xl font-black leading-none text-white">{promoCouponDiscountRate}</p>
                     <p className="text-sm font-black text-[#ffb7df]">折优惠</p>
                   </div>
                 </div>
-                <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] font-bold text-[#ffd9ef]">
-                  有效期至 {promoCouponExpiresText || '12 小时后'}，过期自动失效
+                <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[#ffd9ef]">
+                      <Clock3 size={14} />
+                      距离失效
+                    </span>
+                    <span className="font-mono text-lg font-black tabular-nums tracking-[0.08em] text-white">
+                      {promoCouponCountdown}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-zinc-500">有效期至 {promoCouponExpiresText || '12 小时后'}</p>
                 </div>
                 {activePromoCoupon.redemptionCode ? (
-                  <div className="mt-2 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] text-zinc-300">
-                    结算优惠码：<span className="font-black tracking-[0.08em] text-white">{activePromoCoupon.redemptionCode}</span>
+                  <div className="mt-2 flex items-center justify-between gap-2 rounded-2xl border border-white/8 bg-black/25 px-3 py-2 text-[13px] text-zinc-300">
+                    <span className="min-w-0 truncate">
+                      结算优惠码：<span className="font-black tracking-[0.08em] text-white">{activePromoCoupon.redemptionCode}</span>
+                    </span>
+                    <button
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-zinc-400 transition hover:border-[#ff8fcd]/40 hover:bg-[#ff8fcd]/10 hover:text-[#ffd9ef]"
+                      type="button"
+                      title="复制优惠码"
+                      aria-label="复制优惠码"
+                      onClick={() => void copyPromoCouponCode()}
+                    >
+                      <Copy size={13} />
+                    </button>
                   </div>
                 ) : null}
               </div>
