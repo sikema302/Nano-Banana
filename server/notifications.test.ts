@@ -42,6 +42,23 @@ test('published notification is unread and pops only once per user', async () =>
   assert.equal(otherUser.unreadCount, 1);
 });
 
+test('opening the first-view popup marks all active notifications as read', async () => {
+  const service = createNotificationService(createMemoryStore());
+  const first = await service.create({ content: '第一条通知' }, 'admin');
+  const second = await service.create({ content: '第二条通知' }, 'admin');
+  await service.setStatus(first.id, 'published');
+  await service.setStatus(second.id, 'published');
+
+  const beforeOpen = await service.listForUser('user-1');
+  assert.equal(beforeOpen.unreadCount, 2);
+  assert.ok(beforeOpen.popup);
+
+  await service.markPopupShownAndAllRead('user-1', beforeOpen.popup!.id);
+  const afterOpen = await service.listForUser('user-1');
+  assert.equal(afterOpen.unreadCount, 0);
+  assert.equal(afterOpen.popup, null);
+});
+
 test('archived notifications are not shown', async () => {
   const service = createNotificationService(createMemoryStore());
   const archived = await service.create({ title: '维护', content: '维护结束' }, 'admin');

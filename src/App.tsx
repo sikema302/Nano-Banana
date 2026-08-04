@@ -4843,18 +4843,23 @@ export default function App() {
 
   useEffect(() => {
     const item = notificationPayload.popup;
-    if (!item || loading || authOpen || promoCouponOpen || shownNotificationIdsRef.current.has(item.id)) return;
+    if (!item || authOpen || promoCouponOpen || shownNotificationIdsRef.current.has(item.id)) return;
     shownNotificationIdsRef.current.add(item.id);
     setNotificationOpen(true);
     setNotificationPayload((current) => ({
       ...current,
+      unreadCount: 0,
       popup: current.popup?.id === item.id ? null : current.popup,
-      notifications: current.notifications.map((candidate) => candidate.id === item.id ? { ...candidate, popupShown: true } : candidate),
+      notifications: current.notifications.map((candidate) => ({
+        ...candidate,
+        read: true,
+        popupShown: candidate.id === item.id ? true : candidate.popupShown,
+      })),
     }));
     void markNotificationPopupShown(item.id).catch(() => {
       shownNotificationIdsRef.current.delete(item.id);
     });
-  }, [authOpen, loading, notificationPayload.popup, promoCouponOpen]);
+  }, [authOpen, notificationPayload.popup, promoCouponOpen]);
 
   useEffect(() => {
     if (!user) return;
@@ -6482,7 +6487,14 @@ export default function App() {
                 className="relative inline-flex min-h-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-black text-rose-200 transition hover:bg-rose-400/10 hover:text-rose-100"
                 type="button"
                 aria-label={'\u6253\u5f00\u901a\u77e5'}
-                onClick={() => setNotificationOpen((current) => !current)}
+                onClick={() => {
+                  if (notificationOpen) {
+                    setNotificationOpen(false);
+                    return;
+                  }
+                  setNotificationOpen(true);
+                  if (notificationPayload.unreadCount > 0) void handleReadAllNotifications();
+                }}
               >
                 <Bell size={14} strokeWidth={2.2} />
                 <span className={`inline-flex min-w-5 items-center justify-center rounded-full border px-1 py-0.5 text-[9px] leading-none ${notificationPayload.unreadCount > 0 ? 'border-rose-300/35 bg-rose-500/20 text-rose-100' : 'border-white/10 bg-white/[0.04] text-zinc-500'}`}>

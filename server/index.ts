@@ -4926,7 +4926,7 @@ async function start() {
 
   app.post('/api/notifications/:id/popup-shown', requireAuth, async (req, res) => {
     try {
-      await notificationService.mark(req.authUser!.userId, String(req.params.id), 'popupShownIds');
+      await notificationService.markPopupShownAndAllRead(req.authUser!.userId, String(req.params.id));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : '更新通知失败' });

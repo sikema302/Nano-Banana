@@ -96,7 +96,7 @@ export function createNotificationService(store: SettingsStore) {
       return {
         notifications,
         unreadCount: notifications.filter((item) => !item.read).length,
-        popup: notifications.find((item) => item.popupOnFirstView && !item.popupShown) || null,
+        popup: notifications.find((item) => item.popupOnFirstView && !item.popupShown && !item.read) || null,
       };
     },
 
@@ -165,6 +165,18 @@ export function createNotificationService(store: SettingsStore) {
       return mutate(async () => {
         const receipt = await readReceipt(userId);
         if (!receipt[field].includes(id)) receipt[field].push(id);
+        await writeReceipt(userId, receipt);
+      });
+    },
+
+    markPopupShownAndAllRead(userId: string, id: string) {
+      return mutate(async () => {
+        const [all, receipt] = await Promise.all([readAll(), readReceipt(userId)]);
+        if (!receipt.popupShownIds.includes(id)) receipt.popupShownIds.push(id);
+        receipt.readIds = Array.from(new Set([
+          ...receipt.readIds,
+          ...all.filter((item) => isActive(item)).map((item) => item.id),
+        ]));
         await writeReceipt(userId, receipt);
       });
     },
