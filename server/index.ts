@@ -415,16 +415,16 @@ const JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL = 'gpt-image-2';
 const JUNLIAI_TIMEOUT_MS = Math.max(15 * 60_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 15 * 60_000));
 const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 3));
 const JUNLIAI_TRANSIENT_COOLDOWN_MS = Math.max(
-  60_000,
-  Number(process.env.JUNLIAI_TRANSIENT_COOLDOWN_MS || 10 * 60_000),
+  15_000,
+  Number(process.env.JUNLIAI_TRANSIENT_COOLDOWN_MS || 30_000),
 );
 const JUNLIAI_QUOTA_COOLDOWN_MS = Math.max(
-  60_000,
-  Number(process.env.JUNLIAI_QUOTA_COOLDOWN_MS || 60 * 60_000),
+  30_000,
+  Number(process.env.JUNLIAI_QUOTA_COOLDOWN_MS || 60_000),
 );
 const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
   60_000,
-  Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 6 * 60 * 60_000),
+  Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 5 * 60_000),
 );
 const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
 const VIDEO_MODEL_FIREFLY_ID = 'firefly-video';
@@ -433,7 +433,7 @@ const VIDEO_MODEL_LABELS: Record<string, string> = {
   [VIDEO_MODEL_FIREFLY_ID]: 'Firefly Video',
 };
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
-const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v1';
+const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v2';
 const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   junliaiGptImage2Economy: JUNLIAI_PRIMARY_ENABLED,
   junliaiGptImage2: JUNLIAI_PRIMARY_ENABLED,

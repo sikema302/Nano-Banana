@@ -369,6 +369,53 @@ test('opens the persistent circuit on quota errors and skips repeated primary ca
   ]);
 });
 
+test('retries the first Junliai priority after a short cooldown and closes its circuit on recovery', async () => {
+  const store = createStore();
+  let currentTime = 1_000;
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModelChains: {
+      'gpt-image-2': ['gpt-image-2', 'firefly-gpt-image-2'],
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 30_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 300_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'visionary';
+    },
+    fetchImpl: async (_url, init) => {
+      const model = JSON.parse(String(init?.body)).model;
+      primaryCalls += 1;
+      if (model === 'gpt-image-2' && primaryCalls === 1) {
+        return new Response(JSON.stringify({ error: { message: 'quota exhausted' } }), { status: 429 });
+      }
+      return new Response(JSON.stringify({ data: [{ url: `https://images.example/${model}.png` }] }));
+    },
+    now: () => currentTime,
+  });
+
+  assert.equal(await router.generate(input), 'https://images.example/firefly-gpt-image-2.png');
+  assert.equal(primaryCalls, 2);
+  assert.equal(fallbackCalls, 0);
+
+  currentTime += 30_000;
+  assert.equal(await router.generate(input), 'https://images.example/firefly-gpt-image-2.png');
+  assert.equal(primaryCalls, 3);
+
+  currentTime += 30_001;
+  assert.equal(await router.generate(input), 'https://images.example/gpt-image-2.png');
+  assert.equal(primaryCalls, 4);
+  assert.equal(store.state('gpt-image-2')?.openUntil, 0);
+});
+
 test('uses the mapped Junliai nano-banana-pro model at 1K', async () => {
   const store = createStore();
   let primaryCalls = 0;
