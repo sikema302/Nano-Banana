@@ -689,6 +689,7 @@ export async function generateImage(payload: {
   imageSize?: string;
   quality?: string;
   optimizeChineseText?: boolean;
+  billAiEnhancement?: boolean;
   reference_images: ReferenceUploadInput[];
 }) {
   const result = await request<{ image: GeneratedImagePayload }>(
@@ -709,6 +710,7 @@ export async function startGenerateImageJob(payload: {
   imageSize?: string;
   quality?: string;
   optimizeChineseText?: boolean;
+  billAiEnhancement?: boolean;
   reference_images: ReferenceUploadInput[];
 }) {
   const result = await request<{ job: GenerationJobInfo }>(

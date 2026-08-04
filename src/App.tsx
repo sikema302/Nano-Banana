@@ -121,6 +121,7 @@ import {
   type GptImagePricing,
 } from './lib/model-pricing';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
+import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import {
   getVideoGenerationCredits,
@@ -1689,11 +1690,11 @@ function ApiDocsView({
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
     ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K。'],
     ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
-    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强：支持 1K / 2K / 4K，开启后额外消耗 8 积分。增强由 PIXORY 处理，不启用图片上游的原生增强参数。'],
+    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强计费选项：支持 1K / 2K / 4K，开启后额外消耗 8 积分；传给图片后端的原生增强参数固定为 false。'],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强支持全部分辨率，由 PIXORY 处理；1K 失败时回退 Visionary Nano Banana 2 Lite，2K/4K 回退原 Nano Banana Pro。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅作为计费选项，图片后端参数固定为 false；1K 仅使用 Junliai，失败时提示改用 2K。' },
   ];
   const gptPixelGroups = [
     {
@@ -1757,7 +1758,7 @@ function ApiDocsView({
         ['1K 基础生成', '20 点 / 张', '支持文生图与参考图生成'],
         ['2K 基础生成', '24 点 / 张', '保持原有计费'],
         ['4K 基础生成', '30 点 / 张', '4K 新计费'],
-        ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '由 PIXORY 增强提示词，不启用图片上游的原生增强参数'],
+        ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '仅按前端选项计费，图片后端的原生增强参数固定为 false'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
     },
@@ -1791,7 +1792,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-                  bullets: ['支持 1K / 2K / 4K；1K 仅使用 Junliai，服务不可用时会提示改用 2K，不切换 Banana Lite；2K/4K 保留现有备用线路。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强，额外消耗 8 积分，由 PIXORY 处理且不启用图片上游的原生增强参数。'],
+                  bullets: ['支持 1K / 2K / 4K；1K 仅使用 Junliai，服务不可用时会提示改用 2K，不切换 Banana Lite；2K/4K 保留现有备用线路。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，图片后端的原生增强参数固定为 false。'],
     },
   ];
   const docNavigation = [
@@ -5666,7 +5667,7 @@ export default function App() {
           dimensions,
           imageSize: requestImageSize,
           quality: showGptQuality ? gptQuality : undefined,
-          optimizeChineseText: isNanoBananaPro ? optimizeChineseText : false,
+          ...getAiEnhancementRequestFlags(isNanoBananaPro ? optimizeChineseText : false),
           reference_images: referenceImages,
         });
         const image = job.status === 'succeeded' && job.image
@@ -5758,7 +5759,7 @@ export default function App() {
         dimensions,
         imageSize,
         quality: showGptQuality ? gptQuality : undefined,
-        optimizeChineseText: selectedModel === 'Nano_Banana_Pro' ? optimizeChineseText : false,
+        ...getAiEnhancementRequestFlags(selectedModel === 'Nano_Banana_Pro' ? optimizeChineseText : false),
         reference_images: [sourceReference],
       });
       const image = job.status === 'succeeded' && job.image

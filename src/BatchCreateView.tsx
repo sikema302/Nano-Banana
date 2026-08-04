@@ -24,6 +24,7 @@ import {
   type UserInfo,
 } from './lib/api';
 import { getGptImageCredits, type GptImagePricing } from './lib/model-pricing';
+import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 
 type BatchMode = 'unified' | 'multiple';
 type ImageSize = 'STANDARD' | '1K' | '2K' | '4K';
@@ -563,7 +564,7 @@ export default function BatchCreateView({
           dimensions,
           imageSize,
           quality: model.id === 'gpt-image-2' ? quality : undefined,
-          optimizeChineseText: effectiveOptimizeChineseText,
+          ...getAiEnhancementRequestFlags(effectiveOptimizeChineseText),
           reference_images: spec.references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         });
         const image = job.status === 'succeeded' && job.image ? job.image : await waitForJob(job, spec.id, startedAt);
