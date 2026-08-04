@@ -6111,6 +6111,9 @@ export default function App() {
     ? [...inFlightGeneratedImages, null, ...stageSourceCards]
     : stageSourceCards;
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
+  const activityStageIndex = loading && activeGenerationStageIndex >= 0
+    ? activeGenerationStageIndex + 1
+    : 0;
 
   function handleTabChange(nextTab: AppTab) {
     if (typeof window !== 'undefined') {
@@ -6937,7 +6940,7 @@ export default function App() {
                       loading={index === activeGenerationStageIndex && loading}
                       progress={index === activeGenerationStageIndex && loading ? generationProgress : null}
                       showActions={Boolean(item && !(index === activeGenerationStageIndex && loading) && user)}
-                      showActivity={SHOW_CREATION_ACTIVITY && index === 0}
+                      showActivity={SHOW_CREATION_ACTIVITY && index === activityStageIndex}
                       activityPreviewCount={activityPreviewCount}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
