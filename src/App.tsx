@@ -120,6 +120,7 @@ import {
   getGptImageCredits,
   type GptImagePricing,
 } from './lib/model-pricing';
+import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import {
   getVideoGenerationCredits,
@@ -6111,9 +6112,11 @@ export default function App() {
     ? [...inFlightGeneratedImages, null, ...stageSourceCards]
     : stageSourceCards;
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
-  const activityStageIndex = loading && activeGenerationStageIndex >= 0
-    ? activeGenerationStageIndex + 1
-    : 0;
+  const activityStageIndex = findCreationActivityStageIndex(stageCards, {
+    batchCount,
+    loading,
+    activeGenerationStageIndex,
+  });
 
   function handleTabChange(nextTab: AppTab) {
     if (typeof window !== 'undefined') {
