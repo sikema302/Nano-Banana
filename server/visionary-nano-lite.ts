@@ -39,6 +39,12 @@ type VisionaryTaskEnvelope = {
   message?: unknown;
 };
 
+function publicProviderError(message: string, safeToFallback: boolean) {
+  const error = new Error(message) as Error & { safeToFallback: boolean };
+  error.safeToFallback = safeToFallback;
+  return error;
+}
+
 function errorMessage(value: unknown): string {
   if (typeof value === 'string') return value.trim();
   if (!value || typeof value !== 'object') return '';
@@ -65,7 +71,10 @@ async function readResponse(response: Response, fallback: string) {
     // The HTTP status and short response excerpt are enough for the public error.
   }
   if (!response.ok) {
-    throw new Error(errorMessage(payload) || `${fallback} (${response.status}): ${text.slice(0, 240)}`);
+    throw publicProviderError(
+      errorMessage(payload) || `${fallback} (${response.status}): ${text.slice(0, 240)}`,
+      true,
+    );
   }
   return payload;
 }
@@ -91,7 +100,7 @@ export async function generateVisionaryNanoLite(
   const maxPollErrors = options.maxPollErrors ?? 3;
   const submitTimeoutMs = options.submitTimeoutMs ?? options.requestTimeoutMs ?? 120_000;
   const pollTimeoutMs = options.pollTimeoutMs ?? options.requestTimeoutMs ?? 120_000;
-  const requestId = options.requestId || `nano-lite-${globalThis.crypto.randomUUID()}`;
+  const requestId = options.requestId || `banana-${globalThis.crypto.randomUUID()}`;
   const logger = options.logger || console;
   const headers = {
     Authorization: /^Bearer\s/i.test(options.apiKey) ? options.apiKey : `Bearer ${options.apiKey}`,
@@ -119,12 +128,15 @@ export async function generateVisionaryNanoLite(
   } catch (error) {
     const detail = caughtErrorMessage(error);
     logger.warn(`[visionary-nano-lite] submit failed requestId=${requestId}: ${detail}`);
-    throw new Error(`Visionary Nano Banana 2 Lite 提交阶段失败（请求 ID：${requestId}）：${detail}`);
+    throw publicProviderError(
+      `香蕉生图渠道提交失败（请求 ID：${requestId}）`,
+      Boolean((error as { safeToFallback?: unknown })?.safeToFallback),
+    );
   }
   const taskId = String(submitted?.task_id || submitted?.id || '').trim();
   if (!taskId) {
     logger.warn(`[visionary-nano-lite] submit response missing task_id requestId=${requestId}`);
-    throw new Error(`Visionary Nano Banana 2 Lite 提交结果缺少 task_id（请求 ID：${requestId}）`);
+    throw publicProviderError(`香蕉生图渠道暂时无法确认任务（请求 ID：${requestId}）`, false);
   }
 
   let retryAfterSeconds = Math.max(1, Number(submitted?.retry_after || 3));
@@ -142,7 +154,7 @@ export async function generateVisionaryNanoLite(
       });
       const statusPayload = await readResponse(statusResponse, '查询 Nano Banana 2 Lite 任务失败');
       statusData = taskData(statusPayload);
-      if (!statusData) throw new Error('Visionary Nano Banana 2 Lite 返回了空任务状态');
+      if (!statusData) throw new Error('empty task status');
       consecutivePollErrors = 0;
     } catch (error) {
       consecutivePollErrors += 1;
@@ -152,9 +164,7 @@ export async function generateVisionaryNanoLite(
         `attempt=${poll + 1} consecutiveErrors=${consecutivePollErrors}/${maxPollErrors}: ${detail}`,
       );
       if (consecutivePollErrors >= maxPollErrors) {
-        throw new Error(
-          `Visionary Nano Banana 2 Lite 查询阶段连续失败（任务 ID：${taskId}，请求 ID：${requestId}）：${detail}`,
-        );
+        throw publicProviderError(`香蕉生图任务状态暂时无法确认（请求 ID：${requestId}）`, false);
       }
       continue;
     }
@@ -162,7 +172,7 @@ export async function generateVisionaryNanoLite(
     const status = String(statusData.status || '').trim().toLowerCase();
     if (status === 'completed' || status === 'succeeded') {
       const imageUrl = completedImageUrl(statusData);
-      if (!imageUrl) throw new Error(`Visionary Nano Banana 2 Lite 任务完成但没有图片地址：${taskId}`);
+      if (!imageUrl) throw publicProviderError(`香蕉生图结果暂时无法读取（请求 ID：${requestId}）`, false);
       return imageUrl;
     }
     if (status === 'failed' || status === 'cancelled') {
@@ -170,11 +180,11 @@ export async function generateVisionaryNanoLite(
       logger.warn(
         `[visionary-nano-lite] task failed taskId=${taskId} requestId=${requestId} status=${status}: ${detail}`,
       );
-      throw new Error(`Visionary Nano Banana 2 Lite 生成失败（任务 ID：${taskId}）：${detail}`);
+      throw publicProviderError(`香蕉生图失败（请求 ID：${requestId}）`, true);
     }
     retryAfterSeconds = Math.max(1, Number(statusData.retry_after || retryAfterSeconds));
   }
 
   logger.warn(`[visionary-nano-lite] polling window exceeded taskId=${taskId} requestId=${requestId}`);
-  throw new Error(`Visionary Nano Banana 2 Lite 查询超时（任务 ID：${taskId}，请求 ID：${requestId}）`);
+  throw publicProviderError(`香蕉生图任务查询超时（请求 ID：${requestId}）`, false);
 }

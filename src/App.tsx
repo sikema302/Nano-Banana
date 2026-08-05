@@ -6,6 +6,7 @@ import {
   Clock3,
   CheckCheck,
   ChevronDown,
+  ChevronUp,
   Code2 as CodeIcon,
   Copy,
   Download,
@@ -233,12 +234,63 @@ const emptyDashboardStats: AdminDashboardStats = {
 };
 
 const defaultProviderRouting: ProviderRoutingConfig = {
-  junliaiGptImage2Economy: true,
-  junliaiGptImage2: true,
-  junliaiNanoBanana: true,
+  image2Routes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+    '2K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+  },
+  bananaRoutes: {
+    '1K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+      { id: 'junliai-nano-banana-2', enabled: true },
+    ],
+    '2K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+    ],
+    '4K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+    ],
+  },
   junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
 };
+
+const providerChannelDetails: Record<string, { title: string; description: string }> = {
+  'junliai-economy': { title: 'Junli · GPT Image 2 低价', description: '适用于 Image2 1K / STANDARD' },
+  'junliai-firefly': { title: 'Junli · Firefly GPT Image 2', description: '适用于 Image2 1K / 2K / 4K' },
+  visionary: { title: 'Visionary', description: '按当前模型与分辨率选择对应线路' },
+  flux: { title: 'Flux', description: '1K Flash；2K 随机 Flash / Pro；4K Pro' },
+  junliai: { title: 'Junli · Nano Banana Pro', description: '使用既有 Nano Banana Pro 线路' },
+  'junliai-nano-banana-2': { title: 'Junli · Nano Banana 2', description: '仅用于 Banana 1K' },
+};
+
+function isImageResolutionEnabled(
+  routing: ProviderRoutingConfig,
+  modelId: string,
+  imageSize: string,
+) {
+  const resolution = imageSize === '2K' || imageSize === '4K' ? imageSize : '1K';
+  const channels = modelId === 'Nano_Banana_Pro'
+    ? routing.bananaRoutes[resolution]
+    : routing.image2Routes[resolution];
+  return channels.some((channel) => channel.enabled);
+}
 
 const emptyImageStorageStats: AdminImageStorageStats = {
   uploadsTotalBytes: 0,
@@ -1694,11 +1746,11 @@ function ApiDocsView({
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
     ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K。'],
     ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
-    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强计费选项：支持 1K / 2K / 4K，开启后额外消耗 8 积分；传给图片后端的原生增强参数固定为 false。'],
+    ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强计费选项：支持 1K / 2K / 4K，开启后前端账单额外增加 8 积分；不会调用任何上游原生增强接口。'],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅作为计费选项，图片后端参数固定为 false；1K 仅使用 Junliai，失败时提示改用 2K。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
   ];
   const gptPixelGroups = [
     {
@@ -1762,7 +1814,7 @@ function ApiDocsView({
         ['1K 基础生成', '20 点 / 张', '支持文生图与参考图生成'],
         ['2K 基础生成', '24 点 / 张', '保持原有计费'],
         ['4K 基础生成', '30 点 / 张', '4K 新计费'],
-        ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '仅按前端选项计费，图片后端的原生增强参数固定为 false'],
+        ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '仅影响前端账单，不调用任何上游原生增强接口'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
     },
@@ -1796,7 +1848,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-                  bullets: ['支持 1K / 2K / 4K；1K 仅使用 Junliai，服务不可用时会提示改用 2K，不切换 Banana Lite；2K/4K 保留现有备用线路。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，图片后端的原生增强参数固定为 false。'],
+                  bullets: ['支持 1K / 2K / 4K；每种分辨率都按网站后台的启用状态和排序依次尝试渠道。明确失败会自动切换下一渠道；失败渠道暂避 30 秒，随后恢复从第一顺位判断。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，但不会调用任何上游原生增强接口。'],
     },
   ];
   const docNavigation = [
@@ -2064,7 +2116,7 @@ function ApiDocsView({
                 <div className="mt-4 rounded-xl border border-sky-400/20 bg-sky-500/10 px-4 py-3">
                   <h3 className="text-sm font-black text-sky-100">{'\u667a\u80fd\u8def\u7531\uff0c\u65e7\u63a5\u5165\u96f6\u6539\u52a8'}</h3>
                   <p className="mt-1 text-xs leading-6 text-sky-100/70">
-                    {'GPT-image-2 \u4e0e\u7f51\u7ad9\u5171\u7528\u540c\u4e00\u5957\u4e3b\u5907\u63a5\u53e3\u8def\u7531\u3002\u4e3b\u63a5\u53e3\u989d\u5ea6\u4e0d\u8db3\u3001\u8d85\u65f6\u6216\u5f02\u5e38\u65f6\u4f1a\u81ea\u52a8\u5207\u6362\u5907\u7528\u63a5\u53e3\uff1b\u539f\u6709 API Key\u3001\u6a21\u578b\u540d\u3001\u8bf7\u6c42\u53c2\u6570\u3001\u4efb\u52a1 ID\u3001\u67e5\u8be2\u5730\u5740\u3001\u8fd4\u56de\u7ed3\u6784\u548c\u8ba1\u8d39\u65b9\u5f0f\u4fdd\u6301\u4e0d\u53d8\u3002'}
+                    {'GPT-image-2 \u4e0e Nano Banana \u90fd\u4e0e\u7f51\u7ad9\u5171\u7528\u540e\u53f0\u914d\u7f6e\u7684\u6e20\u9053\u987a\u5e8f\u3002\u67d0\u6e20\u9053\u660e\u786e\u5931\u8d25\u65f6\u4f1a\u987a\u6ed1\u5207\u6362\u5230\u4e0b\u4e00\u4e2a\uff1b\u5931\u8d25\u6e20\u9053\u6682\u907f 30 \u79d2\uff0c\u5230\u671f\u540e\u4e0b\u4e00\u4e2a\u8bf7\u6c42\u91cd\u65b0\u4ece\u7b2c\u4e00\u987a\u4f4d\u5224\u65ad\u3002\u5982\u679c\u7ed3\u679c\u72b6\u6001\u65e0\u6cd5\u786e\u8ba4\uff0c\u4e3a\u907f\u514d\u91cd\u590d\u751f\u6210\u548c\u91cd\u590d\u6210\u672c\uff0c\u5f53\u6b21\u4e0d\u4f1a\u81ea\u52a8\u5207\u6362\uff0c\u4efb\u52a1\u5931\u8d25\u4f1a\u9000\u56de\u9884\u6263\u79ef\u5206\u3002'}
                   </p>
                 </div>
               </section>
@@ -2951,10 +3003,7 @@ function AdminView({
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
   onCleanupImages: (retentionDays: number) => Promise<void>;
-  onUpdateProviderRouting: (
-    key: keyof ProviderRoutingConfig,
-    enabled: boolean,
-  ) => Promise<void>;
+  onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice: string) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
     params?: {
@@ -2997,7 +3046,7 @@ function AdminView({
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
   const [cleaningImages, setCleaningImages] = useState<number | null>(null);
-  const [updatingProviderRoute, setUpdatingProviderRoute] = useState<keyof ProviderRoutingConfig | null>(null);
+  const [updatingProviderRoute, setUpdatingProviderRoute] = useState<string | null>(null);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
   const [inviteSearchDraft, setInviteSearchDraft] = useState('');
@@ -3572,81 +3621,163 @@ function AdminView({
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <div>
-                <h2 className="text-base font-black text-white">Junliai 接口开关</h2>
+                <h2 className="text-base font-black text-white">生图渠道顺序</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  每条线路可独立控制；关闭后会跳过对应 Junliai 接口，并按既定顺序继续回退。
+                  Image2 与 Banana 独立管理；每个分辨率都可以单独调整优先级或停用渠道。
                 </p>
               </div>
-                <div className="mt-4 grid gap-3 xl:grid-cols-5">
+              <div className="mt-5 space-y-6">
                 {([
-                  {
-                    key: 'junliaiGptImage2Economy',
-                    title: 'GPT Image 2（低价）',
-                    enabledText: 'STANDARD 优先使用 gpt-image-2',
-                    disabledText: 'STANDARD 跳过低价接口',
-                  },
-                  {
-                    key: 'junliaiGptImage2',
-                    title: 'Firefly GPT Image 2',
-                    enabledText: '低价失败及 2K / 4K 使用 Firefly',
-                    disabledText: '跳过 Firefly，失败回退 Visionary',
-                  },
-                  {
-                    key: 'junliaiNanoBanana',
-                    title: 'Nano Banana',
-                    enabledText: 'Junliai 优先，开放 1K / 2K / 4K',
-                    disabledText: '直接使用 Visionary Pro，仅保留 2K / 4K',
-                  },
-                   {
-                     key: 'junliaiGeminiVeo31',
-                     title: 'Gemini Veo 3.1',
-                     enabledText: '用户可独立选择 Gemini Veo 3.1',
-                     disabledText: '暂停 Gemini Veo 3.1 模型',
-                   },
-                   {
-                     key: 'junliaiFireflyVideo',
-                     title: 'Firefly Video',
-                     enabledText: '用户可独立选择 Firefly Video',
-                     disabledText: '暂停 Firefly Video 模型',
-                  },
-                ] as Array<{
-                  key: keyof ProviderRoutingConfig;
-                  title: string;
-                  enabledText: string;
-                  disabledText: string;
-                }>).map((route) => {
-                  const enabled = providerRouting[route.key];
-                  const updating = updatingProviderRoute === route.key;
-                  return (
-                    <article
-                      className={`rounded-[18px] border p-4 ${
-                        enabled
-                          ? 'border-emerald-400/20 bg-emerald-500/[0.06]'
-                          : 'border-white/8 bg-white/[0.025]'
-                      }`}
-                      key={route.key}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-black text-white">{route.title}</div>
-                          <div className={`mt-1 text-[11px] ${enabled ? 'text-emerald-200/75' : 'text-zinc-500'}`}>
-                            {enabled ? route.enabledText : route.disabledText}
+                  { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理' },
+                  { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由' },
+                ] as const).map((group) => (
+                  <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <h3 className="text-sm font-black text-white">{group.title}</h3>
+                      <span className="text-[11px] text-zinc-500">{group.subtitle}</span>
+                    </div>
+                    <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                      {(['1K', '2K', '4K'] as const).map((resolution) => {
+                        const channels = providerRouting[group.key][resolution];
+                        return (
+                          <div key={resolution} className="rounded-[18px] border border-white/8 bg-black/30 p-3">
+                            <div className="mb-3 flex items-center justify-between">
+                              <span className="text-xs font-black text-sky-200">{resolution}</span>
+                              <span className="text-[10px] text-zinc-600">从上到下依次尝试</span>
+                            </div>
+                            <div className="space-y-2">
+                              {channels.map((channel, index) => {
+                                const details = providerChannelDetails[channel.id] || {
+                                  title: channel.id,
+                                  description: '',
+                                };
+                                const routeKey = `${group.key}:${resolution}:${channel.id}`;
+                                const updating = updatingProviderRoute === routeKey;
+                                const saveChannels = async (
+                                  nextChannels: Array<{ id: string; enabled: boolean }>,
+                                  notice: string,
+                                ) => {
+                                  setUpdatingProviderRoute(routeKey);
+                                  try {
+                                    await onUpdateProviderRouting({
+                                      [group.key]: {
+                                        ...providerRouting[group.key],
+                                        [resolution]: nextChannels,
+                                      },
+                                    } as Partial<ProviderRoutingConfig>, notice);
+                                  } catch (error) {
+                                    onNotice(error instanceof Error ? error.message : '渠道配置更新失败');
+                                  } finally {
+                                    setUpdatingProviderRoute(null);
+                                  }
+                                };
+                                return (
+                                  <article
+                                    key={channel.id}
+                                    className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 ${
+                                      channel.enabled
+                                        ? 'border-emerald-400/15 bg-emerald-500/[0.05]'
+                                        : 'border-white/8 bg-white/[0.02] opacity-65'
+                                    } ${updating ? 'animate-pulse' : ''}`}
+                                  >
+                                    <span className="flex h-6 w-6 flex-none items-center justify-center rounded-lg bg-white/5 text-[10px] font-black text-zinc-400">
+                                      {index + 1}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-xs font-bold text-white">{details.title}</div>
+                                      <div className="mt-0.5 truncate text-[10px] text-zinc-500">{details.description}</div>
+                                    </div>
+                                    <div className="flex flex-none items-center gap-1">
+                                      <button
+                                        type="button"
+                                        aria-label={`${details.title} 上移`}
+                                        disabled={index === 0 || updatingProviderRoute !== null}
+                                        className="rounded-md p-1 text-zinc-500 transition hover:bg-white/8 hover:text-white disabled:opacity-25"
+                                        onClick={() => {
+                                          const next = channels.map((item) => ({ ...item }));
+                                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                                          void saveChannels(next, `${group.title} ${resolution} 渠道顺序已更新`);
+                                        }}
+                                      >
+                                        <ChevronUp size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`${details.title} 下移`}
+                                        disabled={index === channels.length - 1 || updatingProviderRoute !== null}
+                                        className="rounded-md p-1 text-zinc-500 transition hover:bg-white/8 hover:text-white disabled:opacity-25"
+                                        onClick={() => {
+                                          const next = channels.map((item) => ({ ...item }));
+                                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                                          void saveChannels(next, `${group.title} ${resolution} 渠道顺序已更新`);
+                                        }}
+                                      >
+                                        <ChevronDown size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        role="switch"
+                                        aria-label={`${details.title} ${channel.enabled ? '停用' : '启用'}`}
+                                        aria-checked={channel.enabled}
+                                        disabled={updatingProviderRoute !== null}
+                                        className={`relative ml-1 h-6 w-10 rounded-full border transition ${
+                                          channel.enabled
+                                            ? 'border-emerald-300/40 bg-emerald-500'
+                                            : 'border-white/15 bg-zinc-800'
+                                        }`}
+                                        onClick={() => {
+                                          const next = channels.map((item) => item.id === channel.id
+                                            ? { ...item, enabled: !item.enabled }
+                                            : { ...item });
+                                          void saveChannels(
+                                            next,
+                                            `${details.title} 已${channel.enabled ? '停用' : '启用'}（${group.title} ${resolution}）`,
+                                          );
+                                        }}
+                                      >
+                                        <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition ${
+                                          channel.enabled ? 'left-[19px]' : 'left-0.5'
+                                        }`} />
+                                      </button>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
                           </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              <div className="mt-5 border-t border-white/8 pt-4">
+                <div className="mb-3 text-xs font-black text-zinc-300">视频线路开关</div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {([
+                    { key: 'junliaiGeminiVeo31', title: 'Gemini Veo 3.1' },
+                    { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
+                  ] as const).map((route) => {
+                    const enabled = providerRouting[route.key];
+                    const updating = updatingProviderRoute === route.key;
+                    return (
+                      <article key={route.key} className="flex items-center justify-between rounded-[16px] border border-white/8 bg-black/25 p-3">
+                        <div>
+                          <div className="text-xs font-bold text-white">{route.title}</div>
+                          <div className="mt-1 text-[10px] text-zinc-500">{enabled ? '已启用' : '已停用'}</div>
                         </div>
                         <button
                           type="button"
                           role="switch"
                           aria-checked={enabled}
                           disabled={updatingProviderRoute !== null}
-                          className={`relative h-7 w-12 flex-none rounded-full border transition ${
-                            enabled
-                              ? 'border-emerald-300/40 bg-emerald-500'
-                              : 'border-white/15 bg-zinc-800'
+                          className={`relative h-7 w-12 rounded-full border transition ${
+                            enabled ? 'border-emerald-300/40 bg-emerald-500' : 'border-white/15 bg-zinc-800'
                           } ${updating ? 'opacity-50' : ''}`}
                           onClick={async () => {
                             setUpdatingProviderRoute(route.key);
                             try {
-                              await onUpdateProviderRouting(route.key, !enabled);
+                              await onUpdateProviderRouting({ [route.key]: !enabled }, `${route.title} 已${enabled ? '停用' : '启用'}`);
                             } catch (error) {
                               onNotice(error instanceof Error ? error.message : '接口开关更新失败');
                             } finally {
@@ -3654,16 +3785,14 @@ function AdminView({
                             }
                           }}
                         >
-                          <span
-                            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
-                              enabled ? 'left-[22px]' : 'left-0.5'
-                            }`}
-                          />
+                          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
+                            enabled ? 'left-[22px]' : 'left-0.5'
+                          }`} />
                         </button>
-                      </div>
-                    </article>
-                  );
-                })}
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
@@ -4940,8 +5069,12 @@ export default function App() {
   }, [loading]);
 
   useEffect(() => {
-    if (!providerRouting.junliaiNanoBanana && selectedModel === 'Nano_Banana_Pro' && imageSize === '1K') {
-      setImageSize('2K');
+    if (!isImageResolutionEnabled(providerRouting, selectedModel, imageSize)) {
+      const candidates: ImageSizeOption[] = selectedModel === 'Nano_Banana_Pro'
+        ? ['1K', '2K', '4K']
+        : ['STANDARD', '2K', '4K'];
+      const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
+      if (next) setImageSize(next);
     }
     if (!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && creationMode === 'video') {
       setCreationMode('image');
@@ -4951,7 +5084,8 @@ export default function App() {
     imageSize,
     providerRouting.junliaiGeminiVeo31,
     providerRouting.junliaiFireflyVideo,
-    providerRouting.junliaiNanoBanana,
+    providerRouting.image2Routes,
+    providerRouting.bananaRoutes,
     selectedModel,
   ]);
 
@@ -5489,22 +5623,12 @@ export default function App() {
   }
 
   async function handleUpdateProviderRouting(
-    key: keyof ProviderRoutingConfig,
-    enabled: boolean,
+    patch: Partial<ProviderRoutingConfig>,
+    notice: string,
   ) {
-    const payload = await updateAdminProviderRouting({ [key]: enabled });
+    const payload = await updateAdminProviderRouting(patch);
     setProviderRouting(payload.providerRouting);
-    setNotice(`${enabled ? '已开启' : '已关闭'} ${
-      key === 'junliaiNanoBanana'
-        ? 'Junliai Nano Banana'
-        : key === 'junliaiGptImage2Economy'
-          ? 'Junliai GPT Image 2（低价）'
-          : key === 'junliaiGptImage2'
-          ? 'Junliai Firefly GPT Image 2'
-            : key === 'junliaiGeminiVeo31'
-              ? 'Junliai Gemini Veo 3.1'
-              : 'Junliai Firefly Video'
-    }`);
+    setNotice(notice);
   }
 
   async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -6385,6 +6509,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-2">
                 {imageSizeOptions.map((item) => {
                   const active = imageSize === item.value;
+                  const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
 
                   return (
                     <button
@@ -6392,9 +6517,12 @@ export default function App() {
                       className={`rounded-xl border px-4 py-2 text-center transition ${
                         active
                           ? 'border-white bg-white text-black'
-                          : 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
+                          : enabled
+                            ? 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
+                            : 'cursor-not-allowed border-white/5 bg-white/[0.02] text-zinc-700'
                       }`}
                       type="button"
+                      disabled={!enabled}
                       onClick={() => setImageSize(item.value)}
                     >
                       <span className="block text-sm font-black leading-none">{item.label}</span>
@@ -6867,6 +6995,7 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-2">
                     {selectedResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
+                      const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
 
                       return (
                         <button
@@ -6874,9 +7003,12 @@ export default function App() {
                           className={
                             active
                               ? 'relative inline-flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
-                              : 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
+                              : enabled
+                                ? 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
+                                : 'relative h-10 min-h-0 cursor-not-allowed overflow-visible whitespace-nowrap rounded-lg border border-white/5 bg-white/[0.02] px-2 py-0 text-[13px] font-black text-zinc-700'
                           }
                           type="button"
+                          disabled={!enabled}
                           onClick={() => {
                             setImageSize(item.value);
                             if (selectedModel === 'gpt-image-2' && item.value === 'STANDARD') {
@@ -6895,7 +7027,7 @@ export default function App() {
                     })}
                   </div>
                   {isNanoBananaPro && imageSize === '1K' ? (
-                    <p className="text-[10px] leading-4 text-amber-300/80">1K 仅使用 Junliai；失败时不会切换其他模型，建议改用 2K。</p>
+                    <p className="text-[10px] leading-4 text-zinc-500">1K 会按后台设置的专属渠道顺序依次尝试。</p>
                   ) : null}
                 </section>
 

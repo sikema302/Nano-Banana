@@ -48,8 +48,9 @@ must be `1`.
 PIXORY extensions supported by this endpoint:
 
 - `dimensions`, `aspect_ratio`, or `aspectRatio`: any ratio supported by the web UI.
-- `imageSize` or `image_size`: `STANDARD`, `2K`, or `4K`.
+- `imageSize` or `image_size`: `gpt-image-2` supports `STANDARD`, `2K`, and `4K`; `nano-banana-pro` supports `1K`, `2K`, and `4K`.
 - `reference_images` or `images`: up to 9 HTTPS URLs or image data URLs.
+- `optimizeChineseText`: Nano Banana billing option. When enabled it adds 8 PIXORY credits, but no upstream native enhancement feature or enhancement endpoint is called.
 
 For asynchronous use, keep using:
 
@@ -60,10 +61,16 @@ GET  /v1/async/images/generations/{task_id}
 
 ## Intelligent routing and compatibility
 
-All website and public API image requests use the same PIXORY model gateway.
-For `gpt-image-2`, PIXORY uses the current primary image provider first and
-automatically falls back to the standby provider when the primary provider is
-unavailable, times out, rejects authentication, or runs out of quota.
+All website and public API image requests use the same PIXORY model gateway and
+the same per-resolution channel order configured in the admin console. This
+applies to both `gpt-image-2` and `nano-banana-pro` and to legacy API keys.
+
+When a channel explicitly rejects a request, PIXORY immediately tries the next
+enabled channel in the configured order. The failed channel is temporarily
+skipped for 30 seconds; after that, the next request starts evaluating from the
+first configured channel again. If the upstream result is uncertain, PIXORY
+does not fail over during that request, preventing duplicate generations or
+duplicate provider costs. Failed tasks refund their reserved PIXORY credits.
 
 Routing is entirely server-side. Existing integrations do not need to change:
 

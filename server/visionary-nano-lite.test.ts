@@ -83,7 +83,11 @@ test('surfaces a failed nano-banana-2-lite task', async () => {
         fetchImpl: async () => responses.shift() || new Response(null, { status: 500 }),
       },
     ),
-    /任务 ID：task-lite-failed.*upstream generation rejected/,
+    (error: unknown) => {
+      assert.doesNotMatch(String((error as Error)?.message || ''), /lite|visionary/i);
+      assert.equal((error as { safeToFallback?: unknown })?.safeToFallback, true);
+      return true;
+    },
   );
 });
 
@@ -150,6 +154,10 @@ test('includes the polling phase and task ID after repeated status failures', as
         fetchImpl: async () => responses.shift() || new Response(null, { status: 500 }),
       },
     ),
-    /查询阶段连续失败.*任务 ID：task-lite-poll-failed.*gateway two/,
+    (error: unknown) => {
+      assert.doesNotMatch(String((error as Error)?.message || ''), /lite|visionary/i);
+      assert.equal((error as { safeToFallback?: unknown })?.safeToFallback, false);
+      return true;
+    },
   );
 });

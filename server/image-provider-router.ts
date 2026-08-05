@@ -7,6 +7,8 @@ export type ImageGenerationInput = {
   optimizeChineseText: boolean;
   images: string[];
   providerRouting?: 'junliai_only';
+  upstreamModelOverride?: string;
+  traceId?: string;
   requestContext?: {
     userId: string;
     username: string;
@@ -312,7 +314,9 @@ export function createImageProviderRouter(options: RouterOptions) {
   }
 
   function primaryCandidates(input: ImageGenerationInput) {
-    const configured = options.primaryModelChains?.[input.modelId]
+    const configured = input.upstreamModelOverride
+      ? [input.upstreamModelOverride]
+      : options.primaryModelChains?.[input.modelId]
       || [options.primaryModels?.[input.modelId] || options.primaryModel];
     return [...new Set(configured.map((item) => item.trim()).filter(Boolean))].filter((upstreamModel) => {
       const capability = options.primaryModelCapabilities?.[upstreamModel];
@@ -326,10 +330,8 @@ export function createImageProviderRouter(options: RouterOptions) {
   }
 
   async function generate(input: ImageGenerationInput) {
-    const traceId = crypto.randomUUID();
+    const traceId = input.traceId || crypto.randomUUID();
     const junliaiOnly = input.providerRouting === 'junliai_only';
-    const requiresJunliaiNanoBanana1K =
-      input.modelId === 'Nano_Banana_Pro' && input.imageSize === '1K';
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
     const candidates = primaryCandidates(input);
@@ -339,11 +341,12 @@ export function createImageProviderRouter(options: RouterOptions) {
       (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro') &&
       candidates.length > 0;
     if (!primaryEligible) {
-      if (requiresJunliaiNanoBanana1K) {
-        throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
-      }
       if (junliaiOnly) {
-        throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');
+        const unavailableError = new Error(
+          'Junliai-only route is unavailable; provider switching is disabled for this API key',
+        ) as Error & { safeToFallback: boolean };
+        unavailableError.safeToFallback = true;
+        throw unavailableError;
       }
       return callFallback(input, traceId);
     }
@@ -389,12 +392,11 @@ export function createImageProviderRouter(options: RouterOptions) {
             updatedAt: new Date(currentTime).toISOString(),
           });
           logger.warn(`[image-provider] ${upstreamModel} result is uncertain; failover suppressed`);
-          if (requiresJunliaiNanoBanana1K) {
-            throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
-          }
-          throw new Error(
+          const uncertainError = new Error(
             '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试。',
-          );
+          ) as Error & { safeToFallback: boolean };
+          uncertainError.safeToFallback = false;
+          throw uncertainError;
         }
         const consecutiveFailures = state.consecutiveFailures + 1;
         const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
@@ -410,24 +412,25 @@ export function createImageProviderRouter(options: RouterOptions) {
           reason: failure.kind,
           updatedAt: new Date(currentTime).toISOString(),
         });
-        if (requiresJunliaiNanoBanana1K) {
-          logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); Nano Banana 1K fallback disabled`);
-          throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
-        }
         if (junliaiOnly) {
           logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
-          throw new Error('Junliai image provider failed; provider switching is disabled for this API key');
+          const routeError = new Error(
+            'Junliai image provider failed; provider switching is disabled for this API key',
+          ) as Error & { safeToFallback: boolean };
+          routeError.safeToFallback = true;
+          throw routeError;
         }
         logger.warn(
-          `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 60000)}m cooldown` : ''}`,
+          `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 1000)}s cooldown` : ''}`,
         );
       }
     }
-    if (requiresJunliaiNanoBanana1K) {
-      throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
-    }
     if (junliaiOnly) {
-      throw new Error('Junliai-only route is unavailable; provider switching is disabled for this API key');
+      const unavailableError = new Error(
+        'Junliai-only route is unavailable; provider switching is disabled for this API key',
+      ) as Error & { safeToFallback: boolean };
+      unavailableError.safeToFallback = true;
+      throw unavailableError;
     }
     return callFallback(input, traceId);
   }

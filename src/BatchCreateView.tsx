@@ -386,10 +386,12 @@ export default function BatchCreateView({
   const succeededTasks = tasks.filter((task) => task.status === 'succeeded' && task.image);
   const sourceUploadLabel = mode === 'unified' ? '原图（每张生成一张）' : '原图组（所有提示词共同引用）';
   const resolutionOptions: ImageSize[] = isNano
-    ? providerRouting.junliaiNanoBanana
-      ? ['1K', '2K', '4K']
-      : ['2K', '4K']
-    : ['STANDARD', '2K', '4K'];
+    ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
+        providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
+    : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
+        const routeResolution = resolution === 'STANDARD' ? '1K' : resolution;
+        return providerRouting.image2Routes[routeResolution].some((channel) => channel.enabled);
+      });
 
   function updateTask(id: string, patch: Partial<BatchTask>) {
     setTasks((current) => current.map((task) => (task.id === id ? { ...task, ...patch } : task)));
@@ -435,8 +437,9 @@ export default function BatchCreateView({
       setQuality('auto');
       setOptimizeChineseText(false);
     } else {
-      const nextImageSize = providerRouting.junliaiNanoBanana ? '1K' : '2K';
-      setImageSize(nextImageSize);
+      const nextImageSize = (['1K', '2K', '4K'] as const).find((resolution) =>
+        providerRouting.bananaRoutes[resolution].some((channel) => channel.enabled));
+      setImageSize(nextImageSize || '1K');
     }
   }
 

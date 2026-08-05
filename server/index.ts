@@ -23,6 +23,8 @@ import {
 } from './generated-image-download.js';
 import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
+import { createImageChannelFailover } from './image-channel-failover.js';
+import { normalizePublicApiProviderRouting } from './public-api-routing.js';
 import {
   getVideoGenerationCredits,
   supportsVideoConfiguration,
@@ -38,15 +40,20 @@ import {
 } from './visionary-doc-sync.js';
 import {
   createImageProviderRouter,
-  NANO_BANANA_1K_UNAVAILABLE_MESSAGE,
   type ImageGenerationInput,
 } from './image-provider-router.js';
+import { generateFluxBanana } from './flux-banana.js';
+import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { createProviderMetrics } from './provider-metrics.js';
 import { createProviderRiskMonitor } from './provider-risk-monitor.js';
 import {
   applyProviderRoutingToImageSize,
   createProviderRouting,
+  enabledProviderIds,
+  isProviderEnabled,
+  routingResolution,
   type ProviderRoutingConfig,
+  type ProviderRoutingPatch,
 } from './provider-routing.js';
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 import { createNotificationService } from './notifications.js';
@@ -419,8 +426,17 @@ const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://v
 const VISIONARY_IMAGE_SIZE = process.env.VISIONARY_IMAGE_SIZE || '2K';
 const VISIONARY_FALLBACK_API_KEY = normalizeEnvValue(process.env.VISIONARY_API_KEY);
 const VISIONARY_BANANA_PRO_API_KEY = normalizeEnvValue(process.env.VISIONARY_BANANA_PRO_API_KEY);
+const VISIONARY_NANO_LITE_API_KEY = normalizeEnvValue(process.env.VISIONARY_NANO_LITE_API_KEY);
 const VISIONARY_GPT_IMAGE_2_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_API_KEY);
 const VISIONARY_GPT_IMAGE_2_HD_API_KEY = normalizeEnvValue(process.env.VISIONARY_GPT_IMAGE_2_HD_API_KEY);
+const FLUX_BANANA_API_BASE_URL = normalizeEnvValue(
+  process.env.FLUX_BANANA_API_BASE_URL || 'https://api.ai-media.vip',
+);
+const FLUX_BANANA_API_KEY = normalizeEnvValue(process.env.FLUX_BANANA_API_KEY);
+const FLUX_BANANA_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.FLUX_BANANA_TIMEOUT_MS || 15 * 60_000),
+);
 // Previous Chat2API primary integration is intentionally disabled:
 // CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
 const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
@@ -431,18 +447,22 @@ const JUNLIAI_API_KEY = normalizeEnvValue(process.env.JUNLIAI_API_KEY);
 const JUNLIAI_MODEL = normalizeEnvValue(process.env.JUNLIAI_MODEL || 'firefly-gpt-image-2');
 const JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL = 'gpt-image-2';
 const JUNLIAI_TIMEOUT_MS = Math.max(15 * 60_000, Number(process.env.JUNLIAI_TIMEOUT_MS || 15 * 60_000));
-const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 3));
+const JUNLIAI_FAILURE_THRESHOLD = Math.max(1, Number(process.env.JUNLIAI_FAILURE_THRESHOLD || 1));
 const JUNLIAI_TRANSIENT_COOLDOWN_MS = Math.max(
   15_000,
   Number(process.env.JUNLIAI_TRANSIENT_COOLDOWN_MS || 30_000),
 );
 const JUNLIAI_QUOTA_COOLDOWN_MS = Math.max(
-  30_000,
-  Number(process.env.JUNLIAI_QUOTA_COOLDOWN_MS || 60_000),
+  15_000,
+  Number(process.env.JUNLIAI_QUOTA_COOLDOWN_MS || 30_000),
 );
 const JUNLIAI_AUTH_COOLDOWN_MS = Math.max(
-  60_000,
-  Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 5 * 60_000),
+  15_000,
+  Number(process.env.JUNLIAI_AUTH_COOLDOWN_MS || 30_000),
+);
+const IMAGE_CHANNEL_RETRY_COOLDOWN_MS = Math.max(
+  5_000,
+  Number(process.env.IMAGE_CHANNEL_RETRY_COOLDOWN_MS || 30_000),
 );
 const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
 const VIDEO_MODEL_FIREFLY_ID = 'firefly-video';
@@ -451,11 +471,41 @@ const VIDEO_MODEL_LABELS: Record<string, string> = {
   [VIDEO_MODEL_FIREFLY_ID]: 'Firefly Video',
 };
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
-const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v2';
+const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v3';
 const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
-  junliaiGptImage2Economy: JUNLIAI_PRIMARY_ENABLED,
-  junliaiGptImage2: JUNLIAI_PRIMARY_ENABLED,
-  junliaiNanoBanana: JUNLIAI_PRIMARY_ENABLED,
+  image2Routes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'visionary', enabled: true },
+    ],
+    '2K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'visionary', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'visionary', enabled: true },
+    ],
+  },
+  bananaRoutes: {
+    '1K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '2K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '4K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+  },
   junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
   junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
 };
@@ -1631,10 +1681,8 @@ function normalizeImageSize(value: string, modelId: string) {
 async function normalizeRoutedImageSize(
   value: string,
   modelId: string,
-  apiKeyProviderRouting?: PublicApiKeyRecord['providerRouting'],
 ) {
   const imageSize = normalizeImageSize(value, modelId);
-  if (apiKeyProviderRouting === 'junliai_only') return imageSize;
   if (modelId !== 'Nano_Banana_Pro' || imageSize !== '1K' || !providerRouting) return imageSize;
   const routing = await providerRouting.get();
   return applyProviderRoutingToImageSize(modelId, imageSize, routing);
@@ -2526,7 +2574,8 @@ function normalizeApiKeyRecord(value: Partial<PublicApiKeyRecord>): PublicApiKey
     pausedAt: normalizeString(value.pausedAt) || undefined,
     lastUsedAt: normalizeString(value.lastUsedAt) || undefined,
     rotatedFromId: normalizeString(value.rotatedFromId) || undefined,
-    providerRouting: value.providerRouting === 'junliai_only' ? 'junliai_only' : undefined,
+    // Legacy Junliai-only keys now follow the same managed routes as the website.
+    providerRouting: normalizePublicApiProviderRouting(value.providerRouting),
   };
 }
 
@@ -2971,12 +3020,6 @@ async function getPublicApiKeyBalance(plainKey: string) {
   };
 }
 
-async function getPublicApiKeyProviderRouting(plainKey: string) {
-  const keyHash = hashPublicApiKey(plainKey);
-  const records = await readPublicApiKeyRecords();
-  return records.find((item) => item.keyHash === keyHash)?.providerRouting;
-}
-
 function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): PublicAsyncGenerationTask | null {
   const id = normalizeString(value.id);
   const upstreamId = normalizeString(value.upstreamId);
@@ -3006,7 +3049,7 @@ function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): Pu
     imageSize: normalizeString(value.imageSize),
     quality: normalizeString(value.quality) || undefined,
     optimizeChineseText: Boolean(value.optimizeChineseText),
-    providerRouting: value.providerRouting === 'junliai_only' ? 'junliai_only' : undefined,
+    providerRouting: normalizePublicApiProviderRouting(value.providerRouting),
     referenceImages: Array.isArray(value.referenceImages)
       ? value.referenceImages.map(normalizeString).filter(Boolean)
       : [],
@@ -3981,11 +4024,20 @@ async function parseVisionaryJsonResponse<T>(response: globalThis.Response, fall
   }
 
   if (!response.ok) {
-    throw new Error(getVisionaryErrorMessage(payload || responseText, `${fallback} (${response.status})`));
+    const error = new Error(
+      getVisionaryErrorMessage(payload || responseText, `${fallback} (${response.status})`),
+    ) as Error & { safeToFallback: boolean; status: number };
+    error.safeToFallback = true;
+    error.status = response.status;
+    throw error;
   }
 
   if (!payload) {
-    throw new Error(`${fallback}: 图像服务返回了非 JSON 响应，请稍后重试`);
+    const error = new Error(`${fallback}: 图像服务返回了非 JSON 响应，请稍后重试`) as Error & {
+      safeToFallback: boolean;
+    };
+    error.safeToFallback = false;
+    throw error;
   }
 
   return payload;
@@ -4058,7 +4110,16 @@ async function callVisionaryGeneration({
   images: string[];
 }) {
   if (modelId === 'Nano_Banana_Pro' && imageSize === '1K') {
-    throw new Error(NANO_BANANA_1K_UNAVAILABLE_MESSAGE);
+    const apiKey = VISIONARY_NANO_LITE_API_KEY || VISIONARY_BANANA_PRO_API_KEY || VISIONARY_FALLBACK_API_KEY;
+    if (!apiKey) {
+      const error = new Error('香蕉生图渠道暂时不可用') as Error & { safeToFallback: boolean };
+      error.safeToFallback = true;
+      throw error;
+    }
+    return generateVisionaryNanoLite(
+      { prompt, ratio, images },
+      { baseUrl: VISIONARY_API_BASE_URL, apiKey },
+    );
   }
 
   const task = await callVisionaryAsyncGeneration({
@@ -4071,7 +4132,11 @@ async function callVisionaryGeneration({
     images,
   });
   const taskId = normalizeString(task.id || task.taskId);
-  if (!taskId) throw new Error('Visionary async API returned no task id');
+  if (!taskId) {
+    const error = new Error('Image provider returned no task id') as Error & { safeToFallback: boolean };
+    error.safeToFallback = false;
+    throw error;
+  }
 
   const payload = task.status === 'succeeded'
     ? task
@@ -4080,7 +4145,11 @@ async function callVisionaryGeneration({
     payload.results?.find((item) => item.url || item.content)?.url ||
     payload.results?.[0]?.content;
   if (!imageUrl) {
-    throw new Error(`Visionary async API returned no image URL, task id: ${taskId}`);
+    const error = new Error(`Image provider returned no image URL, task id: ${taskId}`) as Error & {
+      safeToFallback: boolean;
+    };
+    error.safeToFallback = false;
+    throw error;
   }
 
   return imageUrl;
@@ -4092,23 +4161,209 @@ let imageProviderRouter: ReturnType<typeof createImageProviderRouter> | null = n
 let providerMetrics: ReturnType<typeof createProviderMetrics> | null = null;
 let providerRiskMonitor: ReturnType<typeof createProviderRiskMonitor> | null = null;
 let providerRouting: ReturnType<typeof createProviderRouting> | null = null;
+const imageChannelFailover = createImageChannelFailover({
+  cooldownMs: IMAGE_CHANNEL_RETRY_COOLDOWN_MS,
+});
+
+function imageAttemptConfiguration(input: ImageGenerationInput) {
+  return `${input.imageSize || 'STANDARD'} / ${input.quality || 'default'} / ${input.ratio || '1:1'}`;
+}
+
+function safeToTryNextProvider(error: unknown) {
+  return Boolean(error && typeof error === 'object' && (error as { safeToFallback?: unknown }).safeToFallback);
+}
+
+function imageErrorText(error: unknown) {
+  return error instanceof Error ? error.message : String(error || 'Unknown image provider error');
+}
+
+async function recordImageChannelAttempt({
+  traceId,
+  input,
+  provider,
+  sourceModel,
+  startedAt,
+  success,
+  error,
+}: {
+  traceId: string;
+  input: ImageGenerationInput;
+  provider: string;
+  sourceModel: string;
+  startedAt: number;
+  success: boolean;
+  error?: unknown;
+}) {
+  const attempt = {
+    traceId,
+    modelId: input.modelId,
+    provider,
+    configuration: imageAttemptConfiguration(input),
+    durationMs: Math.max(0, Date.now() - startedAt),
+    success,
+    failureReason: success ? undefined : safeToTryNextProvider(error) ? 'explicit_failure' : 'uncertain',
+    errorMessage: success ? undefined : imageErrorText(error),
+    sourceModel,
+    prompt: input.prompt,
+    requestContext: input.requestContext,
+  };
+  const requestId = await recordGenerationRequest(attempt);
+  if (success && requestId && input.requestContext) input.requestContext.successfulRequestId = requestId;
+  await Promise.all([
+    providerMetrics?.record(attempt),
+    providerRiskMonitor?.record(attempt),
+  ]);
+}
+
+async function callMeasuredImageChannel(
+  input: ImageGenerationInput,
+  traceId: string,
+  provider: string,
+  sourceModel: string,
+  call: () => Promise<string>,
+) {
+  const startedAt = Date.now();
+  try {
+    const source = await call();
+    await recordImageChannelAttempt({ traceId, input, provider, sourceModel, startedAt, success: true });
+    return source;
+  } catch (error) {
+    await recordImageChannelAttempt({ traceId, input, provider, sourceModel, startedAt, success: false, error });
+    throw error;
+  }
+}
+
+async function callConfiguredImageChannel(
+  input: ImageGenerationInput,
+  channelId: string,
+  traceId: string,
+) {
+  if (input.modelId === 'Nano_Banana_Pro') {
+    if (channelId === 'flux') {
+      if (!FLUX_BANANA_API_KEY) {
+        const error = new Error('Flux banana key is not configured') as Error & { safeToFallback: boolean };
+        error.safeToFallback = true;
+        throw error;
+      }
+      const startedAt = Date.now();
+      try {
+        const selected = await generateFluxBanana(input, {
+          baseUrl: FLUX_BANANA_API_BASE_URL,
+          apiKey: FLUX_BANANA_API_KEY,
+          timeoutMs: FLUX_BANANA_TIMEOUT_MS,
+        });
+        await recordImageChannelAttempt({
+          traceId,
+          input,
+          provider: `Flux · ${selected.model}`,
+          sourceModel: selected.model,
+          startedAt,
+          success: true,
+        });
+        return selected.source;
+      } catch (error) {
+        await recordImageChannelAttempt({
+          traceId,
+          input,
+          provider: 'Flux',
+          sourceModel: 'gemini-image',
+          startedAt,
+          success: false,
+          error,
+        });
+        throw error;
+      }
+    }
+    if (channelId === 'visionary') {
+      const sourceModel = input.imageSize === '1K' ? 'nano-banana-2-lite' : 'nano-banana-pro';
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Visionary',
+        sourceModel,
+        () => callVisionaryGeneration(input),
+      );
+    }
+    if (channelId === 'junliai' && imageProviderRouter) {
+      return imageProviderRouter.generate({
+        ...input,
+        providerRouting: 'junliai_only',
+        upstreamModelOverride: 'nano-banana-pro',
+        traceId,
+      });
+    }
+    if (channelId === 'junliai-nano-banana-2' && imageProviderRouter) {
+      return imageProviderRouter.generate({
+        ...input,
+        providerRouting: 'junliai_only',
+        upstreamModelOverride: 'nano-banana-2',
+        traceId,
+      });
+    }
+  }
+
+  if (input.modelId === 'gpt-image-2') {
+    if (channelId === 'visionary') {
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Visionary',
+        'gpt-image-2',
+        () => callVisionaryGeneration(input),
+      );
+    }
+    const upstreamModel = channelId === 'junliai-economy'
+      ? JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
+      : channelId === 'junliai-firefly'
+        ? JUNLIAI_MODEL
+        : '';
+    if (upstreamModel && imageProviderRouter) {
+      return imageProviderRouter.generate({
+        ...input,
+        providerRouting: 'junliai_only',
+        upstreamModelOverride: upstreamModel,
+        traceId,
+      });
+    }
+  }
+
+  const error = new Error(`Image channel ${channelId} is unavailable`) as Error & { safeToFallback: boolean };
+  error.safeToFallback = true;
+  throw error;
+}
 
 async function callImageGeneration(input: ImageGenerationInput) {
-  let routedInput = input;
-  if (input.modelId === 'Nano_Banana_Pro' && input.imageSize === '1K' && providerRouting) {
-    const routing = await providerRouting.get();
-    const routedImageSize = applyProviderRoutingToImageSize(input.modelId, input.imageSize, routing);
-    if (routedImageSize !== input.imageSize) routedInput = { ...input, imageSize: routedImageSize };
-  }
   const effectiveInput = {
-    ...routedInput,
+    ...input,
     // AI 增强只参与 PIXORY 计费；图片后端始终接收 false，避免触发其原生增强流程。
     optimizeChineseText: false,
   };
-  if (!imageProviderRouter) {
-    return callVisionaryGeneration(effectiveInput);
+  const routing = providerRouting ? await providerRouting.get() : DEFAULT_PROVIDER_ROUTING;
+  const resolution = routingResolution(effectiveInput.imageSize);
+  const configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
+    ? enabledProviderIds(routing.bananaRoutes[resolution])
+    : enabledProviderIds(routing.image2Routes[resolution]);
+  if (configuredChannels.length === 0) {
+    throw new Error('管理员已停用当前模型的全部生图渠道');
   }
-  return imageProviderRouter.generate(effectiveInput);
+  const routeKey = `${effectiveInput.modelId}:${resolution}`;
+  const channels = imageChannelFailover.candidates(routeKey, configuredChannels);
+
+  const traceId = crypto.randomUUID();
+  for (const channelId of channels) {
+    try {
+      const source = await callConfiguredImageChannel(effectiveInput, channelId, traceId);
+      imageChannelFailover.markSuccess(routeKey, channelId);
+      return source;
+    } catch (error) {
+      imageChannelFailover.markFailure(routeKey, channelId);
+      console.warn(`[image-channel] ${channelId} failed: ${imageErrorText(error)}`);
+      if (!safeToTryNextProvider(error)) {
+        throw new Error('生成结果暂时无法确认，为避免重复扣费，本次不会自动切换渠道；积分将自动退回，请稍后重试。');
+      }
+    }
+  }
+  throw new Error('图片生成服务暂时不可用，请稍后重试');
 }
 
 function videoSize(ratio: string, resolution: string) {
@@ -4299,7 +4554,9 @@ async function callVisionaryAsyncGeneration({
 
   const taskId = normalizeString(payload?.id || payload?.taskId);
   if (!taskId) {
-    throw new Error('Visionary async API returned no task id');
+    const error = new Error('Image provider returned no task id') as Error & { safeToFallback: boolean };
+    error.safeToFallback = false;
+    throw error;
   }
 
   return { ...payload, id: taskId };
@@ -4337,23 +4594,37 @@ async function pollVisionaryAsyncUntilComplete(
   const { maxPolls = 120, onStatus } = options;
 
   for (let poll = 0; poll < maxPolls; poll += 1) {
-    const status = await queryVisionaryAsyncStatus(taskId, modelId, imageSize);
+    let status: VisionaryAsyncTaskResponse;
+    try {
+      status = await queryVisionaryAsyncStatus(taskId, modelId, imageSize);
+    } catch (error) {
+      if (error && typeof error === 'object') {
+        (error as { safeToFallback?: boolean }).safeToFallback = false;
+      }
+      throw error;
+    }
     if (onStatus) onStatus(status);
 
     if (status.status === 'succeeded') {
       return status;
     }
     if (status.status === 'failed') {
-      throw new Error(
+      const error = new Error(
         getVisionaryErrorMessage(status, `Async generation failed: ${status.generationStatus || 'unknown'}`),
-      );
+      ) as Error & { safeToFallback: boolean };
+      error.safeToFallback = true;
+      throw error;
     }
 
     const delayMs = (status.retryAfterSeconds || 5) * 1000;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
-  throw new Error(`Async generation timed out after ${maxPolls} polls`);
+  const error = new Error(`Async generation timed out after ${maxPolls} polls`) as Error & {
+    safeToFallback: boolean;
+  };
+  error.safeToFallback = false;
+  throw error;
 }
 
 // 鈹€鈹€鈹€ SVG 鍗犱綅鍥?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -4878,7 +5149,7 @@ async function start() {
     },
     primaryModelChains: {
       'gpt-image-2': [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL, JUNLIAI_MODEL],
-      Nano_Banana_Pro: ['nano-banana-pro'],
+      Nano_Banana_Pro: ['nano-banana-pro', 'nano-banana-2'],
     },
     primaryModelCapabilities: {
       [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL]: {
@@ -4894,16 +5165,24 @@ async function start() {
     },
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
+      const resolution = routingResolution(input.imageSize);
       return input.modelId === 'Nano_Banana_Pro'
-        ? routing.junliaiNanoBanana
-        : routing.junliaiGptImage2Economy || routing.junliaiGptImage2;
+        ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
+          || isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
+        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
+          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
-      if (input.modelId === 'Nano_Banana_Pro') return routing.junliaiNanoBanana;
+      const resolution = routingResolution(input.imageSize);
+      if (input.modelId === 'Nano_Banana_Pro') {
+        return upstreamModel === 'nano-banana-2'
+          ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
+          : isProviderEnabled(routing.bananaRoutes[resolution], 'junliai');
+      }
       return upstreamModel === JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
-        ? routing.junliaiGptImage2Economy
-        : routing.junliaiGptImage2;
+        ? isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
+        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
     },
     timeoutMs: JUNLIAI_TIMEOUT_MS,
     failureThreshold: JUNLIAI_FAILURE_THRESHOLD,
@@ -5738,8 +6017,7 @@ async function start() {
     try {
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const apiKeyProviderRouting = await getPublicApiKeyProviderRouting(apiKey);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId, apiKeyProviderRouting);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       creditsUsed = getModelCredits(modelId, imageSize, quality)
@@ -5761,7 +6039,6 @@ async function start() {
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
         images: Array.from(new Set(referenceImages)),
-        providerRouting: reservedKey.providerRouting,
         requestContext,
       });
       const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
@@ -6314,7 +6591,6 @@ async function start() {
           quality: current.quality || '',
           optimizeChineseText: Boolean(current.optimizeChineseText),
           images: current.referenceImages,
-          providerRouting: current.providerRouting,
           requestContext,
         });
         const imagePath = await persistGeneratedImage(generatedImageSource);
@@ -6447,8 +6723,7 @@ async function start() {
 
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const apiKeyProviderRouting = await getPublicApiKeyProviderRouting(apiKey);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId, apiKeyProviderRouting);
+      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       creditsUsed = getModelCredits(modelId, imageSize, quality)
@@ -6472,7 +6747,6 @@ async function start() {
         imageSize,
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
-        providerRouting: reservedKey.providerRouting,
         referenceImages: Array.from(new Set(referenceImages)),
         temporaryReferenceImages,
         createdAt: nowIso(),
@@ -7876,29 +8150,27 @@ async function start() {
 
   app.put('/api/admin/provider-routing', requireAuth, requireAdmin, async (req, res) => {
     try {
-      const keys: Array<keyof ProviderRoutingConfig> = [
-        'junliaiGptImage2Economy',
-        'junliaiGptImage2',
-        'junliaiNanoBanana',
-        'junliaiGeminiVeo31',
-        'junliaiFireflyVideo',
-      ];
-      const patch: Partial<ProviderRoutingConfig> = {};
-      for (const key of keys) {
-        if (typeof req.body?.[key] === 'boolean') patch[key] = req.body[key];
+      const patch: ProviderRoutingPatch = {};
+      if (req.body?.image2Routes && typeof req.body.image2Routes === 'object') {
+        patch.image2Routes = req.body.image2Routes;
+      }
+      if (req.body?.bananaRoutes && typeof req.body.bananaRoutes === 'object') {
+        patch.bananaRoutes = req.body.bananaRoutes;
+      }
+      if (typeof req.body?.junliaiGeminiVeo31 === 'boolean') {
+        patch.junliaiGeminiVeo31 = req.body.junliaiGeminiVeo31;
+      }
+      if (typeof req.body?.junliaiFireflyVideo === 'boolean') {
+        patch.junliaiFireflyVideo = req.body.junliaiFireflyVideo;
       }
       if (Object.keys(patch).length === 0) {
-        res.status(400).json({ error: '至少需要提交一个有效的 Junliai 接口开关' });
+        res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });
         return;
       }
 
-      const previous = await providerRouting!.get();
       const next = await providerRouting!.update(patch);
-      const reopened =
-        (!previous.junliaiGptImage2Economy && next.junliaiGptImage2Economy) ||
-        (!previous.junliaiGptImage2 && next.junliaiGptImage2) ||
-        (!previous.junliaiNanoBanana && next.junliaiNanoBanana);
-      if (reopened) await imageProviderRouter?.resetCircuit();
+      await imageProviderRouter?.resetCircuit();
+      imageChannelFailover.reset();
       res.json({ providerRouting: next });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : '更新上游接口开关失败' });

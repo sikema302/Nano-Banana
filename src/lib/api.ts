@@ -217,10 +217,18 @@ export interface ProviderRiskRecord {
   riskReason: string;
 }
 
+export type ProviderResolution = '1K' | '2K' | '4K';
+export type Image2ProviderId = 'junliai-economy' | 'junliai-firefly' | 'visionary';
+export type BananaProviderId = 'flux' | 'visionary' | 'junliai' | 'junliai-nano-banana-2';
+
+export interface ProviderChannel<T extends string = string> {
+  id: T;
+  enabled: boolean;
+}
+
 export interface ProviderRoutingConfig {
-  junliaiGptImage2Economy: boolean;
-  junliaiGptImage2: boolean;
-  junliaiNanoBanana: boolean;
+  image2Routes: Record<ProviderResolution, Array<ProviderChannel<Image2ProviderId>>>;
+  bananaRoutes: Record<ProviderResolution, Array<ProviderChannel<BananaProviderId>>>;
   junliaiGeminiVeo31: boolean;
   junliaiFireflyVideo: boolean;
 }

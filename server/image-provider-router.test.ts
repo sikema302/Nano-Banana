@@ -461,7 +461,7 @@ test('uses the mapped Junliai nano-banana-pro model at 1K', async () => {
   });
 });
 
-test('Nano Banana 1K reports 2K guidance and never calls the fallback after a Junliai failure', async () => {
+test('Nano Banana 1K can fall back after an explicit Junliai failure', async () => {
   const store = createStore();
   let primaryCalls = 0;
   let fallbackCalls = 0;
@@ -488,15 +488,54 @@ test('Nano Banana 1K reports 2K guidance and never calls the fallback after a Ju
     },
   });
 
-  await assert.rejects(
-    router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
-    /1K.*2K/,
+  assert.equal(
+    await router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
+    'visionary-lite',
   );
   assert.equal(primaryCalls, 1);
-  assert.equal(fallbackCalls, 0);
+  assert.equal(fallbackCalls, 1);
 });
 
-test('Nano Banana 1K reports 2K guidance when the Junliai route is unavailable', async () => {
+test('uses the Junliai nano-banana-2 override for the independent Banana 1K channel', async () => {
+  const store = createStore();
+  let request: { url: string; init?: RequestInit } | null = null;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => 'visionary',
+    fetchImpl: async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
+  });
+
+  assert.equal(
+    await router.generate({
+      ...input,
+      modelId: 'Nano_Banana_Pro',
+      imageSize: '1K',
+      providerRouting: 'junliai_only',
+      upstreamModelOverride: 'nano-banana-2',
+    }),
+    'data:image/png;base64,aW1hZ2U=',
+  );
+  assert.equal(request?.url, 'https://img.junliai.org/v1/images/generations');
+  assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+    model: 'nano-banana-2',
+    prompt: 'A lighthouse',
+    size: '1024x1024',
+    response_format: 'b64_json',
+  });
+});
+
+test('Nano Banana 1K uses the fallback when the Junliai route is unavailable', async () => {
   let fallbackCalls = 0;
   const router = createImageProviderRouter({
     baseUrl: '',
@@ -517,11 +556,11 @@ test('Nano Banana 1K reports 2K guidance when the Junliai route is unavailable',
     },
   });
 
-  await assert.rejects(
-    router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
-    /1K.*2K/,
+  assert.equal(
+    await router.generate({ ...input, modelId: 'Nano_Banana_Pro', imageSize: '1K' }),
+    'visionary-lite',
   );
-  assert.equal(fallbackCalls, 0);
+  assert.equal(fallbackCalls, 1);
 });
 
 test('uses the mapped Junliai nano-banana-pro edits endpoint for reference images', async () => {

@@ -1,17 +1,53 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { applyProviderRoutingToImageSize, createProviderRouting } from './provider-routing.js';
+import {
+  applyProviderRoutingToImageSize,
+  createProviderRouting,
+  enabledProviderIds,
+  routingResolution,
+  type ProviderRoutingConfig,
+} from './provider-routing.js';
 
-const defaults = {
-  junliaiGptImage2Economy: true,
-  junliaiGptImage2: true,
-  junliaiNanoBanana: true,
+const defaults: ProviderRoutingConfig = {
+  image2Routes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+    '2K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'visionary', enabled: true },
+    ],
+  },
+  bananaRoutes: {
+    '1K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+      { id: 'junliai-nano-banana-2', enabled: true },
+    ],
+    '2K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+    ],
+    '4K': [
+      { id: 'flux', enabled: true },
+      { id: 'visionary', enabled: true },
+      { id: 'junliai', enabled: true },
+    ],
+  },
   junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
 };
 
-test('loads provider routing defaults and persists partial updates', async () => {
+test('persists independent provider order and switches for each resolution', async () => {
   const values = new Map<string, string>();
   const routing = createProviderRouting({
     defaults,
@@ -23,71 +59,83 @@ test('loads provider routing defaults and persists partial updates', async () =>
     },
   });
 
-  assert.deepEqual(await routing.get(), defaults);
-  assert.deepEqual(await routing.update({ junliaiNanoBanana: false }), {
-    ...defaults,
-    junliaiNanoBanana: false,
-  });
-  assert.deepEqual(JSON.parse(values.get('provider_routing_v1') || '{}'), {
-    ...defaults,
-    junliaiNanoBanana: false,
-  });
+  const nextBananaRoutes = {
+    ...defaults.bananaRoutes,
+    '2K': [
+      { id: 'junliai' as const, enabled: true },
+      { id: 'flux' as const, enabled: false },
+      { id: 'visionary' as const, enabled: true },
+    ],
+  };
+  const updated = await routing.update({ bananaRoutes: nextBananaRoutes });
+
+  assert.deepEqual(updated.bananaRoutes['2K'], nextBananaRoutes['2K']);
+  assert.deepEqual(updated.bananaRoutes['1K'], defaults.bananaRoutes['1K']);
+  assert.deepEqual(updated.image2Routes, defaults.image2Routes);
+  assert.deepEqual(
+    enabledProviderIds(updated.bananaRoutes['2K']),
+    ['junliai', 'visionary'],
+  );
+  assert.deepEqual(JSON.parse(values.get('provider_routing_v1') || '{}'), updated);
 });
 
-test('ignores unknown persisted values and keeps explicit false values', async () => {
+test('normalizes duplicates, unknown channels, and missing channels per resolution', async () => {
   const routing = createProviderRouting({
     defaults,
     store: {
       get: async () => JSON.stringify({
-        junliaiGptImage2: false,
-        junliaiNanoBanana: 'off',
+        bananaRoutes: {
+          '1K': [
+            { id: 'visionary', enabled: false },
+            { id: 'unknown', enabled: true },
+            { id: 'visionary', enabled: true },
+          ],
+        },
       }),
       set: async () => undefined,
     },
   });
 
-  assert.deepEqual(await routing.get(), {
-    junliaiGptImage2Economy: false,
-    junliaiGptImage2: false,
-    junliaiNanoBanana: true,
-    junliaiGeminiVeo31: true,
-    junliaiFireflyVideo: true,
-  });
+  const config = await routing.get();
+  assert.deepEqual(config.bananaRoutes['1K'], [
+    { id: 'visionary', enabled: false },
+    { id: 'flux', enabled: true },
+    { id: 'junliai', enabled: true },
+    { id: 'junliai-nano-banana-2', enabled: true },
+  ]);
+  assert.deepEqual(config.bananaRoutes['2K'], defaults.bananaRoutes['2K']);
 });
 
-test('migrates the legacy GPT switch to both independent GPT routes', async () => {
+test('migrates legacy switches into every compatible resolution route', async () => {
   const routing = createProviderRouting({
     defaults,
     store: {
       get: async () => JSON.stringify({
         junliaiGptImage2: false,
-        junliaiNanoBanana: true,
+        junliaiNanoBanana: false,
         junliaiFireflyVideo: true,
       }),
       set: async () => undefined,
     },
   });
 
-  assert.deepEqual(await routing.get(), {
-    ...defaults,
-    junliaiGptImage2Economy: false,
-    junliaiGptImage2: false,
-  });
+  const config = await routing.get();
+  assert.equal(config.image2Routes['1K'].find((route) => route.id === 'junliai-economy')?.enabled, false);
+  assert.equal(config.image2Routes['1K'].find((route) => route.id === 'junliai-firefly')?.enabled, false);
+  assert.equal(config.image2Routes['4K'].find((route) => route.id === 'junliai-firefly')?.enabled, false);
+  for (const resolution of ['1K', '2K', '4K'] as const) {
+    assert.equal(config.bananaRoutes[resolution].find((route) => route.id === 'junliai')?.enabled, false);
+  }
+  assert.equal(
+    config.bananaRoutes['1K'].find((route) => route.id === 'junliai-nano-banana-2')?.enabled,
+    false,
+  );
 });
 
-test('keeps the user-selected Nano Banana resolution when the Junliai route is disabled', () => {
-  assert.equal(
-    applyProviderRoutingToImageSize('Nano_Banana_Pro', '1K', {
-      ...defaults,
-      junliaiNanoBanana: false,
-    }),
-    '1K',
-  );
-  assert.equal(
-    applyProviderRoutingToImageSize('Nano_Banana_Pro', '4K', {
-      ...defaults,
-      junliaiNanoBanana: false,
-    }),
-    '4K',
-  );
+test('maps STANDARD to the independently managed 1K route', () => {
+  assert.equal(routingResolution('STANDARD'), '1K');
+  assert.equal(routingResolution('1K'), '1K');
+  assert.equal(routingResolution('2K'), '2K');
+  assert.equal(routingResolution('4K'), '4K');
+  assert.equal(applyProviderRoutingToImageSize('Nano_Banana_Pro', '1K', defaults), '1K');
 });

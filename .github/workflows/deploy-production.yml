@@ -22,6 +22,7 @@ jobs:
       APP_NAME: nano-banana
       SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
       VISIONARY_NANO_LITE_API_KEY: ${{ secrets.VISIONARY_NANO_LITE_API_KEY }}
+      FLUX_BANANA_API_KEY: ${{ secrets.FLUX_BANANA_API_KEY }}
 
     steps:
       - name: Check out source
@@ -80,6 +81,9 @@ jobs:
           printf '%s' "$VISIONARY_NANO_LITE_API_KEY" | \
             sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
               "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-nano-lite-key'"
+          printf '%s' "$FLUX_BANANA_API_KEY" | \
+            sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+              "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-flux-banana-key'"
 
       - name: Back up and deploy
         run: |
@@ -90,6 +94,7 @@ jobs:
           backups="$project/.deploy-backups"
           timestamp="$(date +%Y%m%d-%H%M%S)"
           nano_lite_key_file='/tmp/nano-banana-nano-lite-key'
+          flux_banana_key_file='/tmp/nano-banana-flux-banana-key'
           ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
           if ! grep -qx 'Port 2223' "$ssh_ports" 2>/dev/null; then
             printf 'Port 2222\nPort 2223\n' > "$ssh_ports"
@@ -120,6 +125,16 @@ jobs:
             chmod 600 .env.local
           fi
           rm -f "$nano_lite_key_file"
+
+          if [ -s "$flux_banana_key_file" ]; then
+            flux_banana_key="$(cat "$flux_banana_key_file")"
+            touch .env.local
+            (grep -v '^FLUX_BANANA_API_KEY=' .env.local || true) > .env.local.next
+            printf 'FLUX_BANANA_API_KEY="%s"\n' "$flux_banana_key" >> .env.local.next
+            mv .env.local.next .env.local
+            chmod 600 .env.local
+          fi
+          rm -f "$flux_banana_key_file"
 
           dependency_stamp='node_modules/.pixory-package-lock.sha256'
           current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
