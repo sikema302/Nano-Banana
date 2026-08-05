@@ -43,6 +43,7 @@ import {
   type ImageGenerationInput,
 } from './image-provider-router.js';
 import { generateFluxBanana } from './flux-banana.js';
+import { requestSourceLabel } from './request-source-label.js';
 import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { createProviderMetrics } from './provider-metrics.js';
 import { createProviderRiskMonitor } from './provider-risk-monitor.js';
@@ -1146,7 +1147,7 @@ async function recordGenerationRequest(attempt: {
     username: context.username,
     prompt: attempt.prompt,
     modelId: attempt.modelId,
-    modelName: attempt.sourceModel || attempt.provider,
+    modelName: requestSourceLabel(attempt.provider, attempt.sourceModel),
     dimensions: ratio,
     imageSize: [imageSize, quality].filter(Boolean).join(' / '),
     creditsUsed: attempt.success ? context.creditsUsed : 0,
@@ -4266,7 +4267,7 @@ async function callConfiguredImageChannel(
           traceId,
           input,
           provider: 'Flux',
-          sourceModel: 'gemini-image',
+          sourceModel: (error as { sourceModel?: string })?.sourceModel || 'gemini-image',
           startedAt,
           success: false,
           error,

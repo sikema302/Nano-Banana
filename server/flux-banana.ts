@@ -11,6 +11,7 @@ type FluxBananaOptions = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   random?: () => number;
+  sleepImpl?: (milliseconds: number) => Promise<void>;
 };
 
 type GeminiPart = {
@@ -21,15 +22,30 @@ type GeminiPart = {
 
 type GeminiPayload = {
   candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
+  assets?: Array<{
+    b64_json?: string;
+    data?: string;
+    mime_type?: string;
+    mimeType?: string;
+    url?: string;
+    download_url?: string;
+  }>;
   error?: { message?: string } | string;
   message?: string;
+  status?: string;
+  task_id?: string;
+  id?: string;
+  poll_after_ms?: number;
+  poll_url?: string;
+  status_url?: string;
+  result_url?: string;
 };
 
 export const FLUX_BANANA_FLASH_MODEL = 'gemini-3.1-flash-image-preview';
 export const FLUX_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 
 function providerError(message: string, safeToFallback: boolean, status?: number) {
-  const error = new Error(message) as Error & { safeToFallback: boolean; status?: number };
+  const error = new Error(message) as Error & { safeToFallback: boolean; status?: number; sourceModel?: string };
   error.safeToFallback = safeToFallback;
   if (status) error.status = status;
   return error;
@@ -95,7 +111,94 @@ function generatedImage(payload: GeminiPayload) {
       }
     }
   }
+  for (const asset of payload.assets || []) {
+    const base64 = asset.b64_json || asset.data;
+    if (base64) {
+      return `data:${asset.mime_type || asset.mimeType || 'image/png'};base64,${base64.replace(/\s+/g, '')}`;
+    }
+    if (asset.download_url || asset.url) return asset.download_url || asset.url || '';
+  }
   return '';
+}
+
+function resolveProviderUrl(baseUrl: string, value: string) {
+  const base = new URL(`${baseUrl.replace(/\/+$/, '')}/`);
+  const resolved = new URL(value, base);
+  if (resolved.origin !== base.origin) {
+    throw providerError('Flux image provider returned an untrusted task URL', false);
+  }
+  return resolved.toString();
+}
+
+async function parsePayload(response: Response) {
+  const raw = await response.text();
+  let payload: GeminiPayload = {};
+  try {
+    payload = raw ? JSON.parse(raw) as GeminiPayload : {};
+  } catch {
+    // A short response excerpt is included in the error below.
+  }
+  return { payload, raw };
+}
+
+async function fetchTaskPayload(
+  url: string,
+  options: FluxBananaOptions,
+  signal: AbortSignal,
+) {
+  const response = await (options.fetchImpl || fetch)(url, {
+    headers: { 'x-goog-api-key': options.apiKey },
+    signal,
+  });
+  const parsed = await parsePayload(response);
+  if (!response.ok) {
+    throw providerError(
+      payloadError(parsed.payload) || `Flux task status returned HTTP ${response.status}: ${parsed.raw.slice(0, 240)}`,
+      false,
+      response.status,
+    );
+  }
+  return parsed.payload;
+}
+
+async function materializeImage(
+  source: string,
+  options: FluxBananaOptions,
+  signal: AbortSignal,
+) {
+  if (source.startsWith('data:image/')) return source;
+  const base = new URL(`${options.baseUrl.replace(/\/+$/, '')}/`);
+  const url = new URL(source, base);
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw providerError('Flux image provider returned an invalid asset URL', false);
+  }
+  const headers = url.origin === base.origin ? { 'x-goog-api-key': options.apiKey } : undefined;
+  const response = await (options.fetchImpl || fetch)(url, {
+    headers,
+    signal,
+  });
+  if (!response.ok) {
+    throw providerError(`Flux image download returned HTTP ${response.status}`, false, response.status);
+  }
+  const mimeType = (response.headers.get('content-type') || 'image/png').split(';')[0];
+  if (!mimeType.startsWith('image/')) {
+    throw providerError(`Flux image download returned ${mimeType || 'an invalid content type'}`, false);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw providerError('Flux image download returned an empty file', false);
+  return `data:${mimeType};base64,${bytes.toString('base64')}`;
+}
+
+function taskStatus(payload: GeminiPayload) {
+  return String(payload.status || '').trim().toLowerCase();
+}
+
+function isActiveTask(status: string) {
+  return ['queued', 'dispatching', 'running', 'paused'].includes(status);
+}
+
+function taskUrl(payload: GeminiPayload) {
+  return payload.status_url || payload.poll_url || payload.result_url || '';
 }
 
 export async function generateFluxBanana(input: FluxBananaInput, options: FluxBananaOptions) {
@@ -133,28 +236,64 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
         signal: controller.signal,
       },
     );
-    const raw = await response.text();
-    let payload: GeminiPayload = {};
-    try {
-      payload = raw ? JSON.parse(raw) as GeminiPayload : {};
-    } catch {
-      // HTTP status and a short excerpt are sufficient for internal diagnostics.
-    }
+    const { payload: initialPayload, raw } = await parsePayload(response);
     if (!response.ok) {
       throw providerError(
-        payloadError(payload) || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`,
+        payloadError(initialPayload) || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`,
         true,
         response.status,
       );
     }
-    const source = generatedImage(payload);
-    if (!source) {
-      throw providerError(`Flux image provider returned no image: ${raw.slice(0, 240)}`, true);
+
+    let payload = initialPayload;
+    let source = generatedImage(payload);
+    if (source) {
+      return { source: await materializeImage(source, options, controller.signal), model };
     }
-    return { source, model };
+
+    const initialStatus = taskStatus(payload);
+    const initialTaskUrl = taskUrl(payload);
+    if (!initialTaskUrl || (!initialStatus && !payload.task_id && !payload.id)) {
+      throw providerError(`Flux image provider returned no image: ${raw.slice(0, 240)}`, false);
+    }
+
+    let pollUrl = resolveProviderUrl(options.baseUrl, initialTaskUrl);
+    while (isActiveTask(taskStatus(payload))) {
+      const delay = Math.min(10_000, Math.max(250, Number(payload.poll_after_ms) || 2_000));
+      await (options.sleepImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
+      payload = await fetchTaskPayload(pollUrl, options, controller.signal);
+      source = generatedImage(payload);
+      if (source) {
+        return { source: await materializeImage(source, options, controller.signal), model };
+      }
+      const nextUrl = taskUrl(payload);
+      if (nextUrl) pollUrl = resolveProviderUrl(options.baseUrl, nextUrl);
+    }
+
+    const finalStatus = taskStatus(payload);
+    if (finalStatus === 'success' || finalStatus === 'completed') {
+      const resultUrl = payload.result_url;
+      if (resultUrl) {
+        const resultPayload = await fetchTaskPayload(resolveProviderUrl(options.baseUrl, resultUrl), options, controller.signal);
+        source = generatedImage(resultPayload);
+        if (source) {
+          return { source: await materializeImage(source, options, controller.signal), model };
+        }
+      }
+      throw providerError('Flux image task completed without a downloadable image', false);
+    }
+    if (finalStatus === 'failed' || finalStatus === 'canceled' || finalStatus === 'cancelled') {
+      throw providerError(payloadError(payload) || `Flux image task ${finalStatus}`, true);
+    }
+    throw providerError(
+      payloadError(payload) || `Flux image task result is uncertain (${finalStatus || 'unknown'})`,
+      false,
+    );
   } catch (error) {
-    if (error && typeof error === 'object' && !('safeToFallback' in error)) {
-      (error as { safeToFallback?: boolean }).safeToFallback = !requestSent;
+    if (error && typeof error === 'object') {
+      const tagged = error as { safeToFallback?: boolean; sourceModel?: string };
+      if (!('safeToFallback' in tagged)) tagged.safeToFallback = !requestSent;
+      tagged.sourceModel = model;
     }
     throw error;
   } finally {
