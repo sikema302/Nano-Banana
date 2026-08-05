@@ -1,5 +1,7 @@
-// Public API keys intentionally share the website's managed provider routes.
-// Returning undefined also migrates the previous `junliai_only` key setting.
-export function normalizePublicApiProviderRouting(_value: unknown): undefined {
-  return undefined;
+export type PublicApiProviderRouting = 'junliai_dedicated';
+
+// Ordinary public API keys intentionally share the website routes. The dedicated
+// marker is internal task state; legacy `junliai_only` records still migrate away.
+export function normalizePublicApiProviderRouting(value: unknown): PublicApiProviderRouting | undefined {
+  return value === 'junliai_dedicated' ? value : undefined;
 }

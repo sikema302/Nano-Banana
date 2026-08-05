@@ -7,3 +7,7 @@ test('legacy Junliai-only API keys now follow website routing', () => {
   assert.equal(normalizePublicApiProviderRouting('junliai_only'), undefined);
   assert.equal(normalizePublicApiProviderRouting(undefined), undefined);
 });
+
+test('preserves the internal dedicated Junli task route', () => {
+  assert.equal(normalizePublicApiProviderRouting('junliai_dedicated'), 'junliai_dedicated');
+});

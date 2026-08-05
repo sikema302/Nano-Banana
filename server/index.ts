@@ -44,6 +44,9 @@ import {
 } from './image-provider-router.js';
 import { generateFluxBanana } from './flux-banana.js';
 import { requestSourceLabel } from './request-source-label.js';
+import {
+  dedicatedJunliBananaPolicy,
+} from './dedicated-public-api-key.js';
 import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { createProviderMetrics } from './provider-metrics.js';
 import { createProviderRiskMonitor } from './provider-risk-monitor.js';
@@ -273,7 +276,7 @@ type PublicAsyncGenerationTask = {
   imageSize: string;
   quality?: string;
   optimizeChineseText?: boolean;
-  providerRouting?: 'junliai_only';
+  providerRouting?: 'junliai_only' | 'junliai_dedicated';
   referenceImages: string[];
   temporaryReferenceImages?: string[];
   createdAt: string;
@@ -328,7 +331,7 @@ type PublicApiKeyRecord = {
   pausedAt?: string;
   lastUsedAt?: string;
   rotatedFromId?: string;
-  providerRouting?: 'junliai_only';
+  providerRouting?: 'junliai_only' | 'junliai_dedicated';
 };
 
 type PublicGenerateInput = {
@@ -4339,6 +4342,16 @@ async function callImageGeneration(input: ImageGenerationInput) {
     // AI 增强只参与 PIXORY 计费；图片后端始终接收 false，避免触发其原生增强流程。
     optimizeChineseText: false,
   };
+  if (effectiveInput.providerRouting === 'junliai_dedicated') {
+    if (!imageProviderRouter) throw new Error('Junli image provider is unavailable');
+    return imageProviderRouter.generate({
+      ...effectiveInput,
+      modelId: 'Nano_Banana_Pro',
+      providerRouting: 'junliai_dedicated',
+      upstreamModelOverride: 'nano-banana-pro',
+      traceId: crypto.randomUUID(),
+    });
+  }
   const routing = providerRouting ? await providerRouting.get() : DEFAULT_PROVIDER_ROUTING;
   const resolution = routingResolution(effectiveInput.imageSize);
   const configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
@@ -6003,7 +6016,12 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
-    const modelId = normalizePublicModelId(model);
+    const dedicatedPolicy = dedicatedJunliBananaPolicy(
+      hashPublicApiKey(apiKey),
+      requestedImageSize,
+      optimizeChineseText,
+    );
+    const modelId = dedicatedPolicy?.modelId || normalizePublicModelId(model);
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
@@ -6018,11 +6036,15 @@ async function start() {
     try {
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
+      const imageSize = dedicatedPolicy
+        ? dedicatedPolicy.imageSize
+        : await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
-      creditsUsed = getModelCredits(modelId, imageSize, quality)
-        + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
+      creditsUsed = dedicatedPolicy
+        ? dedicatedPolicy.credits
+        : getModelCredits(modelId, imageSize, quality)
+          + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const createdAt = nowIso();
@@ -6039,6 +6061,7 @@ async function start() {
         imageSize,
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
+        providerRouting: dedicatedPolicy?.providerRouting,
         images: Array.from(new Set(referenceImages)),
         requestContext,
       });
@@ -6591,6 +6614,7 @@ async function start() {
           imageSize: current.imageSize,
           quality: current.quality || '',
           optimizeChineseText: Boolean(current.optimizeChineseText),
+          providerRouting: current.providerRouting,
           images: current.referenceImages,
           requestContext,
         });
@@ -6681,7 +6705,12 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
-    const modelId = normalizePublicModelId(model);
+    const dedicatedPolicy = dedicatedJunliBananaPolicy(
+      hashPublicApiKey(apiKey),
+      requestedImageSize,
+      optimizeChineseText,
+    );
+    const modelId = dedicatedPolicy?.modelId || normalizePublicModelId(model);
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
@@ -6724,11 +6753,15 @@ async function start() {
 
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
-      const imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
+      const imageSize = dedicatedPolicy
+        ? dedicatedPolicy.imageSize
+        : await normalizeRoutedImageSize(requestedImageSize, modelId);
       const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
-      creditsUsed = getModelCredits(modelId, imageSize, quality)
-        + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
+      creditsUsed = dedicatedPolicy
+        ? dedicatedPolicy.credits
+        : getModelCredits(modelId, imageSize, quality)
+          + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const publicTask: PublicAsyncGenerationTask = {
@@ -6748,6 +6781,7 @@ async function start() {
         imageSize,
         quality,
         optimizeChineseText: effectiveOptimizeChineseText,
+        providerRouting: dedicatedPolicy?.providerRouting,
         referenceImages: Array.from(new Set(referenceImages)),
         temporaryReferenceImages,
         createdAt: nowIso(),

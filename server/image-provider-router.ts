@@ -6,7 +6,7 @@ export type ImageGenerationInput = {
   quality: string;
   optimizeChineseText: boolean;
   images: string[];
-  providerRouting?: 'junliai_only';
+  providerRouting?: 'junliai_only' | 'junliai_dedicated';
   upstreamModelOverride?: string;
   traceId?: string;
   requestContext?: {
@@ -331,9 +331,10 @@ export function createImageProviderRouter(options: RouterOptions) {
 
   async function generate(input: ImageGenerationInput) {
     const traceId = input.traceId || crypto.randomUUID();
-    const junliaiOnly = input.providerRouting === 'junliai_only';
+    const dedicatedJunliai = input.providerRouting === 'junliai_dedicated';
+    const junliaiOnly = input.providerRouting === 'junliai_only' || dedicatedJunliai;
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
-    const primaryEnabled = options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true;
+    const primaryEnabled = dedicatedJunliai || (options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true);
     const candidates = primaryCandidates(input);
     const primaryEligible =
       primaryConfigured &&
@@ -353,12 +354,12 @@ export function createImageProviderRouter(options: RouterOptions) {
 
     const currentTime = now();
     for (const upstreamModel of candidates) {
-      const modelEnabled = options.isPrimaryModelEnabled
+      const modelEnabled = dedicatedJunliai || (options.isPrimaryModelEnabled
         ? await options.isPrimaryModelEnabled(input, upstreamModel)
-        : true;
+        : true);
       if (!modelEnabled) continue;
       const state = await readState(upstreamModel);
-      if (state.openUntil > currentTime) continue;
+      if (!dedicatedJunliai && state.openUntil > currentTime) continue;
 
       const primaryStartedAt = now();
       try {

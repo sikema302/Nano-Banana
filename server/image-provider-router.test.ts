@@ -768,6 +768,52 @@ test('a Junliai-only API key never switches to another model or fallback provide
   assert.equal(fallbackCalls, 0);
 });
 
+test('the dedicated Junli route ignores admin switches and an open circuit', async () => {
+  const store = createStore();
+  await store.set({
+    consecutiveFailures: 5,
+    openUntil: Date.now() + 60_000,
+    reason: 'quota',
+    updatedAt: new Date().toISOString(),
+  }, 'nano-banana-pro');
+  let fallbackCalls = 0;
+  let requestedModel = '';
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'test-key',
+    primaryModel: 'firefly-gpt-image-2',
+    primaryModels: { Nano_Banana_Pro: 'nano-banana-pro' },
+    isPrimaryEnabled: async () => false,
+    isPrimaryModelEnabled: async () => false,
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+    fetchImpl: async (_url, init) => {
+      requestedModel = String(JSON.parse(String(init?.body)).model || '');
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
+  });
+
+  const result = await router.generate({
+    ...input,
+    modelId: 'Nano_Banana_Pro',
+    imageSize: '2K',
+    providerRouting: 'junliai_dedicated',
+    upstreamModelOverride: 'nano-banana-pro',
+  });
+
+  assert.equal(result, 'data:image/png;base64,aW1hZ2U=');
+  assert.equal(requestedModel, 'nano-banana-pro');
+  assert.equal(fallbackCalls, 0);
+});
+
 test('a Junliai-only API key does not fall back when the Junliai route is unavailable', async () => {
   let fallbackCalls = 0;
   const router = createImageProviderRouter({
