@@ -390,7 +390,7 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const MAX_REFERENCE_IMAGE_COUNT = 9;
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
-const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 5));
+const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 3));
 const THUMBNAIL_RETENTION_DAYS = Math.max(
   ORIGINAL_IMAGE_RETENTION_DAYS,
   Number(process.env.THUMBNAIL_RETENTION_DAYS || process.env.IMAGE_RETENTION_DAYS || 15),
@@ -8297,7 +8297,7 @@ async function start() {
   app.post('/api/admin/image-cleanup', requireAuth, requireAdmin, async (req, res) => {
     try {
       const requestedRetentionDays = Number(req.body?.retentionDays ?? ORIGINAL_IMAGE_RETENTION_DAYS);
-      const retentionDays = requestedRetentionDays === 3 ? 3 : ORIGINAL_IMAGE_RETENTION_DAYS;
+      const retentionDays = requestedRetentionDays === 2 ? 2 : ORIGINAL_IMAGE_RETENTION_DAYS;
       const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(retentionDays);
       const deletedReferenceFiles = await purgeExpiredReferenceFiles(1);
       const diskPressure = await enforceDiskPressure(`manual-${retentionDays}d`);

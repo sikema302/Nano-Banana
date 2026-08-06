@@ -428,7 +428,7 @@ function formatNotificationTime(value: string) {
   }).replace(/\//g, '/');
 }
 
-const ORIGINAL_IMAGE_RETENTION_MS = 5 * 24 * 60 * 60 * 1000;
+const ORIGINAL_IMAGE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 function isOriginalImageExpired(createdAt: string) {
   const createdTime = new Date(createdAt).getTime();
@@ -3461,7 +3461,7 @@ function AdminView({
     }
   }
 
-  async function handleCleanupImages(retentionDays: 3 | 5) {
+  async function handleCleanupImages(retentionDays: 2 | 3) {
     if (cleaningImages !== null) return;
     const confirmed = window.confirm(`确认清理 ${retentionDays} 天前的本地图片和相关图片记录吗？`);
     if (!confirmed) return;
@@ -3993,17 +3993,17 @@ function AdminView({
                     className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                     type="button"
                     disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(5)}
+                    onClick={() => void handleCleanupImages(3)}
                   >
-                    {cleaningImages === 5 ? '清理中...' : '清理5天前图片'}
+                    {cleaningImages === 3 ? '清理中...' : '清理3天前图片'}
                   </button>
                   <button
                     className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                     type="button"
                     disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(3)}
+                    onClick={() => void handleCleanupImages(2)}
                   >
-                    {cleaningImages === 3 ? '清理中...' : '清理3天前图片'}
+                    {cleaningImages === 2 ? '清理中...' : '清理2天前图片'}
                   </button>
                 </div>
                 <span

@@ -847,7 +847,7 @@ export async function updateAdminProviderRouting(patch: Partial<ProviderRoutingC
   );
 }
 
-export async function cleanupAdminImages(retentionDays = 5) {
+export async function cleanupAdminImages(retentionDays = 3) {
   return request<{
     cleanup: AdminImageCleanupResult;
     imageStorage: AdminImageStorageStats;
