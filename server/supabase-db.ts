@@ -98,10 +98,40 @@ const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhr
 const IMAGE_RETENTION_DAYS = 7;
 const GENERATION_API_REQUEST_MS_SETTING_PREFIX = 'generation_api_request_ms:';
 const ADMIN_CREDIT_POOL_SETTING_KEY = 'admin_credit_pool_v2';
+const SUPABASE_REQUEST_TIMEOUT_MS = Math.max(1_000, Number(process.env.SUPABASE_REQUEST_TIMEOUT_MS || 12_000));
+const SUPABASE_RETRY_DELAY_MS = 250;
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
 let _supabase: SupabaseClient | null = null;
+
+function isRetryableSupabaseMethod(method: string) {
+  return method === 'GET' || method === 'HEAD' || method === 'PATCH' || method === 'PUT' || method === 'DELETE';
+}
+
+async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
+  const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  const maxAttempts = isRetryableSupabaseMethod(method) ? 2 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SUPABASE_REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, SUPABASE_RETRY_DELAY_MS));
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError || 'unknown error');
+  throw new Error(`Supabase ${method} request timed out or failed: ${detail}`);
+}
 
 function getSupabase(): SupabaseClient {
   if (!_supabase) {
@@ -117,6 +147,9 @@ function getSupabase(): SupabaseClient {
       },
       realtime: {
         transport: WebSocket as any,
+      },
+      global: {
+        fetch: fetchSupabaseWithTimeout,
       },
     });
   }
