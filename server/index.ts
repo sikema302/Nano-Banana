@@ -17,7 +17,12 @@ import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
 import { startSqliteBackupScheduler } from './sqlite-backup.js';
-import { ADMIN_OVERVIEW_RECORDS_SQL } from './sqlite-admin-queries.js';
+import {
+  ADMIN_OVERVIEW_RECORDS_SQL,
+  ADMIN_USERS_SQL,
+  ADMIN_USER_USAGE_TRENDS_SQL,
+  buildSqliteAdminUsersPage,
+} from './sqlite-admin-queries.js';
 import {
   downloadGeneratedImage,
   generatedImageDownloadError,
@@ -8557,7 +8562,28 @@ async function start() {
         return;
       }
 
-      res.json({ users: [], usersPage: toPagination(page, pageSize, 0) });
+      const payload = await withReadDb((db) => {
+        ensureSchema(db);
+        const rows = runQuery<Record<string, unknown>>(db, ADMIN_USERS_SQL);
+        const trendRows = runQuery<Record<string, unknown>>(db, ADMIN_USER_USAGE_TRENDS_SQL);
+        const apiKeys = normalizeApiKeyRecords(
+          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+        );
+        const result = buildSqliteAdminUsersPage({
+          rows,
+          trendRows,
+          apiKeys,
+          search,
+          sort,
+          page,
+          pageSize,
+        });
+        return {
+          users: result.users,
+          usersPage: toPagination(page, pageSize, result.total),
+        };
+      });
+      res.json(payload);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch users failed' });
     }
