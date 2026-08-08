@@ -5242,13 +5242,6 @@ async function start() {
     startBusinessDataBackupScheduler();
   }
 
-  await runImageRetentionCleanup('startup');
-  if (!IS_VERCEL) {
-    setInterval(() => {
-      void runImageRetentionCleanup('interval');
-    }, IMAGE_CLEANUP_INTERVAL_MS);
-  }
-
   const app = express();
   app.set('trust proxy', 'loopback');
   const hasDistBuild = !IS_VERCEL && (await pathExists(path.join(DIST_DIR, 'index.html')));
@@ -9760,6 +9753,16 @@ async function start() {
 
   app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
+    // Maintenance must not delay the listener: a slow database or filesystem
+    // cleanup should never make the reverse proxy see the app as unavailable.
+    void runImageRetentionCleanup('startup').catch((error) => {
+      console.error('[image-cleanup:startup] failed', error);
+    });
+    if (!IS_VERCEL) {
+      setInterval(() => {
+        void runImageRetentionCleanup('interval');
+      }, IMAGE_CLEANUP_INTERVAL_MS);
+    }
     setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   return app;
