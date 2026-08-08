@@ -36,7 +36,6 @@ import {
 import {
   getActiveGptImagePricing,
   getVisionaryDocSyncStatus,
-  startVisionaryDocSyncScheduler,
 } from './visionary-doc-sync.js';
 import {
   createImageProviderRouter,
@@ -5114,9 +5113,13 @@ async function start() {
         console.error('Supabase schema initialization failed (will retry on first request):', schemaError);
       }
     } else {
-      const db = await getSupabaseDb();
-      await db.ensureRuntimeSchema();
-      await runUnifiedCreditMigrationSupabase();
+      void (async () => {
+        const db = await getSupabaseDb();
+        await db.ensureRuntimeSchema();
+        await runUnifiedCreditMigrationSupabase();
+      })().catch((schemaError) => {
+        console.error('Supabase schema initialization failed (server remains available):', schemaError);
+      });
     }
   } else if (!IS_VERCEL) {
     // SQLite 浠呭湪鎸佷箙鍖栨枃浠剁郴缁熺幆澧冧笅鍒濆鍖?    // await restoreSqliteFromSupabase();
@@ -5241,11 +5244,6 @@ async function start() {
       ]);
     },
   });
-  await startVisionaryDocSyncScheduler(visionaryDocSyncStore, {
-    baseUrl: VISIONARY_API_BASE_URL,
-    intervalHours: Number(process.env.VISIONARY_DOC_SYNC_INTERVAL_HOURS || 72),
-  });
-
   if (USE_SUPABASE && !IS_VERCEL) {
     startBusinessDataBackupScheduler();
   }
