@@ -125,7 +125,8 @@ jobs:
       - name: Back up and deploy
         run: |
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' bash -s" <<'REMOTE'
+            "$SERVER_USER@$SERVER_HOST" \
+            "deploy_log='/tmp/$APP_NAME-deploy.log'; SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' timeout --signal=TERM --kill-after=10s 10m bash -s >\"\$deploy_log\" 2>&1; deploy_status=\$?; cat \"\$deploy_log\"; rm -f \"\$deploy_log\"; exit \$deploy_status" <<'REMOTE'
           set -euo pipefail
           project='/var/www/nano-banana'
           backups="$project/.deploy-backups"

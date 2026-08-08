@@ -4,6 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Agent } from 'undici';
 import WebSocket from 'ws';
 import { getInviteRedemptionCredits } from './invite-redemption.js';
 
@@ -98,8 +99,19 @@ const INVITE_USER_PASSWORD_HASH = '$2b$10$/Xw/Ey1z9.jE5BtfDjHCBevDb4OKMFaovhlXhr
 const IMAGE_RETENTION_DAYS = 7;
 const GENERATION_API_REQUEST_MS_SETTING_PREFIX = 'generation_api_request_ms:';
 const ADMIN_CREDIT_POOL_SETTING_KEY = 'admin_credit_pool_v2';
-const SUPABASE_REQUEST_TIMEOUT_MS = Math.max(1_000, Number(process.env.SUPABASE_REQUEST_TIMEOUT_MS || 12_000));
+const SUPABASE_REQUEST_TIMEOUT_MS = Math.max(1_000, Number(process.env.SUPABASE_REQUEST_TIMEOUT_MS || 6_000));
 const SUPABASE_RETRY_DELAY_MS = 250;
+
+// Cloudflare occasionally leaves an apparently connected socket unable to
+// deliver a response on the production route. Fresh, bounded connections keep
+// one stale socket from stalling authentication for the full client timeout.
+const supabaseDispatcher = new Agent({
+  connections: 10,
+  pipelining: 0,
+  connect: { timeout: Math.min(5_000, SUPABASE_REQUEST_TIMEOUT_MS) },
+  headersTimeout: SUPABASE_REQUEST_TIMEOUT_MS,
+  bodyTimeout: SUPABASE_REQUEST_TIMEOUT_MS,
+});
 
 // ─── Supabase 客户端 ────────────────────────────────────────────────
 
@@ -118,7 +130,11 @@ async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: Request
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), SUPABASE_REQUEST_TIMEOUT_MS);
     try {
-      return await fetch(input, { ...init, signal: controller.signal });
+      return await fetch(input, {
+        ...init,
+        signal: controller.signal,
+        dispatcher: supabaseDispatcher,
+      } as RequestInit);
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {
