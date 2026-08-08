@@ -5660,30 +5660,54 @@ async function start() {
       }
 
       // SQLite 妯″紡
-      const user = await withWriteDb(async (db) => {
+      const readUser = await withReadDb(async (db) => {
         ensureSchema(db);
         const record = getOne<{
           id: number;
           username: string;
           password_hash: string;
-        }>(db, 'SELECT id, username, password_hash FROM users WHERE username = ?', [username]);
+          external_user_id: string | null;
+          credit_user_id: string | null;
+        }>(
+          db,
+          `
+            SELECT
+              u.id,
+              u.username,
+              u.password_hash,
+              m.supabase_user_id AS external_user_id,
+              c.user_id AS credit_user_id
+            FROM users u
+            LEFT JOIN user_migrations m ON m.legacy_user_id = u.id
+            LEFT JOIN user_credits c ON c.user_id = m.supabase_user_id
+            WHERE u.username = ?
+          `,
+          [username],
+        );
 
-        if (!record) {
-          return null;
-        }
+        if (!record) return null;
 
         const matches = await bcrypt.compare(password, String(record.password_hash || ''));
-        if (!matches) {
-          return null;
-        }
+        if (!matches) return null;
 
-        const externalUserId = await resolveExternalUserId(db, Number(record.id), String(record.username || username));
-        ensureUserCredits(db, externalUserId, String(record.username || username), 0);
         return {
-          id: externalUserId,
+          legacyUserId: Number(record.id),
           username: String(record.username || username),
+          externalUserId: normalizeString(record.external_user_id),
+          hasCredits: Boolean(record.credit_user_id),
         };
       });
+
+      const user = readUser && readUser.externalUserId && readUser.hasCredits
+        ? { id: readUser.externalUserId, username: readUser.username }
+        : readUser
+          ? await withWriteDb(async (db) => {
+              ensureSchema(db);
+              const externalUserId = await resolveExternalUserId(db, readUser.legacyUserId, readUser.username);
+              ensureUserCredits(db, externalUserId, readUser.username, 0);
+              return { id: externalUserId, username: readUser.username };
+            })
+          : null;
 
       if (!user) {
         res.status(401).json({ error: 'Invalid username or password' });
