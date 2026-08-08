@@ -2733,11 +2733,28 @@ function decryptPublicApiKey(payload: string | undefined) {
   }
 }
 
+let publicApiKeyRecordsCache: PublicApiKeyRecord[] | null = null;
+let publicApiKeyRecordsLoad: Promise<PublicApiKeyRecord[]> | null = null;
+
+function clonePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
+  return normalizeApiKeyRecords(records);
+}
+
 async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
   if (USE_SUPABASE) {
-    const db = await getSupabaseDb();
-    const raw = await db.getSetting(PUBLIC_API_KEYS_SETTING_KEY, '[]');
-    return normalizeApiKeyRecords(parseJsonSetting(raw, []));
+    if (publicApiKeyRecordsCache) return clonePublicApiKeyRecords(publicApiKeyRecordsCache);
+    if (!publicApiKeyRecordsLoad) {
+      publicApiKeyRecordsLoad = (async () => {
+        const db = await getSupabaseDb();
+        const raw = await db.getSetting(PUBLIC_API_KEYS_SETTING_KEY, '[]');
+        const records = normalizeApiKeyRecords(parseJsonSetting(raw, []));
+        publicApiKeyRecordsCache = records;
+        return records;
+      })().finally(() => {
+        publicApiKeyRecordsLoad = null;
+      });
+    }
+    return clonePublicApiKeyRecords(await publicApiKeyRecordsLoad);
   }
 
   return withReadDb((db) => {
@@ -2752,6 +2769,7 @@ async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.setSetting(PUBLIC_API_KEYS_SETTING_KEY, serialized);
+    publicApiKeyRecordsCache = clonePublicApiKeyRecords(records);
     return;
   }
 
@@ -3081,11 +3099,28 @@ function normalizePublicAsyncTasks(value: unknown) {
     .filter((item): item is PublicAsyncGenerationTask => Boolean(item));
 }
 
+let publicAsyncTasksCache: PublicAsyncGenerationTask[] | null = null;
+let publicAsyncTasksLoad: Promise<PublicAsyncGenerationTask[]> | null = null;
+
+function clonePublicAsyncTasks(tasks: PublicAsyncGenerationTask[]) {
+  return normalizePublicAsyncTasks(tasks);
+}
+
 async function readPublicAsyncTasks(): Promise<PublicAsyncGenerationTask[]> {
   if (USE_SUPABASE) {
-    const db = await getSupabaseDb();
-    const raw = await db.getSetting(PUBLIC_ASYNC_TASKS_SETTING_KEY, '[]');
-    return normalizePublicAsyncTasks(parseJsonSetting(raw, []));
+    if (publicAsyncTasksCache) return clonePublicAsyncTasks(publicAsyncTasksCache);
+    if (!publicAsyncTasksLoad) {
+      publicAsyncTasksLoad = (async () => {
+        const db = await getSupabaseDb();
+        const raw = await db.getSetting(PUBLIC_ASYNC_TASKS_SETTING_KEY, '[]');
+        const tasks = normalizePublicAsyncTasks(parseJsonSetting(raw, []));
+        publicAsyncTasksCache = tasks;
+        return tasks;
+      })().finally(() => {
+        publicAsyncTasksLoad = null;
+      });
+    }
+    return clonePublicAsyncTasks(await publicAsyncTasksLoad);
   }
 
   return withReadDb((db) => {
@@ -3107,6 +3142,7 @@ async function writePublicAsyncTasks(tasks: PublicAsyncGenerationTask[]) {
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.setSetting(PUBLIC_ASYNC_TASKS_SETTING_KEY, serialized);
+    publicAsyncTasksCache = clonePublicAsyncTasks(retained);
     return;
   }
 

@@ -1575,26 +1575,7 @@ export async function getSetting(key: string, fallback: string): Promise<string>
     .eq('key', key)
     .maybeSingle();
   if (error) throw new Error(`Get setting failed: ${error.message}`);
-  if (!data) {
-    // 设置默认值
-    const { error: insertError } = await getSupabase().from('app_settings').insert({
-      key,
-      value: fallback,
-      updated_at: nowIso(),
-    });
-    if (insertError) {
-      // Another request may have created the row between the read and insert.
-      const { data: existing, error: retryError } = await getSupabase()
-        .from('app_settings')
-        .select('value')
-        .eq('key', key)
-        .maybeSingle();
-      if (retryError) throw new Error(`Get setting failed: ${retryError.message}`);
-      if (existing) return String((existing as { value: string }).value);
-      throw new Error(`Initialize setting failed: ${insertError.message}`);
-    }
-    return fallback;
-  }
+  if (!data) return fallback;
   return String((data as { value: string }).value);
 }
 
