@@ -55,7 +55,7 @@ VISIONARY_GPT_IMAGE_2_API_KEY=your_gpt_image_2_standard_key
 VISIONARY_GPT_IMAGE_2_HD_API_KEY=your_gpt_image_2_2k_4k_key
 JWT_SECRET=your_random_secret
 ADMIN_USERNAMES=admin
-IMAGE_RETENTION_DAYS=7
+IMAGE_RETENTION_DAYS=3
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ALLOW_MULTI_DEVICE_LOGIN=true
 ```
@@ -79,7 +79,7 @@ Notes:
 - `VITE_*` variables are safe for the frontend build.
 - Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT-image-2 Plus standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT-image-2 Plus 2K/4K. `VISIONARY_API_KEY` remains a fallback.
 - GPT-image-2 pricing is checked against Visionary's machine-readable configuration every 72 hours. Valid pricing changes are applied without a redeploy; broader API documentation changes are flagged in the admin dashboard for review. Configure the interval with `VISIONARY_DOC_SYNC_INTERVAL_HOURS`.
-- Image retention defaults to 7 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
+- Image retention defaults to 3 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
 - Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
 
 ## Build and checks

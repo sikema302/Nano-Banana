@@ -301,9 +301,9 @@ const emptyImageStorageStats: AdminImageStorageStats = {
   referenceBytes: 0,
   referenceCount: 0,
   referenceStorageEnabled: false,
-  retentionDays: 15,
-  originalRetentionDays: 5,
-  thumbnailRetentionDays: 15,
+  retentionDays: 3,
+  originalRetentionDays: 3,
+  thumbnailRetentionDays: 3,
   diskUsagePercent: 0,
   diskWarningPercent: 70,
   diskEmergencyPercent: 85,
@@ -3461,9 +3461,10 @@ function AdminView({
     }
   }
 
-  async function handleCleanupImages(retentionDays: 2 | 3) {
+  async function handleCleanupImages(retentionDays: 0.5 | 2) {
     if (cleaningImages !== null) return;
-    const confirmed = window.confirm(`确认清理 ${retentionDays} 天前的本地图片和相关图片记录吗？`);
+    const retentionLabel = retentionDays === 0.5 ? '12小时前' : '2天前';
+    const confirmed = window.confirm(`确认清理 ${retentionLabel}的本地图片和相关图片记录吗？`);
     if (!confirmed) return;
 
     setCleaningImages(retentionDays);
@@ -3993,17 +3994,17 @@ function AdminView({
                     className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                     type="button"
                     disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(3)}
+                    onClick={() => void handleCleanupImages(2)}
                   >
-                    {cleaningImages === 3 ? '清理中...' : '清理3天前图片'}
+                    {cleaningImages === 2 ? '清理中...' : '清理2天前图片'}
                   </button>
                   <button
                     className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                     type="button"
                     disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(2)}
+                    onClick={() => void handleCleanupImages(0.5)}
                   >
-                    {cleaningImages === 2 ? '清理中...' : '清理2天前图片'}
+                    {cleaningImages === 0.5 ? '清理中...' : '清理12小时前的图片'}
                   </button>
                 </div>
                 <span
@@ -5616,8 +5617,9 @@ export default function App() {
       imageStorageStats: payload.imageStorage,
     }));
     const cleanup = payload.cleanup;
+    const retentionLabel = cleanup.retentionDays === 0.5 ? '12小时前' : `${cleanup.retentionDays}天前`;
     setNotice(
-      `已清理${cleanup.retentionDays}天前图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
+      `已清理${retentionLabel}图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
     );
     void loadAdminSection('dashboard');
   }
