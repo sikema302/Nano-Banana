@@ -121,7 +121,7 @@ function isRetryableSupabaseMethod(method: string) {
   return method === 'GET' || method === 'HEAD' || method === 'PATCH' || method === 'PUT' || method === 'DELETE';
 }
 
-async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
+export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
   const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
   const maxAttempts = isRetryableSupabaseMethod(method) ? 2 : 1;
   let lastError: unknown;
@@ -130,11 +130,17 @@ async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: Request
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), SUPABASE_REQUEST_TIMEOUT_MS);
     try {
-      return await fetch(input, {
+      const response = await fetch(input, {
         ...init,
         signal: controller.signal,
         dispatcher: supabaseDispatcher,
       } as RequestInit);
+      const body = await response.arrayBuffer();
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {

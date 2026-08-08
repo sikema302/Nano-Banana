@@ -110,6 +110,7 @@ jobs:
           done
           echo '=== supabase routes ==='
           supabase_host="$(node -e "const fs=require('fs'); const line=fs.readFileSync('.env.local','utf8').split(/\\r?\\n/).find(item=>item.startsWith('SUPABASE_URL=')); if(line) console.log(new URL(line.slice(line.indexOf('=')+1).replace(/^['\\\"]|['\\\"]$/g,'')).hostname)")"
+          supabase_key="$(node -e "const fs=require('fs'); const line=fs.readFileSync('.env.local','utf8').split(/\\r?\\n/).find(item=>item.startsWith('SUPABASE_SERVICE_ROLE_KEY=')); if(line) process.stdout.write(line.slice(line.indexOf('=')+1).replace(/^['\\\"]|['\\\"]$/g,''))")"
           route_number=0
           while read -r supabase_ip; do
             [ -n "$supabase_ip" ] || continue
@@ -117,6 +118,11 @@ jobs:
             curl --connect-timeout 5 --max-time 12 --resolve "$supabase_host:443:$supabase_ip" \
               -s -o /dev/null -w "route=$route_number http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" \
               "https://$supabase_host/rest/v1/" || echo "route=$route_number result=unreachable"
+            curl --connect-timeout 5 --max-time 12 --resolve "$supabase_host:443:$supabase_ip" \
+              -s -o /dev/null -H "apikey: $supabase_key" -H "Authorization: Bearer $supabase_key" \
+              -w "db_route=$route_number http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" \
+              "https://$supabase_host/rest/v1/users?select=id&limit=1" \
+              || echo "db_route=$route_number result=unreachable"
           done < <(getent ahostsv4 "$supabase_host" | awk '{print $1}' | sort -u)
           curl --connect-timeout 2 --max-time 5 -sS -o /dev/null \
             -w 'local_health=%{http_code} total=%{time_total}s\n' http://127.0.0.1:3001/api/health || true
