@@ -16,6 +16,7 @@ import sharp from 'sharp';
 import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
+import { startSqliteBackupScheduler } from './sqlite-backup.js';
 import {
   downloadGeneratedImage,
   generatedImageDownloadError,
@@ -385,6 +386,7 @@ const THUMBNAILS_DIR = path.join(UPLOADS_DIR, 'thumbnails');
 const REFERENCES_DIR = path.join(UPLOADS_DIR, 'references');
 const EXAMPLES_DIR = path.join(UPLOADS_DIR, 'examples');
 const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
+const DATABASE_MIGRATION_LOCK_FILE = path.join(ROOT_DIR, '.runtime', 'database-migration.lock');
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const MAX_REFERENCE_IMAGE_COUNT = 9;
@@ -1958,7 +1960,9 @@ async function openDatabase() {
 }
 
 async function saveDatabase(db: SqlDatabase) {
-  await fs.writeFile(DB_FILE, db.export());
+  const temporaryPath = `${DB_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(temporaryPath, db.export(), { mode: 0o600 });
+  await fs.rename(temporaryPath, DB_FILE);
 }
 
 function isSupabasePersistenceEnabled() {
@@ -3937,12 +3941,12 @@ async function ensureRuntimeSchema() {
     ensureSchema(db);
 
     const adminUsername = 'admin';
-    const passwordHash = await bcrypt.hash('admin654', 10);
     let adminUser = getOne<{ id: number; username: string }>(db, 'SELECT id, username FROM users WHERE username = ?', [
       adminUsername,
     ]);
 
     if (!adminUser) {
+      const passwordHash = await bcrypt.hash('admin654', 10);
       db.run('INSERT INTO users (username, password_hash, email, created_at) VALUES (?, ?, ?, ?)', [
         adminUsername,
         passwordHash,
@@ -3950,8 +3954,6 @@ async function ensureRuntimeSchema() {
         nowIso(),
       ]);
       adminUser = { id: lastInsertId(db), username: adminUsername };
-    } else {
-      db.run('UPDATE users SET password_hash = ? WHERE username = ?', [passwordHash, adminUsername]);
     }
 
     const adminUserId = await resolveExternalUserId(db, adminUser.id, adminUsername);
@@ -5299,6 +5301,13 @@ async function start() {
   });
   if (USE_SUPABASE && !IS_VERCEL) {
     startBusinessDataBackupScheduler();
+  } else if (!IS_VERCEL) {
+    startSqliteBackupScheduler({
+      sourceFile: DB_FILE,
+      backupDir: path.join(DATA_DIR, 'sqlite-backups'),
+      label: 'daily',
+      retentionCount: 14,
+    });
   }
 
   const app = express();
@@ -5320,6 +5329,17 @@ async function start() {
       return;
     }
     next();
+  });
+
+  app.use(async (req, res, next) => {
+    const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    const isDatabaseRoute = req.path.startsWith('/api') || req.path.startsWith('/v1');
+    if (!isMutation || !isDatabaseRoute || !(await pathExists(DATABASE_MIGRATION_LOCK_FILE))) {
+      next();
+      return;
+    }
+    res.setHeader('Retry-After', '30');
+    res.status(503).json({ error: 'Database migration is in progress. Please retry shortly.' });
   });
 
   app.use((req, res, next) => {

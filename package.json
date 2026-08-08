@@ -9,6 +9,7 @@
     "dev:all": "concurrently \"npm run dev:server\" \"npm run dev\"",
     "start": "tsx server/index.ts",
     "db:sync:supabase": "tsx scripts/sync-sqlite-to-supabase.ts",
+    "db:migrate:sqlite": "tsx scripts/migrate-supabase-to-sqlite.ts",
     "backup:data": "tsx scripts/backup-business-data.ts",
     "verify:backup": "tsx scripts/backup-business-data.ts --verify",
     "restore:data": "tsx scripts/restore-business-data.ts",

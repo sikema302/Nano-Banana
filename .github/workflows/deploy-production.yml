@@ -13,13 +13,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       SERVER_HOST: 154.9.24.91
       SSH_PORT: "2223"
       SERVER_USER: root
       PROJECT_PATH: /var/www/nano-banana
       APP_NAME: nano-banana
+      MIGRATE_TO_SQLITE: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[migrate-sqlite]') }}
       SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
       VISIONARY_NANO_LITE_API_KEY: ${{ secrets.VISIONARY_NANO_LITE_API_KEY }}
       FLUX_BANANA_API_KEY: ${{ secrets.FLUX_BANANA_API_KEY }}
@@ -95,6 +96,13 @@ jobs:
           uptime
           free -m
           swapon --show --noheadings --bytes | awk '{print "swap_bytes=" $3 " used_bytes=" $4}'
+          df -h /
+          for item in data uploads node_modules .deploy-backups; do
+            if [ -e "$PROJECT_PATH/$item" ]; then
+              du -xsh "$PROJECT_PATH/$item"
+            fi
+          done
+          du -xsh /root/.pm2/logs 2>/dev/null || true
           echo '=== pm2 ==='
           pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { for (const item of JSON.parse(raw).filter(entry => entry.name === process.env.APP_NAME)) { const env=item.pm2_env || {}; console.log(JSON.stringify({name:item.name,pid:item.pid,status:env.status,restarts:env.restart_time,unstableRestarts:env.unstable_restarts,exitCode:env.exit_code,uptime:env.pm_uptime,memory:item.monit?.memory,cpu:item.monit?.cpu})); } });"
           error_log="/root/.pm2/logs/$APP_NAME-error.log"
@@ -136,6 +144,7 @@ jobs:
           project='/var/www/nano-banana'
           backups="$project/.deploy-backups"
           timestamp="$(date +%Y%m%d-%H%M%S)"
+          migrate_to_sqlite="${MIGRATE_TO_SQLITE:-false}"
           nano_lite_key_file='/tmp/nano-banana-nano-lite-key'
           flux_banana_key_file='/tmp/nano-banana-flux-banana-key'
           ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
@@ -206,6 +215,50 @@ jobs:
             echo 'Dependencies unchanged; skipping npm ci.'
           fi
 
+          migration_lock="$project/.runtime/database-migration.lock"
+          migration_env_backup="$backups/$timestamp-pre-sqlite.env"
+          migration_switched=false
+          deploy_complete=false
+          cleanup_migration() {
+            set +e
+            if [ "$migration_switched" = true ] && [ "$deploy_complete" != true ] && [ -f "$migration_env_backup" ]; then
+              cp "$migration_env_backup" .env.local
+              chmod 600 .env.local
+              pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000 >/dev/null 2>&1 || true
+            fi
+            rm -f "$migration_lock" data/app.sqlite.next
+          }
+          trap cleanup_migration EXIT
+
+          if [ "$migrate_to_sqlite" = true ]; then
+            current_provider="$(grep -E '^DATABASE_PROVIDER=' .env.local | tail -n 1 | cut -d= -f2- | tr -d '\"' | tr -d "'" | tr '[:upper:]' '[:lower:]' || true)"
+            if [ "$current_provider" = sqlite ]; then
+              echo 'Production already uses SQLite; migration is not repeated.'
+            else
+              echo 'Starting protected Supabase to SQLite migration.'
+              mkdir -p .runtime data/business-backups data/migration-backups
+              cp .env.local "$migration_env_backup"
+              chmod 600 "$migration_env_backup"
+              touch "$migration_lock"
+              # Allow in-flight writes to finish before taking the final snapshot.
+              sleep 15
+              timeout --signal=TERM --kill-after=10s 8m npm run backup:data
+              rm -f data/app.sqlite.next
+              timeout --signal=TERM --kill-after=10s 10m npm run db:migrate:sqlite -- --output data/app.sqlite.next --backup-dir data/migration-backups
+              test -s data/app.sqlite.next
+              if [ -f data/app.sqlite ]; then
+                cp data/app.sqlite "$backups/$timestamp-pre-sqlite.sqlite"
+                chmod 600 "$backups/$timestamp-pre-sqlite.sqlite"
+              fi
+              mv data/app.sqlite.next data/app.sqlite
+              chmod 600 data/app.sqlite
+              sed -i '/^DATABASE_PROVIDER=/d' .env.local
+              printf 'DATABASE_PROVIDER="sqlite"\n' >> .env.local
+              chmod 600 .env.local
+              migration_switched=true
+            fi
+          fi
+
           if ! pm2 describe nano-banana >/dev/null 2>&1; then
             pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 1 --wait-ready --listen-timeout 60000
           else
@@ -229,6 +282,7 @@ jobs:
               echo
               consecutive_ready=$((consecutive_ready + 1))
               if [ "$consecutive_ready" -ge 3 ]; then
+                deploy_complete=true
                 echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
                 exit 0
               fi
@@ -247,7 +301,7 @@ jobs:
           deploy_log="/tmp/$APP_NAME-deploy.log"
           deploy_status_file="/tmp/$APP_NAME-deploy.status"
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "APP_NAME='$APP_NAME' SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' bash -s" <<'REMOTE'
+            "$SERVER_USER@$SERVER_HOST" "APP_NAME='$APP_NAME' SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' MIGRATE_TO_SQLITE='$MIGRATE_TO_SQLITE' bash -s" <<'REMOTE'
           set -eu
           deploy_script="/tmp/$APP_NAME-deploy.sh"
           deploy_log="/tmp/$APP_NAME-deploy.log"
@@ -255,16 +309,16 @@ jobs:
           rm -f "$deploy_log" "$deploy_status_file" "$deploy_status_file.next"
           nohup sh -c '
             set +e
-            SERVER_CHANGED="$1" timeout --signal=TERM --kill-after=10s 10m bash "$2"
+            SERVER_CHANGED="$1" MIGRATE_TO_SQLITE="$4" timeout --signal=TERM --kill-after=10s 20m bash "$2"
             exit_code=$?
             printf "%s\n" "$exit_code" > "$3.next"
             mv "$3.next" "$3"
-          ' sh "$SERVER_CHANGED" "$deploy_script" "$deploy_status_file" \
+          ' sh "$SERVER_CHANGED" "$deploy_script" "$deploy_status_file" "$MIGRATE_TO_SQLITE" \
             </dev/null >"$deploy_log" 2>&1 &
           REMOTE
 
           deploy_status='running'
-          for attempt in $(seq 1 135); do
+          for attempt in $(seq 1 255); do
             deploy_status="$(sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
               "$SERVER_USER@$SERVER_HOST" "if [ -f '$deploy_status_file' ]; then cat '$deploy_status_file'; else printf running; fi")" \
               || deploy_status='running'
