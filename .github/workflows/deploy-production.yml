@@ -85,6 +85,43 @@ jobs:
             sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
               "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-flux-banana-key'"
 
+      - name: Capture sanitized production diagnostics
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" "PROJECT_PATH='$PROJECT_PATH' APP_NAME='$APP_NAME' bash -s" <<'REMOTE'
+          set +e
+          cd "$PROJECT_PATH"
+          echo '=== resources ==='
+          uptime
+          free -m
+          swapon --show --noheadings --bytes | awk '{print "swap_bytes=" $3 " used_bytes=" $4}'
+          echo '=== pm2 ==='
+          pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { for (const item of JSON.parse(raw).filter(entry => entry.name === process.env.APP_NAME)) { const env=item.pm2_env || {}; console.log(JSON.stringify({name:item.name,pid:item.pid,status:env.status,restarts:env.restart_time,unstableRestarts:env.unstable_restarts,exitCode:env.exit_code,uptime:env.pm_uptime,memory:item.monit?.memory,cpu:item.monit?.cpu})); } });"
+          error_log="/root/.pm2/logs/$APP_NAME-error.log"
+          for diagnostic in \
+            'schema_init:Supabase schema initialization failed' \
+            'user_query:Query user failed' \
+            'out_of_memory:ENOMEM|heap out of memory' \
+            'forced_exit:SIGKILL|exited with code'; do
+            category="${diagnostic%%:*}"
+            pattern="${diagnostic#*:}"
+            count="$(tail -n 2000 "$error_log" 2>/dev/null | grep -Ec "$pattern" || true)"
+            echo "$category=$count"
+          done
+          echo '=== supabase routes ==='
+          supabase_host="$(node -e "const fs=require('fs'); const line=fs.readFileSync('.env.local','utf8').split(/\\r?\\n/).find(item=>item.startsWith('SUPABASE_URL=')); if(line) console.log(new URL(line.slice(line.indexOf('=')+1).replace(/^['\\\"]|['\\\"]$/g,'')).hostname)")"
+          route_number=0
+          while read -r supabase_ip; do
+            [ -n "$supabase_ip" ] || continue
+            route_number=$((route_number + 1))
+            curl --connect-timeout 5 --max-time 12 --resolve "$supabase_host:443:$supabase_ip" \
+              -s -o /dev/null -w "route=$route_number http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" \
+              "https://$supabase_host/rest/v1/" || echo "route=$route_number result=unreachable"
+          done < <(getent ahostsv4 "$supabase_host" | awk '{print $1}' | sort -u)
+          curl --connect-timeout 2 --max-time 5 -sS -o /dev/null \
+            -w 'local_health=%{http_code} total=%{time_total}s\n' http://127.0.0.1:3001/api/health || true
+          REMOTE
+
       - name: Back up and deploy
         run: |
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
@@ -180,11 +217,17 @@ jobs:
           pm2 save >/dev/null
           # Startup includes database initialization and retention checks; allow
           # up to four minutes before treating a healthy PM2 restart as failed.
+          consecutive_ready=0
           for attempt in $(seq 1 120); do
             if curl -fsS http://127.0.0.1:3001/api/ready; then
               echo
-              echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
-              exit 0
+              consecutive_ready=$((consecutive_ready + 1))
+              if [ "$consecutive_ready" -ge 3 ]; then
+                echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
+                exit 0
+              fi
+            else
+              consecutive_ready=0
             fi
             sleep 2
           done
@@ -193,4 +236,18 @@ jobs:
           REMOTE
 
       - name: Verify public health
-        run: curl -fsS --retry 5 --retry-delay 3 https://pixory.top/api/ready
+        run: |
+          consecutive_ready=0
+          for attempt in $(seq 1 15); do
+            if curl -fsS --connect-timeout 5 --max-time 15 https://pixory.top/api/ready; then
+              echo
+              consecutive_ready=$((consecutive_ready + 1))
+              if [ "$consecutive_ready" -ge 3 ]; then
+                exit 0
+              fi
+            else
+              consecutive_ready=0
+            fi
+            sleep 3
+          done
+          exit 1
