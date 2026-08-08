@@ -9751,8 +9751,11 @@ async function start() {
     return app;
   }
 
-  app.listen(port, host, () => {
+  const httpServer = app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
+    if (typeof process.send === 'function') {
+      process.send('ready');
+    }
     // Maintenance must not delay the listener: a slow database or filesystem
     // cleanup should never make the reverse proxy see the app as unavailable.
     void runImageRetentionCleanup('startup').catch((error) => {
@@ -9765,6 +9768,13 @@ async function start() {
     }
     setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
+  const shutdown = () => {
+    const forceExit = setTimeout(() => process.exit(1), 30_000);
+    forceExit.unref();
+    httpServer.close(() => process.exit(0));
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
   return app;
 }
 

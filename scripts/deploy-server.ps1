@@ -331,9 +331,9 @@ if [ '$skipInstallFlag' = '0' ]; then
   npm ci
 fi
 if pm2 describe '$AppName' >/dev/null 2>&1; then
-  pm2 restart '$AppName' --update-env
+  pm2 reload '$AppName' --update-env --wait-ready --listen-timeout 60000
 else
-  pm2 start server/index.ts --name '$AppName' --interpreter ./node_modules/.bin/tsx
+  pm2 start server/index.ts --name '$AppName' --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 2 --wait-ready --listen-timeout 60000
 fi
 pm2 save >/dev/null
 "@

@@ -149,9 +149,9 @@ jobs:
           fi
 
           if ! pm2 describe nano-banana >/dev/null 2>&1; then
-            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx
+            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 2 --wait-ready --listen-timeout 60000
           elif [ "$SERVER_CHANGED" = 'true' ] || [ "$dependencies_changed" = 'true' ]; then
-            pm2 restart nano-banana --update-env
+            pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000
           else
             echo 'Frontend-only release; skipping PM2 restart.'
           fi
