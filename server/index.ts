@@ -17,6 +17,7 @@ import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
 import { startSqliteBackupScheduler } from './sqlite-backup.js';
+import { ADMIN_OVERVIEW_RECORDS_SQL } from './sqlite-admin-queries.js';
 import {
   downloadGeneratedImage,
   generatedImageDownloadError,
@@ -7880,7 +7881,7 @@ async function start() {
       }
 
       // SQLite 妯″紡
-      const payload = await withWriteDb((db) => {
+      const payload = await withReadDb((db) => {
         ensureSchema(db);
         reclaimLowBalanceInviteCodes(db);
         const generationSummaries = runQuery<Record<string, unknown>>(
@@ -7931,7 +7932,16 @@ async function start() {
           "SELECT user_id, username, total_credits, used_credits FROM user_credits WHERE username != 'demo'",
         );
         const apiKeys = normalizeApiKeyRecords(
-          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+          parseJsonSetting(
+            String(
+              getOne<{ value: string }>(
+                db,
+                'SELECT value FROM app_settings WHERE key = ?',
+                [PUBLIC_API_KEYS_SETTING_KEY],
+              )?.value || '[]',
+            ),
+            [],
+          ),
         );
         const apiKeyById = new Map(apiKeys.map((item) => [item.id, item]));
         const creditsByUserId = new Map<string, CreditValues>(
@@ -8039,28 +8049,7 @@ async function start() {
         );
         const records = runQuery<Record<string, unknown>>(
           db,
-          `
-            SELECT
-              g.id,
-              g.user_id,
-              g.username,
-              g.prompt,
-              g.model_id,
-              g.model_name,
-              g.dimensions,
-              g.image_size,
-              g.image_path,
-              g.credits_used,
-              g.api_request_ms,
-              g.reference_images,
-              g.result_status,
-              g.result_message,
-              g.created_at,
-            FROM generation_requests g
-            WHERE g.username != 'demo'
-            ORDER BY datetime(g.created_at) DESC, g.id DESC
-            LIMIT ? OFFSET ?
-          `,
+          ADMIN_OVERVIEW_RECORDS_SQL,
           [recordsPageSize, (recordsPage - 1) * recordsPageSize],
         ).map(toGeneration);
 
