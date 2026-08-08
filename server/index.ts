@@ -1591,11 +1591,16 @@ function authSessionSettingKey(userId: string) {
   return `${AUTH_SESSION_SETTING_PREFIX}${sha256Digest(userId).slice(0, 40)}`;
 }
 
+const AUTH_SESSION_CACHE_TTL_MS = Math.max(1_000, Number(process.env.AUTH_SESSION_CACHE_TTL_MS || 5_000));
+const activeAuthSessionCache = new Map<string, { sessionId: string; expiresAt: number }>();
+const activeAuthSessionLoads = new Map<string, Promise<string>>();
+
 async function setActiveAuthSession(userId: string, sessionId: string) {
   const key = authSessionSettingKey(userId);
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.setSetting(key, sessionId);
+    activeAuthSessionCache.set(userId, { sessionId, expiresAt: Date.now() + AUTH_SESSION_CACHE_TTL_MS });
     return;
   }
   await withWriteDb((db) => {
@@ -1607,8 +1612,20 @@ async function setActiveAuthSession(userId: string, sessionId: string) {
 async function getActiveAuthSession(userId: string) {
   const key = authSessionSettingKey(userId);
   if (USE_SUPABASE) {
-    const db = await getSupabaseDb();
-    return db.getSetting(key, '');
+    const cached = activeAuthSessionCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
+    const existingLoad = activeAuthSessionLoads.get(userId);
+    if (existingLoad) return existingLoad;
+    const load = (async () => {
+      const db = await getSupabaseDb();
+      const sessionId = await db.getSetting(key, '');
+      activeAuthSessionCache.set(userId, { sessionId, expiresAt: Date.now() + AUTH_SESSION_CACHE_TTL_MS });
+      return sessionId;
+    })().finally(() => {
+      activeAuthSessionLoads.delete(userId);
+    });
+    activeAuthSessionLoads.set(userId, load);
+    return load;
   }
   return withReadDb((db) => {
     ensureSchema(db);
