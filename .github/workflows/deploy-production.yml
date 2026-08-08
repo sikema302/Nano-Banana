@@ -136,6 +136,21 @@ jobs:
           fi
           rm -f "$flux_banana_key_file"
 
+          # Keep the 2 GB production host from OOM-killing Node during image bursts.
+          if ! swapon --show | grep -q '/swapfile'; then
+            if [ ! -f /swapfile ]; then
+              fallocate -l 2G /swapfile
+              chmod 600 /swapfile
+              mkswap /swapfile
+            fi
+            swapon /swapfile
+          fi
+          grep -q '^/swapfile none swap' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          touch .env.local
+          sed -i '/^PUBLIC_ASYNC_CONCURRENCY=/d' .env.local
+          printf 'PUBLIC_ASYNC_CONCURRENCY="2"\n' >> .env.local
+          chmod 600 .env.local
+
           dependency_stamp='node_modules/.pixory-package-lock.sha256'
           current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
           installed_lock_hash="$(cat "$dependency_stamp" 2>/dev/null || true)"

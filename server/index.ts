@@ -421,7 +421,7 @@ const ADMIN_STATS_TIME_ZONE = normalizeEnvValue(process.env.ADMIN_STATS_TIME_ZON
 const PUBLIC_ASYNC_MAX_PENDING = Math.max(1, Math.min(1_000, Number(process.env.PUBLIC_ASYNC_MAX_PENDING || 100)));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.min(PUBLIC_ASYNC_MAX_PENDING, Number(process.env.PUBLIC_ASYNC_CONCURRENCY || 15)),
+  Math.min(PUBLIC_ASYNC_MAX_PENDING, Number(process.env.PUBLIC_ASYNC_CONCURRENCY || 2)),
 );
 
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
