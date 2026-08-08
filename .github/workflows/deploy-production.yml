@@ -122,11 +122,10 @@ jobs:
             -w 'local_health=%{http_code} total=%{time_total}s\n' http://127.0.0.1:3001/api/health || true
           REMOTE
 
-      - name: Back up and deploy
+      - name: Upload deployment script
         run: |
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" \
-            "deploy_log='/tmp/$APP_NAME-deploy.log'; SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' timeout --signal=TERM --kill-after=10s 10m bash -s >\"\$deploy_log\" 2>&1; deploy_status=\$?; cat \"\$deploy_log\"; rm -f \"\$deploy_log\"; exit \$deploy_status" <<'REMOTE'
+            "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-deploy.sh'" <<'REMOTE'
           set -euo pipefail
           project='/var/www/nano-banana'
           backups="$project/.deploy-backups"
@@ -232,9 +231,50 @@ jobs:
             fi
             sleep 2
           done
-          pm2 logs nano-banana --lines 80 --nostream
+          echo 'Readiness check did not become stable before the deployment deadline.'
           exit 1
           REMOTE
+
+      - name: Back up and deploy
+        run: |
+          deploy_script="/tmp/$APP_NAME-deploy.sh"
+          deploy_log="/tmp/$APP_NAME-deploy.log"
+          deploy_status_file="/tmp/$APP_NAME-deploy.status"
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" "APP_NAME='$APP_NAME' SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' bash -s" <<'REMOTE'
+          set -eu
+          deploy_script="/tmp/$APP_NAME-deploy.sh"
+          deploy_log="/tmp/$APP_NAME-deploy.log"
+          deploy_status_file="/tmp/$APP_NAME-deploy.status"
+          rm -f "$deploy_log" "$deploy_status_file" "$deploy_status_file.next"
+          nohup sh -c '
+            set +e
+            SERVER_CHANGED="$1" timeout --signal=TERM --kill-after=10s 10m bash "$2"
+            exit_code=$?
+            printf "%s\n" "$exit_code" > "$3.next"
+            mv "$3.next" "$3"
+          ' sh "$SERVER_CHANGED" "$deploy_script" "$deploy_status_file" \
+            </dev/null >"$deploy_log" 2>&1 &
+          REMOTE
+
+          deploy_status='running'
+          for attempt in $(seq 1 135); do
+            deploy_status="$(sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+              "$SERVER_USER@$SERVER_HOST" "if [ -f '$deploy_status_file' ]; then cat '$deploy_status_file'; else printf running; fi")" \
+              || deploy_status='running'
+            if [[ "$deploy_status" =~ ^[0-9]+$ ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" "cat '$deploy_log'; rm -f '$deploy_log' '$deploy_status_file' '$deploy_script'"
+          if ! [[ "$deploy_status" =~ ^[0-9]+$ ]]; then
+            echo 'Deployment status was not reported before the polling deadline.'
+            exit 1
+          fi
+          exit "$deploy_status"
 
       - name: Verify public health
         run: |
