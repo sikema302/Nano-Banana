@@ -5,7 +5,7 @@ param(
   [string]$ProjectPath = '/var/www/nano-banana',
   [string]$AppName = 'nano-banana',
   [string]$BackupsDir = '',
-  [string]$HealthUrl = 'http://154.9.24.91:3001/api/health',
+  [string]$HealthUrl = 'http://154.9.24.91:3001/api/ready',
   [string]$Password = '',
   [int]$KeepBackups = 2,
   [switch]$DeployChat2Api,
@@ -331,9 +331,10 @@ if [ '$skipInstallFlag' = '0' ]; then
   npm ci
 fi
 if pm2 describe '$AppName' >/dev/null 2>&1; then
+  pm2 scale '$AppName' 1
   pm2 reload '$AppName' --update-env --wait-ready --listen-timeout 60000
 else
-  pm2 start server/index.ts --name '$AppName' --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 2 --wait-ready --listen-timeout 60000
+  pm2 start server/index.ts --name '$AppName' --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 1 --wait-ready --listen-timeout 60000
 fi
 pm2 save >/dev/null
 "@

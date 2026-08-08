@@ -484,7 +484,13 @@ function getApiErrorMessage(payload: unknown, responseText: string) {
   return '服务接口返回异常';
 }
 
-async function request<T>(input: string, init: RequestInit = {}, auth = false): Promise<T> {
+function getApiErrorCode(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const code = (payload as Record<string, unknown>).code;
+  return typeof code === 'string' ? code : '';
+}
+
+async function request<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
   const headers = new Headers(init.headers || {});
   headers.set('Content-Type', 'application/json');
 
@@ -495,16 +501,39 @@ async function request<T>(input: string, init: RequestInit = {}, auth = false): 
     }
   }
 
-  const response = await fetch(toApiUrl(input), {
-    ...init,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const externalSignal = init.signal;
+  const abortFromCaller = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener('abort', abortFromCaller, { once: true });
+  }
 
-  const responseText = await response.text().catch(() => '');
+  let response: Response;
+  let responseText: string;
+  try {
+    response = await fetch(toApiUrl(input), {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+    responseText = await response.text();
+  } catch (error) {
+    if (controller.signal.aborted && !externalSignal?.aborted) {
+      throw new Error('请求超时，请稍后重试');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', abortFromCaller);
+  }
+
   const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
-    if (auth && response.status === 401) {
+    const errorCode = getApiErrorCode(payload);
+    if (auth && response.status === 401 && ['AUTH_TOKEN_INVALID', 'AUTH_SESSION_REPLACED'].includes(errorCode)) {
       clearSession();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('pixory:session-expired'));
@@ -587,6 +616,7 @@ export async function sendChatMessage(id: string, payload: { content: string; mo
     `/api/chat/conversations/${encodeURIComponent(id)}/messages`,
     { method: 'POST', body: JSON.stringify(payload) },
     true,
+    120_000,
   );
 }
 
@@ -739,6 +769,7 @@ export async function startGenerateImageJob(payload: {
       body: JSON.stringify(payload),
     },
     true,
+    10 * 60_000,
   );
   return {
     job: {

@@ -164,17 +164,22 @@ jobs:
           fi
 
           if ! pm2 describe nano-banana >/dev/null 2>&1; then
-            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 2 --wait-ready --listen-timeout 60000
-          elif [ "$SERVER_CHANGED" = 'true' ] || [ "$dependencies_changed" = 'true' ]; then
-            pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000
+            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 1 --wait-ready --listen-timeout 60000
           else
-            echo 'Frontend-only release; skipping PM2 restart.'
+            # One cluster instance keeps background schedulers singleton while
+            # PM2 reload still starts the replacement before stopping the old one.
+            pm2 scale nano-banana 1
+            if [ "$SERVER_CHANGED" = 'true' ] || [ "$dependencies_changed" = 'true' ]; then
+              pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000
+            else
+              echo 'Frontend-only release; skipping PM2 restart.'
+            fi
           fi
           pm2 save >/dev/null
           # Startup includes database initialization and retention checks; allow
           # up to four minutes before treating a healthy PM2 restart as failed.
           for attempt in $(seq 1 120); do
-            if curl -fsS http://127.0.0.1:3001/api/health; then
+            if curl -fsS http://127.0.0.1:3001/api/ready; then
               echo
               echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
               exit 0
@@ -186,4 +191,4 @@ jobs:
           REMOTE
 
       - name: Verify public health
-        run: curl -fsS --retry 5 --retry-delay 3 https://pixory.top/api/health
+        run: curl -fsS --retry 5 --retry-delay 3 https://pixory.top/api/ready

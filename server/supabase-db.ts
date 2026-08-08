@@ -347,8 +347,9 @@ export async function findUserByUsername(username: string): Promise<UserRow | nu
     .from('users')
     .select('id, username, password_hash, email, created_at')
     .eq('username', username)
-    .single();
-  if (error || !data) return null;
+    .maybeSingle();
+  if (error) throw new Error(`Query user failed: ${error.message}`);
+  if (!data) return null;
   return toUserRow(data as Record<string, unknown>);
 }
 
@@ -358,7 +359,8 @@ export async function findUserById(userId: string): Promise<UserRow | null> {
     .select('id, username, password_hash, email, created_at')
     .eq('id', userId)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) throw new Error(`Query user failed: ${error.message}`);
+  if (!data) return null;
   return toUserRow(data as Record<string, unknown>);
 }
 
@@ -471,9 +473,15 @@ export async function getUserCredits(userId: string): Promise<CreditSummary> {
     .from('user_credits')
     .select('total_credits, used_credits')
     .eq('user_id', userId)
-    .single();
-  if (error) return { totalCredits: 0, usedCredits: 0, remainingCredits: 0 };
+    .maybeSingle();
+  if (error) throw new Error(`Query credits failed: ${error.message}`);
+  if (!data) return { totalCredits: 0, usedCredits: 0, remainingCredits: 0 };
   return toCreditSummary(data as { total_credits: number; used_credits: number });
+}
+
+export async function checkConnection(): Promise<void> {
+  const { error } = await getSupabase().from('users').select('id').limit(1);
+  if (error) throw new Error(`Supabase readiness check failed: ${error.message}`);
 }
 
 export async function ensureUserCredits(

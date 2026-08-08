@@ -4925,11 +4925,7 @@ export default function App() {
       setUser(storedUser);
       void fetchMe()
         .then(setUser)
-        .catch(() => {
-          clearSession();
-          setUser(null);
-          setPromoCoupon(null);
-        })
+        .catch(() => undefined)
         .finally(() => setAuthInitialized(true));
     } else {
       setAuthInitialized(true);
@@ -5231,9 +5227,6 @@ export default function App() {
       setHistoryRecords(historyPayload.history);
       void loadPromoCoupon({ allowPopup: true });
     } catch (error) {
-      clearSession();
-      setUser(null);
-      setPromoCoupon(null);
       setNotice(error instanceof Error ? error.message : '登录状态已失效，请重新登录');
     } finally {
       setLoadingUserData(false);

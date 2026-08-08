@@ -2,7 +2,7 @@ param(
   [string]$Message = '',
   [string]$Branch = 'main',
   [string]$Repo = 'sikema302/Nano-Banana',
-  [string]$HealthUrl = 'https://pixory.top/api/health',
+  [string]$HealthUrl = 'https://pixory.top/api/ready',
   [int]$TimeoutMinutes = 25,
   [switch]$RunLocalChecks,
   [switch]$Force,

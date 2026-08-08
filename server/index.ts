@@ -1722,31 +1722,39 @@ function getVisionaryApiKeyLabel(modelId: string, imageSize: string) {
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing Bearer token' });
+    res.status(401).json({ code: 'AUTH_TOKEN_MISSING', error: 'Missing Bearer token' });
     return;
   }
 
+  let payload: AuthUser;
   try {
-    const payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
-    const userId = String(payload.userId);
-    const sessionId = normalizeString(payload.sessionId);
-    if (!sessionId) {
-      res.status(401).json({ error: 'Invalid or expired token' });
-      return;
-    }
-    if (!ALLOW_MULTI_DEVICE_LOGIN && (await getActiveAuthSession(userId)) !== sessionId) {
-      res.status(401).json({ error: 'This account has signed in on another device' });
-      return;
-    }
-    req.authUser = {
-      userId,
-      username: String(payload.username),
-      sessionId,
-    };
-    next();
+    payload = jwt.verify(header.slice(7), tokenSecret) as AuthUser;
   } catch {
-    res.status(401).json({ error: 'Invalid or expired token' });
+    res.status(401).json({ code: 'AUTH_TOKEN_INVALID', error: 'Invalid or expired token' });
+    return;
   }
+
+  const userId = String(payload.userId);
+  const sessionId = normalizeString(payload.sessionId);
+  if (!sessionId) {
+    res.status(401).json({ code: 'AUTH_TOKEN_INVALID', error: 'Invalid or expired token' });
+    return;
+  }
+  if (!ALLOW_MULTI_DEVICE_LOGIN) {
+    try {
+      if ((await getActiveAuthSession(userId)) !== sessionId) {
+        res.status(401).json({ code: 'AUTH_SESSION_REPLACED', error: 'This account has signed in on another device' });
+        return;
+      }
+    } catch (error) {
+      console.error('[auth] session lookup failed:', error);
+      res.status(503).json({ code: 'AUTH_SESSION_CHECK_FAILED', error: 'Authentication service temporarily unavailable' });
+      return;
+    }
+  }
+
+  req.authUser = { userId, username: String(payload.username), sessionId };
+  next();
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -5308,6 +5316,23 @@ async function start() {
     });
   });
 
+  app.get('/api/ready', async (_req, res) => {
+    try {
+      if (USE_SUPABASE) {
+        await (await getSupabaseDb()).checkConnection();
+      } else {
+        await withReadDb((db) => {
+          ensureSchema(db);
+          db.exec('SELECT 1');
+        });
+      }
+      res.json({ ok: true, databaseProvider: DATABASE_PROVIDER });
+    } catch (error) {
+      console.error('[ready] database check failed:', error);
+      res.status(503).json({ ok: false, databaseProvider: DATABASE_PROVIDER });
+    }
+  });
+
   app.get('/api/notifications', requireAuth, async (req, res) => {
     try {
       res.json(await notificationService.listForUser(req.authUser!.userId));
@@ -5538,18 +5563,27 @@ async function start() {
           return;
         }
 
-        const matches = await bcrypt.compare(password, record.password_hash);
+        const [matches, credits] = await Promise.all([
+          bcrypt.compare(password, record.password_hash),
+          db.getUserCredits(record.id),
+        ]);
         if (!matches) {
           res.status(401).json({ error: 'Invalid username or password' });
           return;
         }
 
-        await db.ensureUserCredits(record.id, record.username, 0);
         const authUser = { userId: record.id, username: record.username };
+        const token = await issueExclusiveToken(authUser);
+        void db.ensureUserCredits(record.id, record.username, 0).catch((error) => {
+          console.error('[auth] background credit maintenance failed:', error);
+        });
 
         res.json({
-          token: await issueExclusiveToken(authUser),
-          user: await getPublicUser(authUser),
+          token,
+          user: {
+            ...toPublicUser(authUser),
+            creditsRemaining: credits.remainingCredits,
+          },
         });
         return;
       }
@@ -5764,16 +5798,12 @@ async function start() {
   });
 
   app.get('/api/auth/me', requireAuth, async (req, res) => {
-    if (USE_SUPABASE) {
-      const db = await getSupabaseDb();
-      await db.reclaimLowBalanceInviteCodes();
-    } else {
-      await withWriteDb((db) => {
-        ensureSchema(db);
-        reclaimLowBalanceInviteCodes(db);
-      });
+    try {
+      res.json({ user: await getPublicUser(req.authUser!) });
+    } catch (error) {
+      console.error('[auth] load current user failed:', error);
+      res.status(503).json({ code: 'AUTH_PROFILE_UNAVAILABLE', error: 'User profile is temporarily unavailable' });
     }
-    res.json({ user: await getPublicUser(req.authUser!) });
   });
 
   // 鈹€鈹€鈹€ 妯″瀷鍒楄〃 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
