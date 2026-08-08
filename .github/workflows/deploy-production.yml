@@ -168,7 +168,10 @@ jobs:
           else
             # One cluster instance keeps background schedulers singleton while
             # PM2 reload still starts the replacement before stopping the old one.
-            pm2 scale nano-banana 1
+            pm2_instance_count="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
+            if [ "$pm2_instance_count" -gt 1 ]; then
+              pm2 scale nano-banana 1
+            fi
             if [ "$SERVER_CHANGED" = 'true' ] || [ "$dependencies_changed" = 'true' ]; then
               pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000
             else

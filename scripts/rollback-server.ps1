@@ -161,7 +161,10 @@ if [ '$skipInstallFlag' = '0' ]; then
   npm ci
 fi
 if pm2 describe '$AppName' >/dev/null 2>&1; then
-  pm2 scale '$AppName' 1
+  pm2_instance_count=`$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === '$AppName').length));")
+  if [ "`$pm2_instance_count" -gt 1 ]; then
+    pm2 scale '$AppName' 1
+  fi
   pm2 reload '$AppName' --update-env --wait-ready --listen-timeout 60000
 else
   pm2 start server/index.ts --name '$AppName' --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 1 --wait-ready --listen-timeout 60000
