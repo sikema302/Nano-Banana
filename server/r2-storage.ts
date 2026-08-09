@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -16,7 +17,7 @@ export type R2Config = {
   endpoint: string;
 };
 
-type R2Command = PutObjectCommand | HeadObjectCommand | DeleteObjectCommand;
+type R2Command = PutObjectCommand | HeadObjectCommand | DeleteObjectCommand | ListObjectsV2Command;
 
 export type R2CommandClient = {
   send(command: R2Command): Promise<Record<string, unknown>>;
@@ -158,6 +159,34 @@ export class R2ObjectStorage {
         Key: key,
       }),
     );
+  }
+
+  async listObjectSizes(prefixes: string[]) {
+    const objects = new Map<string, number>();
+    for (const prefix of prefixes) {
+      let continuationToken: string | undefined;
+      do {
+        const page = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.config.bucketName,
+            Prefix: prefix,
+            ContinuationToken: continuationToken,
+          }),
+        );
+        const contents = Array.isArray(page.Contents)
+          ? page.Contents as Array<{ Key?: unknown; Size?: unknown }>
+          : [];
+        for (const item of contents) {
+          const key = typeof item.Key === 'string' ? item.Key : '';
+          const size = Number(item.Size);
+          if (key && Number.isFinite(size)) objects.set(key, size);
+        }
+        continuationToken = typeof page.NextContinuationToken === 'string'
+          ? page.NextContinuationToken
+          : undefined;
+      } while (continuationToken);
+    }
+    return objects;
   }
 
   async verifyRoundTrip() {

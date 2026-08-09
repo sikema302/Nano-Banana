@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 
 import {
   createR2ObjectStorage,
@@ -70,4 +70,28 @@ test('rejects an upload when the remote object size does not match', async () =>
     storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3])),
     /R2 verification failed/,
   );
+});
+
+test('lists existing object sizes across paginated prefixes for resumable migration', async () => {
+  let page = 0;
+  const client: R2CommandClient = {
+    async send(command) {
+      assert.equal(command instanceof ListObjectsV2Command, true);
+      page += 1;
+      if (page === 1) {
+        return {
+          Contents: [{ Key: 'generated/one.png', Size: 10 }],
+          NextContinuationToken: 'next-page',
+        };
+      }
+      return { Contents: [{ Key: 'generated/two.png', Size: 20 }] };
+    },
+  };
+  const storage = createR2ObjectStorage(env, client);
+  assert.ok(storage);
+  const objects = await storage.listObjectSizes(['generated/']);
+  assert.deepEqual([...objects.entries()], [
+    ['generated/one.png', 10],
+    ['generated/two.png', 20],
+  ]);
 });

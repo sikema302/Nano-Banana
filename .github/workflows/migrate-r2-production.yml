@@ -16,7 +16,7 @@ concurrency:
 jobs:
   migrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     env:
       SERVER_HOST: 154.9.24.91
       SSH_PORT: "2223"
@@ -37,11 +37,11 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_PATH"
           test -s .env.local
-          migration_args=(--max-age-days 3 --concurrency 3)
+          migration_args=(--max-age-days 3 --concurrency 10)
           if [ "$DELETE_LOCAL_COPIES" = true ]; then
             migration_args+=(--delete-after-upload)
           fi
-          timeout --signal=TERM --kill-after=30s 75m \
+          timeout --signal=TERM --kill-after=30s 330m \
             nice -n 10 npm run storage:r2:migrate -- \
               "${migration_args[@]}"
           echo '=== local image storage after migration ==='
