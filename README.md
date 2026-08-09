@@ -58,6 +58,9 @@ ADMIN_USERNAMES=admin
 IMAGE_RETENTION_DAYS=2
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ALLOW_MULTI_DEVICE_LOGIN=true
+GENERATION_MAX_PENDING=100
+GENERATION_MAX_CONCURRENCY=2
+VIDEO_MAX_CONCURRENCY=1
 ```
 
 ### Business data backups
@@ -80,6 +83,8 @@ Notes:
 - Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT-image-2 Plus standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT-image-2 Plus 2K/4K. `VISIONARY_API_KEY` remains a fallback.
 - GPT-image-2 pricing is checked against Visionary's machine-readable configuration every 72 hours. Valid pricing changes are applied without a redeploy; broader API documentation changes are flagged in the admin dashboard for review. Configure the interval with `VISIONARY_DOC_SYNC_INTERVAL_HOURS`.
 - Image retention defaults to 2 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
+- Image and video generation share a resource-aware admission queue. By default, at most two generation tasks run at once and at most one can be a video task. New work pauses after CPU reaches 85%, memory reaches 85% (or available memory falls below 300 MB), or event-loop lag reaches 200 ms for five consecutive two-second samples. Work resumes after ten healthy samples; in-flight work is never interrupted. `/api/health` and `/api/ready` expose the current `loadControl` status.
+- The R2 migration defaults to two workers and waits on the same CPU, memory, and event-loop pressure thresholds before starting each file.
 - Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
 
 ## Build and checks

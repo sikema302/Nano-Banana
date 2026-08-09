@@ -64,6 +64,13 @@ import { generateVisionaryNanoLite } from './visionary-nano-lite.js';
 import { createProviderMetrics } from './provider-metrics.js';
 import { createProviderRiskMonitor } from './provider-risk-monitor.js';
 import {
+  DEFAULT_RESOURCE_PRESSURE_THRESHOLDS,
+  QueueCapacityError,
+  ResourceAwareWorkQueue,
+  SystemResourceMonitor,
+  type ResourcePressureThresholds,
+} from './resource-aware-queue.js';
+import {
   applyProviderRoutingToImageSize,
   createProviderRouting,
   enabledProviderIds,
@@ -439,10 +446,100 @@ const CANONICAL_WEB_ORIGIN =
   normalizeEnvValue(process.env.CANONICAL_WEB_ORIGIN) || `https://${CANONICAL_WEB_HOST}`;
 const APP_URL = normalizeEnvValue(process.env.APP_URL);
 const ADMIN_STATS_TIME_ZONE = normalizeEnvValue(process.env.ADMIN_STATS_TIME_ZONE) || 'Asia/Shanghai';
-const PUBLIC_ASYNC_MAX_PENDING = Math.max(1, Math.min(1_000, Number(process.env.PUBLIC_ASYNC_MAX_PENDING || 100)));
+const boundedEnvNumber = (name: string, fallback: number, minimum: number, maximum: number) => {
+  const parsed = Number(process.env[name]);
+  return Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : fallback));
+};
+const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 100, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.min(PUBLIC_ASYNC_MAX_PENDING, Number(process.env.PUBLIC_ASYNC_CONCURRENCY || 2)),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 2, 1, 1_000))),
+);
+const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 100, 1, 1_000));
+const GENERATION_MAX_CONCURRENCY = Math.max(
+  1,
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 2, 1, 1_000))),
+);
+const VIDEO_MAX_CONCURRENCY = Math.max(
+  1,
+  Math.floor(Math.min(GENERATION_MAX_CONCURRENCY, boundedEnvNumber('VIDEO_MAX_CONCURRENCY', 1, 1, 1_000))),
+);
+const RESOURCE_SAMPLE_INTERVAL_MS = boundedEnvNumber('RESOURCE_SAMPLE_INTERVAL_MS', 2_000, 500, 60_000);
+const resourceCpuPausePercent = boundedEnvNumber(
+  'RESOURCE_CPU_PAUSE_PERCENT',
+  DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.cpuPausePercent,
+  1,
+  100,
+);
+const resourceMemoryPausePercent = boundedEnvNumber(
+  'RESOURCE_MEMORY_PAUSE_PERCENT',
+  DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.memoryPausePercent,
+  1,
+  100,
+);
+const resourceMinAvailableMemoryMb = boundedEnvNumber(
+  'RESOURCE_MIN_AVAILABLE_MEMORY_MB',
+  DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.minAvailableMemoryMb,
+  0,
+  1_000_000,
+);
+const resourceEventLoopPauseMs = boundedEnvNumber(
+  'RESOURCE_EVENT_LOOP_PAUSE_MS',
+  DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.eventLoopPauseMs,
+  1,
+  60_000,
+);
+const RESOURCE_PRESSURE_THRESHOLDS: ResourcePressureThresholds = {
+  cpuPausePercent: resourceCpuPausePercent,
+  cpuResumePercent: boundedEnvNumber(
+    'RESOURCE_CPU_RESUME_PERCENT',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.cpuResumePercent,
+    0,
+    resourceCpuPausePercent,
+  ),
+  memoryPausePercent: resourceMemoryPausePercent,
+  memoryResumePercent: boundedEnvNumber(
+    'RESOURCE_MEMORY_RESUME_PERCENT',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.memoryResumePercent,
+    0,
+    resourceMemoryPausePercent,
+  ),
+  minAvailableMemoryMb: resourceMinAvailableMemoryMb,
+  resumeAvailableMemoryMb: boundedEnvNumber(
+    'RESOURCE_RESUME_AVAILABLE_MEMORY_MB',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.resumeAvailableMemoryMb,
+    resourceMinAvailableMemoryMb,
+    1_000_000,
+  ),
+  eventLoopPauseMs: resourceEventLoopPauseMs,
+  eventLoopResumeMs: boundedEnvNumber(
+    'RESOURCE_EVENT_LOOP_RESUME_MS',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.eventLoopResumeMs,
+    0,
+    resourceEventLoopPauseMs,
+  ),
+  pauseSamples: Math.round(boundedEnvNumber(
+    'RESOURCE_PAUSE_SAMPLES',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.pauseSamples,
+    1,
+    1_000,
+  )),
+  resumeSamples: Math.round(boundedEnvNumber(
+    'RESOURCE_RESUME_SAMPLES',
+    DEFAULT_RESOURCE_PRESSURE_THRESHOLDS.resumeSamples,
+    1,
+    1_000,
+  )),
+};
+const generationResourceMonitor = new SystemResourceMonitor(
+  RESOURCE_PRESSURE_THRESHOLDS,
+  RESOURCE_SAMPLE_INTERVAL_MS,
+).start();
+const generationWorkQueue = new ResourceAwareWorkQueue(
+  generationResourceMonitor,
+  GENERATION_MAX_CONCURRENCY,
+  GENERATION_MAX_PENDING,
+  { video: VIDEO_MAX_CONCURRENCY },
 );
 
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -5552,6 +5649,21 @@ async function start() {
 
   app.use(express.json({ limit: `${MAX_IMAGE_REQUEST_BODY_MB}mb` }));
 
+  const generationLoadControlPayload = () => {
+    const pressure = generationResourceMonitor.status();
+    return {
+      acceptingNewTasks: !pressure.paused,
+      pressurePaused: pressure.paused,
+      pressureReasons: pressure.reasons,
+      cpuPercent: pressure.snapshot.cpuPercent,
+      memoryUsedPercent: pressure.snapshot.memoryUsedPercent,
+      availableMemoryMb: pressure.snapshot.availableMemoryMb,
+      eventLoopLagMs: pressure.snapshot.eventLoopLagMs,
+      sampledAt: pressure.snapshot.sampledAt,
+      queue: generationWorkQueue.stats(),
+    };
+  };
+
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
     app.use('/uploads', express.static(UPLOADS_DIR));
@@ -5573,6 +5685,7 @@ async function start() {
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
       imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
+      loadControl: generationLoadControlPayload(),
     });
   });
 
@@ -5590,6 +5703,7 @@ async function start() {
         ok: true,
         databaseProvider: DATABASE_PROVIDER,
         imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
+        loadControl: generationLoadControlPayload(),
       });
     } catch (error) {
       console.error('[ready] database check failed:', error);
@@ -6345,53 +6459,55 @@ async function start() {
     let creditsUsed = 0;
 
     try {
-      validateReferenceImageSources(referenceImages);
-      const ratio = normalizeRatio(dimensions, modelId);
-      const modelName = modelNameFromId(modelId);
-      const imageSize = dedicatedPolicy
-        ? dedicatedPolicy.imageSize
-        : await normalizeRoutedImageSize(requestedImageSize, modelId);
-      const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
-      const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
-      creditsUsed = dedicatedPolicy
-        ? dedicatedPolicy.credits
-        : getModelCredits(modelId, imageSize, quality)
-          + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
-      reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
+      await generationWorkQueue.enqueue(`public-sync:${Date.now()}:${randomHex(4)}`, 'image', async () => {
+        validateReferenceImageSources(referenceImages);
+        const ratio = normalizeRatio(dimensions, modelId);
+        const modelName = modelNameFromId(modelId);
+        const imageSize = dedicatedPolicy
+          ? dedicatedPolicy.imageSize
+          : await normalizeRoutedImageSize(requestedImageSize, modelId);
+        const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+        const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
+        creditsUsed = dedicatedPolicy
+          ? dedicatedPolicy.credits
+          : getModelCredits(modelId, imageSize, quality)
+            + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
+        reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
-      const createdAt = nowIso();
-      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
-        userId: `api-key:${reservedKey.id}`,
-        username: `api-${reservedKey.name}`.slice(0, 80),
-        creditsUsed,
-      };
-      const generatedImageSource = await callImageGeneration({
-        prompt,
-        modelId,
-        ratio,
-        imageSize,
-        quality,
-        optimizeChineseText: effectiveOptimizeChineseText,
-        providerRouting: dedicatedPolicy?.providerRouting,
-        images: Array.from(new Set(referenceImages)),
-        requestContext,
-      });
-      const imagePath = normalizeString(generatedImageSource);
-
-      res.json({
-        image: toPublicGeneratedImagePayload(req, {
-          prompt,
-          modelName,
-          dimensions: ratio,
-          imageSize,
-          imagePath,
-          referenceImages,
-          createdAt,
-        }),
-        usage: {
+        const createdAt = nowIso();
+        const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
+          userId: `api-key:${reservedKey.id}`,
+          username: `api-${reservedKey.name}`.slice(0, 80),
           creditsUsed,
-          remainingCredits: Math.max(0, reservedKey.totalCredits - reservedKey.usedCredits),
-        },
+        };
+        const generatedImageSource = await callImageGeneration({
+          prompt,
+          modelId,
+          ratio,
+          imageSize,
+          quality,
+          optimizeChineseText: effectiveOptimizeChineseText,
+          providerRouting: dedicatedPolicy?.providerRouting,
+          images: Array.from(new Set(referenceImages)),
+          requestContext,
+        });
+        const imagePath = normalizeString(generatedImageSource);
+
+        res.json({
+          image: toPublicGeneratedImagePayload(req, {
+            prompt,
+            modelName,
+            dimensions: ratio,
+            imageSize,
+            imagePath,
+            referenceImages,
+            createdAt,
+          }),
+          usage: {
+            creditsUsed,
+            remainingCredits: Math.max(0, reservedKey.totalCredits - reservedKey.usedCredits),
+          },
+        });
       });
     } catch (error) {
       if (reservedKey && creditsUsed > 0) {
@@ -6400,8 +6516,10 @@ async function start() {
 
       console.error('[public-generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';
-      const status = getPublicApiErrorStatus(rawMessage);
-      res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
+      const status = error instanceof QueueCapacityError ? 429 : getPublicApiErrorStatus(rawMessage);
+      res.status(status).json({
+        error: error instanceof QueueCapacityError ? '当前任务较多，请稍后重试' : publicImageErrorMessage(rawMessage),
+      });
     }
   };
 
@@ -6644,6 +6762,8 @@ async function start() {
       ...(task.status === 'succeeded' && !imageUrl ? { resultExpired: true } : {}),
       progress: task.status === 'succeeded' ? 100 : task.progress,
       retryAfterSeconds: task.status === 'succeeded' || task.status === 'failed' ? 0 : task.retryAfterSeconds,
+      queuePosition: task.status === 'queued' ? generationWorkQueue.position(`public-async:${task.id}`) : 0,
+      resourcePaused: task.status === 'queued' && generationResourceMonitor.isPaused(),
       ...(task.error ? { error: publicImageErrorMessage(task.error) } : {}),
     };
   }
@@ -6869,7 +6989,15 @@ async function start() {
           .slice(0, availableSlots);
         for (const task of ready) {
           activePublicAsyncTasks.add(task.id);
-          void executePublicAsyncTask(task);
+          void generationWorkQueue
+            .enqueue(`public-async:${task.id}`, 'image', () => executePublicAsyncTask(task))
+            .catch((error) => {
+              activePublicAsyncTasks.delete(task.id);
+              if (!(error instanceof QueueCapacityError)) {
+                console.error(`[public-async] task ${task.id} could not enter generation queue:`, error);
+              }
+              setTimeout(() => void schedulePublicAsyncQueue(), 1_000);
+            });
         }
       }
     })()
@@ -7006,6 +7134,7 @@ async function start() {
         queue: {
           maxPending: PUBLIC_ASYNC_MAX_PENDING,
           concurrency: PUBLIC_ASYNC_CONCURRENCY,
+          resourcePaused: generationResourceMonitor.isPaused(),
         },
         usage: {
           creditsUsed,
@@ -7179,6 +7308,8 @@ async function start() {
       completedAt: job.completedAt,
       image: job.image,
       error: job.error,
+      queuePosition: job.status === 'queued' ? generationWorkQueue.position(job.id) : 0,
+      resourcePaused: job.status === 'queued' && generationResourceMonitor.isPaused(),
     };
   }
 
@@ -7214,6 +7345,7 @@ async function start() {
           'Content-Type': 'application/json',
           'X-Forwarded-Host': CANONICAL_WEB_HOST,
           'X-Forwarded-Proto': 'https',
+          'X-Pixory-Generation-Job': job.id,
         },
         body: JSON.stringify(job.requestBody),
       });
@@ -7259,6 +7391,10 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
+    if (!generationWorkQueue.canAccept()) {
+      res.status(429).json({ error: '当前任务较多，请稍后重试' });
+      return;
+    }
 
     cleanupGenerationJobs();
     const jobId = `gen_${Date.now()}_${randomHex(6)}`;
@@ -7276,7 +7412,17 @@ async function start() {
     };
 
     generationJobs.set(jobId, job);
-    void runGenerationJob(jobId);
+    void generationWorkQueue.enqueue(jobId, 'image', () => runGenerationJob(jobId)).catch((error) => {
+      const current = generationJobs.get(jobId);
+      if (!current) return;
+      generationJobs.set(jobId, {
+        ...current,
+        status: 'failed',
+        error: error instanceof QueueCapacityError ? '当前任务较多，请稍后重试' : '任务暂时无法开始，请稍后重试',
+        completedAt: nowIso(),
+        updatedAt: nowIso(),
+      });
+    });
     res.status(202).json({ job: publicGenerationJob(job) });
   });
 
@@ -7334,6 +7480,8 @@ async function start() {
       error: job.error,
       creditsUsed: job.status === 'succeeded' ? creditsUsed : 0,
       creditsRemaining: job.creditsRemaining,
+      queuePosition: job.status === 'queued' ? generationWorkQueue.position(job.id) : 0,
+      resourcePaused: job.status === 'queued' && generationResourceMonitor.isPaused(),
     };
   }
 
@@ -7510,6 +7658,10 @@ async function start() {
       res.status(503).json({ error: '视频生成接口尚未配置' });
       return;
     }
+    if (!generationWorkQueue.canAccept()) {
+      res.status(429).json({ error: 'Generation queue is busy. Please retry shortly.' });
+      return;
+    }
     try {
       const credits = USE_SUPABASE
         ? await (await getSupabaseDb()).getUserCredits(req.authUser!.userId)
@@ -7539,7 +7691,18 @@ async function start() {
         updatedAt: now,
       };
       videoJobs.set(job.id, job);
-      void runVideoJob(job.id);
+      void generationWorkQueue.enqueue(job.id, 'video', () => runVideoJob(job.id)).catch((error) => {
+        const current = videoJobs.get(job.id);
+        if (!current) return;
+        Object.assign(current, {
+          status: 'failed',
+          error: error instanceof QueueCapacityError
+            ? 'Generation queue is busy. Please retry shortly.'
+            : 'The task could not be started. Please retry shortly.',
+          completedAt: nowIso(),
+          updatedAt: nowIso(),
+        });
+      });
       res.status(202).json({ job: publicVideoJob(req, job) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : '创建视频任务失败' });
@@ -7557,6 +7720,16 @@ async function start() {
   });
 
   app.post('/api/generate', requireAuth, async (req, res) => {
+    const queuedJobId = normalizeString(req.headers['x-pixory-generation-job']);
+    const queuedJob = generationJobs.get(queuedJobId);
+    if (
+      !queuedJob ||
+      queuedJob.userId !== req.authUser!.userId ||
+      queuedJob.status !== 'processing'
+    ) {
+      res.status(409).json({ error: '请通过任务队列提交生成请求' });
+      return;
+    }
     const prompt = normalizeString(req.body?.prompt);
     const model = normalizeString(req.body?.model);
     const dimensions = normalizeString(req.body?.dimensions) || '1:1';

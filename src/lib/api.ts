@@ -65,6 +65,8 @@ export interface GenerationJobInfo {
   completedAt?: string;
   image?: GeneratedImagePayload;
   error?: string;
+  queuePosition?: number;
+  resourcePaused?: boolean;
 }
 
 export interface VideoGenerationJobInfo {
@@ -80,6 +82,8 @@ export interface VideoGenerationJobInfo {
   error?: string;
   creditsUsed?: number;
   creditsRemaining?: number;
+  queuePosition?: number;
+  resourcePaused?: boolean;
 }
 
 export interface SavedImage {

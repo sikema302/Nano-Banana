@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
 import { contentTypeForObjectKey, createR2ObjectStorage } from '../server/r2-storage.js';
+import { SystemResourceMonitor } from '../server/resource-aware-queue.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uploadsDir = path.join(rootDir, 'uploads');
@@ -20,13 +21,14 @@ function argumentValue(name: string, fallback: string) {
 }
 
 const deleteAfterUpload = process.argv.includes('--delete-after-upload');
-const maxAgeDays = Math.max(0.04, Number(argumentValue('max-age-days', '3')) || 3);
-const concurrency = Math.max(1, Math.min(16, Number(argumentValue('concurrency', '8')) || 8));
+const maxAgeDays = Math.max(0.04, Number(argumentValue('max-age-days', '2')) || 2);
+const concurrency = Math.max(1, Math.min(16, Number(argumentValue('concurrency', '2')) || 2));
 const cutoffTime = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 const supportedImageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg']);
 
 const storage = createR2ObjectStorage();
 if (!storage) throw new Error('R2 is not configured');
+const resourceMonitor = new SystemResourceMonitor(undefined, 2_000, 'r2-migration').start();
 
 type UploadCandidate = {
   filePath: string;
@@ -90,6 +92,7 @@ async function worker() {
     if (!candidate) return;
 
     try {
+      await resourceMonitor.waitUntilAccepting();
       const buffer = await fs.readFile(candidate.filePath);
       await storage.putVerifiedObject(candidate.key, buffer, contentTypeForObjectKey(candidate.key));
       if (deleteAfterUpload) await fs.unlink(candidate.filePath);
@@ -109,7 +112,11 @@ async function worker() {
   }
 }
 
-await Promise.all(Array.from({ length: concurrency }, () => worker()));
+try {
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+} finally {
+  resourceMonitor.stop();
+}
 console.log(
   JSON.stringify({
     bucket: storage.config.bucketName,
