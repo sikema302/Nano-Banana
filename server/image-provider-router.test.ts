@@ -762,7 +762,7 @@ test('a Junliai-only API key never switches to another model or fallback provide
       images: [],
       providerRouting: 'junliai_only',
     }),
-    /provider switching is disabled/i,
+    /upstream failed/i,
   );
   assert.equal(primaryCalls, 1);
   assert.equal(fallbackCalls, 0);
@@ -812,6 +812,43 @@ test('the dedicated Junli route ignores admin switches and an open circuit', asy
   assert.equal(result, 'data:image/png;base64,aW1hZ2U=');
   assert.equal(requestedModel, 'nano-banana-pro');
   assert.equal(fallbackCalls, 0);
+});
+
+test('a managed single-channel call lets the outer route own cooldown decisions', async () => {
+  const store = createStore();
+  await store.set({
+    consecutiveFailures: 2,
+    openUntil: Date.now() + 60_000,
+    reason: 'quota',
+    updatedAt: new Date().toISOString(),
+  }, 'firefly-gpt-image-2');
+  let primaryCalls = 0;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'test-key',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 1,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store,
+    fallback: async () => 'fallback',
+    fetchImpl: async () => {
+      primaryCalls += 1;
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
+  });
+
+  const result = await router.generate({
+    ...input,
+    providerRouting: 'junliai_only',
+    upstreamModelOverride: 'firefly-gpt-image-2',
+  });
+
+  assert.equal(result, 'data:image/png;base64,aW1hZ2U=');
+  assert.equal(primaryCalls, 1);
+  assert.equal(store.state('firefly-gpt-image-2')?.openUntil, 0);
 });
 
 test('a Junliai-only API key does not fall back when the Junliai route is unavailable', async () => {

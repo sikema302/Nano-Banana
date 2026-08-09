@@ -1,3 +1,5 @@
+import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
+
 export type ImageGenerationInput = {
   prompt: string;
   modelId: string;
@@ -259,7 +261,7 @@ export function createImageProviderRouter(options: RouterOptions) {
         form.set('size', requestSize(input));
         form.set('response_format', 'b64_json');
         const blobs = await Promise.all(
-          input.images.slice(0, 9).map((source) => imageBlob(source, controller.signal, fetchImpl)),
+          input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
         );
         blobs.forEach((blob, index) => form.append('image', blob, `reference-${index + 1}.png`));
         body = form;
@@ -359,7 +361,9 @@ export function createImageProviderRouter(options: RouterOptions) {
         : true);
       if (!modelEnabled) continue;
       const state = await readState(upstreamModel);
-      if (!dedicatedJunliai && state.openUntil > currentTime) continue;
+      // Managed single-channel calls are ordered and cooled down by the outer
+      // route. Do not let this legacy model-wide circuit disturb that order.
+      if (!junliaiOnly && state.openUntil > currentTime) continue;
 
       const primaryStartedAt = now();
       try {
@@ -399,6 +403,16 @@ export function createImageProviderRouter(options: RouterOptions) {
           uncertainError.safeToFallback = false;
           throw uncertainError;
         }
+        if (junliaiOnly) {
+          logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
+          const routeError = new Error(
+            errorText(error) || 'Managed image channel failed',
+          ) as Error & { safeToFallback: boolean; status?: number };
+          routeError.safeToFallback = true;
+          const status = Number((error as { status?: unknown } | null)?.status);
+          if (Number.isFinite(status)) routeError.status = status;
+          throw routeError;
+        }
         const consecutiveFailures = state.consecutiveFailures + 1;
         const shouldOpen = failure.immediate || consecutiveFailures >= options.failureThreshold;
         const cooldownMs =
@@ -413,14 +427,6 @@ export function createImageProviderRouter(options: RouterOptions) {
           reason: failure.kind,
           updatedAt: new Date(currentTime).toISOString(),
         });
-        if (junliaiOnly) {
-          logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
-          const routeError = new Error(
-            'Junliai image provider failed; provider switching is disabled for this API key',
-          ) as Error & { safeToFallback: boolean };
-          routeError.safeToFallback = true;
-          throw routeError;
-        }
         logger.warn(
           `[image-provider] ${upstreamModel} failed (${failure.kind}); trying next provider${shouldOpen ? ` after ${Math.ceil(cooldownMs / 1000)}s cooldown` : ''}`,
         );

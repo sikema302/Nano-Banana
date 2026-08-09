@@ -45,6 +45,7 @@ import {
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   deleteInviteCodesBatch,
+  downloadAsset,
   deductPublicApiKeyCredits,
   deductAdminUserCredits,
   fetchAdminDashboard,
@@ -125,6 +126,11 @@ import {
 } from './lib/model-pricing';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
+import {
+  MAX_REFERENCE_IMAGE_BYTES,
+  MAX_REFERENCE_IMAGE_MB,
+  MAX_REFERENCE_IMAGES,
+} from './lib/reference-image-limits';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
 import {
@@ -301,9 +307,9 @@ const emptyImageStorageStats: AdminImageStorageStats = {
   referenceBytes: 0,
   referenceCount: 0,
   referenceStorageEnabled: false,
-  retentionDays: 3,
-  originalRetentionDays: 3,
-  thumbnailRetentionDays: 3,
+  retentionDays: 2,
+  originalRetentionDays: 2,
+  thumbnailRetentionDays: 2,
   diskUsagePercent: 0,
   diskWarningPercent: 70,
   diskEmergencyPercent: 85,
@@ -317,7 +323,7 @@ const emptyRecordsStats: AdminRecordsStats = {
   mostActiveHour: '',
 };
 
-const MAX_REFERENCES = 9;
+const MAX_REFERENCES = MAX_REFERENCE_IMAGES;
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 5;
 const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
@@ -360,6 +366,10 @@ const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: str
 
 function fileToBase64(file: File) {
 
+  if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error(`“${file.name}”超过 ${MAX_REFERENCE_IMAGE_MB}MB，请压缩后再上传`);
+  }
+
   return new Promise<UploadPreview>((resolve, reject) => {
     const reader = new FileReader();
 
@@ -388,7 +398,9 @@ async function imageToReferenceInput(image: DisplayImage): Promise<ReferenceUplo
   if (!response.ok) throw new Error('读取当前图片失败，请稍后重试');
   const blob = await response.blob();
   if (!blob.type.startsWith('image/')) throw new Error('当前结果不是可编辑的图片格式');
-  if (blob.size > 10 * 1024 * 1024) throw new Error('当前图片超过 10MB，暂时无法连续编辑');
+  if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error(`当前图片超过 ${MAX_REFERENCE_IMAGE_MB}MB，暂时无法连续编辑`);
+  }
   const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
   const preview = await fileToBase64(new File([blob], `edit-source.${extension}`, { type: blob.type }));
   return { name: preview.name, mimeType: preview.mimeType, data: preview.data };
@@ -1362,10 +1374,16 @@ function VideoCreateView({
               <p className="mt-1 text-[11px] text-zinc-500">生成完成后自动保存到本站，避免临时链接失效。</p>
             </div>
             {videoUrl ? (
-              <a className="btn-secondary min-h-0 px-3 py-2 text-[12px] font-bold" href={videoUrl} download target="_blank" rel="noreferrer">
+              <button
+                className="btn-secondary min-h-0 px-3 py-2 text-[12px] font-bold"
+                type="button"
+                onClick={() => void downloadAsset(videoUrl, 'pixory-video').catch((downloadError) => {
+                  setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+                })}
+              >
                 <Download size={14} />
                 下载
-              </a>
+              </button>
             ) : null}
           </div>
 
@@ -1742,7 +1760,7 @@ function ApiDocsView({
   const requestRows = [
     ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
-    ['images', 'string[]', '否', 'HTTPS 参考图 URL 数组，最多 9 张。'],
+    ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
     ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K。'],
     ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
@@ -1848,7 +1866,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-                  bullets: ['支持 1K / 2K / 4K；每种分辨率都按网站后台的启用状态和排序依次尝试渠道。明确失败会自动切换下一渠道；失败渠道暂避 30 秒，随后恢复从第一顺位判断。', '参考图建议使用 HTTPS 图片 URL，最多 9 张；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，但不会调用任何上游原生增强接口。'],
+                  bullets: ['支持 1K / 2K / 4K；每种分辨率都按网站后台的启用状态和排序依次尝试渠道。明确失败会自动切换下一渠道；失败渠道暂避 30 秒，随后恢复从第一顺位判断。', `参考图建议使用 HTTPS 图片 URL，最多 ${MAX_REFERENCE_IMAGES} 张，Base64 单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，但不会调用任何上游原生增强接口。`],
     },
   ];
   const docNavigation = [
@@ -6171,13 +6189,21 @@ export default function App() {
     }
   }
 
-  function downloadCurrentImage() {
+  async function downloadCurrentImage() {
     if (!currentImage) return;
-    window.open(currentImage.imageUrl, '_blank', 'noopener,noreferrer');
+    try {
+      await downloadAsset(currentImage.imageUrl, `pixory-${Date.now()}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '下载失败');
+    }
   }
 
-  function downloadDisplayImage(item: DisplayImage) {
-    window.open(item.imageUrl, '_blank', 'noopener,noreferrer');
+  async function downloadDisplayImage(item: DisplayImage) {
+    try {
+      await downloadAsset(item.imageUrl, `pixory-${Date.now()}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '下载失败');
+    }
   }
 
   async function deleteCurrentImage() {
@@ -6620,7 +6646,7 @@ export default function App() {
             onAction={() => {
               const target = sideFavoriteItems[0];
               if (target) {
-                window.open(target.imageUrl, '_blank', 'noopener,noreferrer');
+                void downloadDisplayImage(target);
               }
             }}
             items={sideFavoriteItems}
@@ -6918,7 +6944,7 @@ export default function App() {
               <section className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {MAX_REFERENCES}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {MAX_REFERENCES} · 单张 ≤{MAX_REFERENCE_IMAGE_MB}MB</span>
                 </div>
                 <div
                   className={
@@ -7356,7 +7382,7 @@ export default function App() {
               onAction={() => {
                 const target = sideFavoriteItems[0];
                 if (target) {
-                  window.open(target.imageUrl, '_blank', 'noopener,noreferrer');
+                  void downloadDisplayImage(target);
                 }
               }}
               items={sideFavoriteItems}
@@ -7470,7 +7496,7 @@ export default function App() {
                   disabled={isOriginalImageExpired(previewImage.createdAt)}
                   onClick={() => {
                     if (!isOriginalImageExpired(previewImage.createdAt)) {
-                      window.open(previewImage.imageUrl, '_blank', 'noopener,noreferrer');
+                      void downloadDisplayImage(previewImage);
                     }
                   }}
                 >

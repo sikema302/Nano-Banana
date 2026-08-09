@@ -13,6 +13,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import {
+  downloadAsset,
   fetchGenerateImageJob,
   fetchMe,
   startGenerateImageJob,
@@ -25,6 +26,11 @@ import {
 } from './lib/api';
 import { getGptImageCredits, type GptImagePricing } from './lib/model-pricing';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
+import {
+  MAX_REFERENCE_IMAGE_BYTES,
+  MAX_REFERENCE_IMAGE_MB,
+  MAX_REFERENCE_IMAGES,
+} from './lib/reference-image-limits';
 
 type BatchMode = 'unified' | 'multiple';
 type ImageSize = 'STANDARD' | '1K' | '2K' | '4K';
@@ -64,11 +70,11 @@ interface BatchCreateViewProps {
 }
 
 const MAX_UNIFIED_IMAGES = 10;
-const MAX_GROUP_IMAGES = 6;
-const MAX_EXTRA_REFERENCES = 8;
+const MAX_GROUP_IMAGES = MAX_REFERENCE_IMAGES;
+const MAX_EXTRA_REFERENCES = MAX_REFERENCE_IMAGES - 1;
 const MAX_PROMPTS = 6;
 const MAX_PROMPT_LENGTH = 8000;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = MAX_REFERENCE_IMAGE_BYTES;
 const POLL_INTERVAL_MS = 2000;
 
 const dimensionOptions = ['1:1', '3:2', '16:9', '2:3', '4:3', '3:4', '21:9', '9:16'] as const;
@@ -231,11 +237,13 @@ function TaskCard({
   task,
   selected = false,
   onSelect,
+  onDownload,
   compact = false,
 }: {
   task: BatchTask;
   selected?: boolean;
   onSelect?: () => void;
+  onDownload?: () => void;
   compact?: boolean;
 }) {
   const imageUrl = task.image?.thumbnailPath || task.image?.imagePath;
@@ -253,15 +261,13 @@ function TaskCard({
         </button>
       ) : null}
       {imageUrl && compact ? (
-        <a
+        <button
           className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-black/70 text-zinc-300 transition hover:text-white"
-          href={task.image?.imagePath}
-          target="_blank"
-          rel="noreferrer"
-          download
+          type="button"
+          onClick={onDownload}
         >
           <Download size={12} />
-        </a>
+        </button>
       ) : null}
       <div className="aspect-square">
         {imageUrl ? (
@@ -284,15 +290,13 @@ function TaskCard({
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[11px] font-bold text-zinc-300">{task.sourceLabel}</span>
           {imageUrl ? (
-            <a
+            <button
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-400 transition hover:text-white"
-              href={task.image?.imagePath}
-              target="_blank"
-              rel="noreferrer"
-              download
+              type="button"
+              onClick={onDownload}
             >
               <Download size={13} />
-            </a>
+            </button>
           ) : null}
         </div>
         {task.status === 'processing' ? (
@@ -311,11 +315,13 @@ function UnifiedPair({
   task,
   selected,
   onSelect,
+  onDownload,
 }: {
   source: UploadItem;
   task?: BatchTask;
   selected: boolean;
   onSelect: () => void;
+  onDownload?: () => void;
 }) {
   const placeholderTask: BatchTask = task || {
     id: `placeholder-${source.id}`,
@@ -335,7 +341,12 @@ function UnifiedPair({
         </span>
       </div>
       <ArrowRight className="text-zinc-600" size={18} />
-      <TaskCard task={placeholderTask} selected={selected} onSelect={task?.image ? onSelect : undefined} />
+      <TaskCard
+        task={placeholderTask}
+        selected={selected}
+        onSelect={task?.image ? onSelect : undefined}
+        onDownload={onDownload}
+      />
     </div>
   );
 }
@@ -404,7 +415,7 @@ export default function BatchCreateView({
     const candidates = files.filter((file) => file.type.startsWith('image/'));
     const oversized = candidates.find((file) => file.size > MAX_FILE_BYTES);
     if (oversized) {
-      setNotice(`“${oversized.name}”超过 10MB，请压缩后再上传`);
+      setNotice(`“${oversized.name}”超过 ${MAX_REFERENCE_IMAGE_MB}MB，请压缩后再上传`);
       return;
     }
     const remaining = Math.max(0, limit - current.length);
@@ -464,20 +475,21 @@ export default function BatchCreateView({
     setSelectedTaskIds(allSelected ? [] : availableIds);
   }
 
-  function downloadSelectedTasks() {
+  async function downloadTask(task: BatchTask, index = 0) {
+    const url = task.image?.imagePath;
+    if (!url) return;
+    try {
+      await downloadAsset(url, `pixory-batch-${index + 1}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '下载失败');
+    }
+  }
+
+  async function downloadSelectedTasks() {
     const selected = succeededTasks.filter((task) => selectedTaskIds.includes(task.id));
-    selected.forEach((task, index) => {
-      const url = task.image?.imagePath;
-      if (!url) return;
-      window.setTimeout(() => {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `pixory-batch-${index + 1}`;
-        link.target = '_blank';
-        link.rel = 'noreferrer';
-        link.click();
-      }, index * 180);
-    });
+    for (let index = 0; index < selected.length; index += 1) {
+      await downloadTask(selected[index], index);
+    }
   }
 
   async function waitForJob(job: GenerationJobInfo, taskId: string, startedAt: number) {
@@ -531,7 +543,7 @@ export default function BatchCreateView({
           sourceId: source.id,
           prompt: unifiedPrompt.trim(),
           sourceLabel: source.name || `原图 ${index + 1}`,
-          references: [source, ...extraReferences].slice(0, 9),
+          references: [source, ...extraReferences].slice(0, MAX_REFERENCE_IMAGES),
         }))
       : prompts
           .map((item, index) => ({
@@ -539,7 +551,7 @@ export default function BatchCreateView({
             sourceId: item.id,
             prompt: item.value.trim(),
             sourceLabel: `提示词 ${index + 1}`,
-            references: sourceImages.slice(0, 9),
+            references: sourceImages.slice(0, MAX_REFERENCE_IMAGES),
           }))
           .filter((item) => item.prompt);
 
@@ -696,6 +708,7 @@ export default function BatchCreateView({
                             task={task}
                             selected={Boolean(task && selectedTaskIds.includes(task.id))}
                             onSelect={() => task && toggleTaskSelection(task.id)}
+                            onDownload={task ? () => void downloadTask(task) : undefined}
                           />
                         </div>
                       );
@@ -720,7 +733,7 @@ export default function BatchCreateView({
                   />
                   <ImagePlus size={25} />
                   <span className="mt-2 text-sm font-black">添加原图</span>
-                  <span className="mt-2 text-[10px] text-zinc-600">最多 10 张原图，单张不超过 10MB</span>
+                  <span className="mt-2 text-[10px] text-zinc-600">最多 10 张原图，单张不超过 {MAX_REFERENCE_IMAGE_MB}MB</span>
                 </label>
               </div>
             ) : (
@@ -780,7 +793,7 @@ export default function BatchCreateView({
                           </div>
                         </div>
                         {task ? (
-                          <TaskCard task={task} compact />
+                          <TaskCard task={task} compact onDownload={() => void downloadTask(task)} />
                         ) : (
                           <div className="flex min-h-[92px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 text-zinc-600">
                             <Sparkles size={17} />

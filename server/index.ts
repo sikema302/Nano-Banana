@@ -28,8 +28,15 @@ import {
   generatedImageDownloadError,
   isValidImageBuffer,
 } from './generated-image-download.js';
+import { durablePublicImageResultSource, EphemeralImageResultCache } from './ephemeral-image-results.js';
+import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
 import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
+import {
+  MAX_REFERENCE_IMAGE_BYTES,
+  MAX_REFERENCE_IMAGE_MB,
+  MAX_REFERENCE_IMAGES,
+} from '../src/lib/reference-image-limits.js';
 import { createImageChannelFailover } from './image-channel-failover.js';
 import { normalizePublicApiProviderRouting } from './public-api-routing.js';
 import {
@@ -400,12 +407,12 @@ const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
 const DATABASE_MIGRATION_LOCK_FILE = path.join(ROOT_DIR, '.runtime', 'database-migration.lock');
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
-const MAX_REFERENCE_IMAGE_COUNT = 9;
-const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
-const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 3));
+const MAX_REFERENCE_IMAGE_COUNT = MAX_REFERENCE_IMAGES;
+const MAX_IMAGE_REQUEST_BODY_MB = Math.ceil(MAX_REFERENCE_IMAGES * MAX_REFERENCE_IMAGE_MB * 4 / 3) + 10;
+const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 2));
 const THUMBNAIL_RETENTION_DAYS = Math.max(
   ORIGINAL_IMAGE_RETENTION_DAYS,
-  Number(process.env.THUMBNAIL_RETENTION_DAYS || process.env.IMAGE_RETENTION_DAYS || 3),
+  Number(process.env.THUMBNAIL_RETENTION_DAYS || process.env.IMAGE_RETENTION_DAYS || 2),
 );
 const IMAGE_RETENTION_DAYS = THUMBNAIL_RETENTION_DAYS;
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
@@ -1081,6 +1088,12 @@ function toPublicAssetUrl(req: Request, assetPath: string) {
   return `${stripTrailingSlash(publicOrigin)}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
 }
 
+function toPublicImageResultUrl(req: Request, source: string) {
+  const normalizedSource = normalizeString(source);
+  if (/^(?:https?:\/\/|data:image\/)/i.test(normalizedSource)) return normalizedSource;
+  return toPublicAssetUrl(req, normalizedSource) || normalizedSource;
+}
+
 function isAllowedOrigin(origin: string) {
   if (!CORS_ORIGIN) return true;
   const allowedOrigins = splitCsv(CORS_ORIGIN);
@@ -1215,7 +1228,7 @@ function toPublicReferenceImages(req: Request, referenceImages: string[]) {
 function toPublicGeneratedImagePayload(req: Request, payload: GeneratedImagePayload): GeneratedImagePayload {
   return {
     ...payload,
-    imagePath: toPublicAssetUrl(req, payload.imagePath) || payload.imagePath,
+    imagePath: toPublicImageResultUrl(req, payload.imagePath),
     thumbnailPath: toPublicAssetUrl(req, payload.thumbnailPath || thumbnailPathForImage(payload.imagePath)) || undefined,
     referenceImages: toPublicReferenceImages(req, payload.referenceImages),
   };
@@ -4433,24 +4446,38 @@ async function callImageGeneration(input: ImageGenerationInput) {
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
-  const routeKey = `${effectiveInput.modelId}:${resolution}`;
+  const routeKey = [
+    effectiveInput.modelId,
+    resolution,
+    effectiveInput.ratio || '1:1',
+    effectiveInput.quality || 'default',
+  ].join(':');
   const channels = imageChannelFailover.candidates(routeKey, configuredChannels);
 
   const traceId = crypto.randomUUID();
+  let sawServiceFailure = false;
   for (const channelId of channels) {
     try {
       const source = await callConfiguredImageChannel(effectiveInput, channelId, traceId);
       imageChannelFailover.markSuccess(routeKey, channelId);
       return source;
     } catch (error) {
-      imageChannelFailover.markFailure(routeKey, channelId);
       console.warn(`[image-channel] ${channelId} failed: ${imageErrorText(error)}`);
+      const publicError = classifyPublicImageError(imageErrorText(error));
+      if (publicError.category === 'sensitive_prompt' || publicError.category === 'reference_image') {
+        throw new Error(publicError.message);
+      }
+      imageChannelFailover.markFailure(routeKey, channelId);
+      const errorStatus = Number((error as { status?: unknown } | null)?.status);
+      if (publicError.category === 'service_unavailable' || (errorStatus >= 500 && errorStatus < 600)) {
+        sawServiceFailure = true;
+      }
       if (!safeToTryNextProvider(error)) {
-        throw new Error('生成结果暂时无法确认，为避免重复扣费，本次不会自动切换渠道；积分将自动退回，请稍后重试。');
+        throw new Error('IMAGE_MODEL_BUSY');
       }
     }
   }
-  throw new Error('图片生成服务暂时不可用，请稍后重试');
+  throw new Error(sawServiceFailure ? 'IMAGE_SERVICE_UNAVAILABLE' : 'IMAGE_MODEL_BUSY');
 }
 
 function videoSize(ratio: string, resolution: string) {
@@ -4937,7 +4964,7 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
 
   const output: string[] = [];
 
-  for (const item of referenceImages.slice(0, 9)) {
+  for (const item of referenceImages.slice(0, MAX_REFERENCE_IMAGE_COUNT)) {
     const base64 = typeof item.data === 'string' ? item.data.split(',').pop() || '' : '';
     if (!base64) continue;
 
@@ -4969,7 +4996,7 @@ async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadI
 
     const buffer = Buffer.from(base64, 'base64');
     if (buffer.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
-      throw new Error('Each reference image must be 10 MB or smaller');
+      throw new Error(`Each reference image must be ${MAX_REFERENCE_IMAGE_MB} MB or smaller`);
     }
     if (!isValidImageBuffer(buffer, item.mimeType)) {
       throw new Error('Reference image data is not a valid supported image');
@@ -5019,6 +5046,21 @@ function normalizePublicReferenceImages(value: unknown) {
 
 function isReferenceImageInput(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
+}
+
+function validateReferenceImageSources(referenceImages: string[]) {
+  if (referenceImages.length > MAX_REFERENCE_IMAGE_COUNT) {
+    throw new Error(`A maximum of ${MAX_REFERENCE_IMAGE_COUNT} reference images is supported`);
+  }
+
+  for (const source of referenceImages) {
+    const dataUrl = normalizeString(source);
+    if (!dataUrl.startsWith('data:image/')) continue;
+    const base64 = dataUrl.split(',', 2)[1] || '';
+    if (Buffer.from(base64, 'base64').byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+      throw new Error(`Each reference image must be ${MAX_REFERENCE_IMAGE_MB} MB or smaller`);
+    }
+  }
 }
 
 function normalizeGeminiReferenceImages(value: unknown) {
@@ -5113,6 +5155,14 @@ function mimeTypeFromImagePath(value: string) {
 }
 
 async function readImageAsBase64(req: Request, imagePath: string) {
+  const inlineMatch = normalizeString(imagePath).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (inlineMatch) {
+    return {
+      mimeType: inlineMatch[1],
+      data: inlineMatch[2].replace(/\s+/g, ''),
+    };
+  }
+
   const publicUrl = toPublicAssetUrl(req, imagePath) || imagePath;
   let buffer: Buffer | null = null;
   let mimeType = mimeTypeFromImagePath(publicUrl);
@@ -5144,6 +5194,97 @@ async function readImageAsBase64(req: Request, imagePath: string) {
     mimeType,
     data: buffer.toString('base64'),
   };
+}
+
+function storedAssetMatchesRequest(req: Request, storedSource: string, requestedSource: string) {
+  const stored = normalizeString(storedSource);
+  const requested = normalizeString(requestedSource);
+  if (!stored || !requested) return false;
+  if (stored === requested) return true;
+  if ((toPublicAssetUrl(req, stored) || stored) === requested) return true;
+
+  const storedKey = legacyAssetObjectKey(stored);
+  const requestedKey = legacyAssetObjectKey(requested);
+  return Boolean(storedKey && requestedKey && storedKey === requestedKey);
+}
+
+async function findOwnedAssetSource(req: Request, requestedSource: string) {
+  const userId = req.authUser!.userId;
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    const [generations, images] = await Promise.all([
+      db.getUserGenerations(userId),
+      db.getUserImages(userId),
+    ]);
+    return [...generations, ...images]
+      .map((item) => normalizeString(item.image_path))
+      .find((item) => storedAssetMatchesRequest(req, item, requestedSource)) || '';
+  }
+
+  const sources = await withReadDb((db) => {
+    ensureSchema(db);
+    return runQuery<{ image_path: string }>(
+      db,
+      `
+        SELECT image_path FROM generations WHERE user_id = ?
+        UNION
+        SELECT image_path FROM images WHERE user_id = ?
+      `,
+      [userId, userId],
+    );
+  });
+  return sources
+    .map((item) => normalizeString(item.image_path))
+    .find((item) => storedAssetMatchesRequest(req, item, requestedSource)) || '';
+}
+
+async function readOwnedAsset(req: Request, storedSource: string) {
+  const source = normalizeString(storedSource);
+  const inlineMatch = source.match(/^data:((?:image|video)\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (inlineMatch) {
+    return {
+      contentType: inlineMatch[1],
+      buffer: Buffer.from(inlineMatch[2].replace(/\s+/g, ''), 'base64'),
+    };
+  }
+
+  const publicUrl = toPublicAssetUrl(req, source) || source;
+  let localPath = '';
+  try {
+    const pathname = /^https?:\/\//i.test(publicUrl) ? new URL(publicUrl).pathname : source;
+    const resolved = path.resolve(ROOT_DIR, decodeURIComponent(pathname).replace(/^\/+/, ''));
+    const uploadsPrefix = `${path.resolve(UPLOADS_DIR)}${path.sep}`;
+    if (resolved.startsWith(uploadsPrefix)) localPath = resolved;
+  } catch {
+    localPath = '';
+  }
+
+  if (localPath) {
+    const buffer = await fs.readFile(localPath).catch(() => null);
+    if (buffer) {
+      const extension = path.extname(localPath).toLowerCase();
+      const contentType = extension === '.mp4'
+        ? 'video/mp4'
+        : extension === '.webm'
+          ? 'video/webm'
+          : mimeTypeFromImagePath(localPath);
+      return { buffer, contentType };
+    }
+  }
+
+  const objectKey = legacyAssetObjectKey(source);
+  const remoteUrl = R2_STORAGE && objectKey ? R2_STORAGE.publicUrl(objectKey) : publicUrl;
+  if (!/^https?:\/\//i.test(remoteUrl)) return null;
+  const response = await fetch(remoteUrl, {
+    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  });
+  if (!response.ok) return null;
+  const responseType = normalizeString(response.headers.get('content-type')).split(';')[0].toLowerCase();
+  const contentType = /^(?:image|video)\//.test(responseType)
+    ? responseType
+    : mimeTypeFromImagePath(remoteUrl);
+  if (!/^(?:image|video)\//.test(contentType)) return null;
+  return { buffer: Buffer.from(await response.arrayBuffer()), contentType };
 }
 
 async function toGeminiGenerateContentResponse(req: Request, result: PublicGenerateResult) {
@@ -5409,7 +5550,7 @@ async function start() {
     }),
   );
 
-  app.use(express.json({ limit: '100mb' }));
+  app.use(express.json({ limit: `${MAX_IMAGE_REQUEST_BODY_MB}mb` }));
 
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
@@ -6204,6 +6345,7 @@ async function start() {
     let creditsUsed = 0;
 
     try {
+      validateReferenceImageSources(referenceImages);
       const ratio = normalizeRatio(dimensions, modelId);
       const modelName = modelNameFromId(modelId);
       const imageSize = dedicatedPolicy
@@ -6218,7 +6360,6 @@ async function start() {
       reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
 
       const createdAt = nowIso();
-      const apiRequestStartedAt = Date.now();
       const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
         userId: `api-key:${reservedKey.id}`,
         username: `api-${reservedKey.name}`.slice(0, 80),
@@ -6235,64 +6376,7 @@ async function start() {
         images: Array.from(new Set(referenceImages)),
         requestContext,
       });
-      const apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
-      const imagePath = await persistGeneratedImage(generatedImageSource);
-      await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
-      const username = `api-${reservedKey.name}`.slice(0, 80);
-
-      if (USE_SUPABASE) {
-        const db = await getSupabaseDb();
-        await db.insertGeneration({
-          userId: `api-key:${reservedKey.id}`,
-          username,
-          prompt,
-          modelId,
-          modelName,
-          dimensions: ratio,
-          imageSize,
-          imagePath,
-          creditsUsed,
-          apiRequestMs,
-          referenceImages,
-          createdAt,
-        });
-      } else {
-        await withWriteDb((db) => {
-          ensureSchema(db);
-          db.run(
-            `
-              INSERT INTO generations (
-                user_id,
-                username,
-                prompt,
-                model_id,
-                model_name,
-                dimensions,
-                image_size,
-                image_path,
-                credits_used,
-                api_request_ms,
-                reference_images,
-                created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `,
-            [
-              `api-key:${reservedKey!.id}`,
-              username,
-              prompt,
-              modelId,
-              modelName,
-              ratio,
-              imageSize,
-              imagePath,
-              creditsUsed,
-              apiRequestMs,
-              serializeReferenceImages(referenceImages),
-              createdAt,
-            ],
-          );
-        });
-      }
+      const imagePath = normalizeString(generatedImageSource);
 
       res.json({
         image: toPublicGeneratedImagePayload(req, {
@@ -6315,9 +6399,9 @@ async function start() {
       }
 
       console.error('[public-generate]', error);
-      const message = error instanceof Error ? error.message : 'Generate failed';
-      const status = message.includes('无效') || message.includes('停用') ? 401 : message.includes('额度不足') ? 402 : 500;
-      res.status(status).json({ error: message });
+      const rawMessage = error instanceof Error ? error.message : 'Generate failed';
+      const status = getPublicApiErrorStatus(rawMessage);
+      res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
     }
   };
 
@@ -6505,15 +6589,11 @@ async function start() {
       }
 
       void (async () => {
-        const pathname = /^https?:\/\//i.test(imageUrl) ? new URL(imageUrl).pathname : imageUrl;
-        const localPath = path.resolve(ROOT_DIR, pathname.replace(/^\/+/, ''));
-        if (!localPath.startsWith(GENERATED_DIR)) {
-          throw new Error('Generated image path is outside the image directory');
-        }
-        const buffer = await fs.readFile(localPath);
+        const inlineImage = await readImageAsBase64(req, imageUrl);
+        if (!inlineImage) throw new Error('Generated image result is unavailable');
         originalJson({
           created: Math.floor(Date.now() / 1000),
-          data: [{ b64_json: buffer.toString('base64'), revised_prompt: normalizeString(image.prompt) || normalizeString(requestBody.prompt) }],
+          data: [{ b64_json: inlineImage.data, revised_prompt: normalizeString(image.prompt) || normalizeString(requestBody.prompt) }],
         });
       })().catch((error) => {
         console.error('[openai-images-response]', error);
@@ -6549,8 +6629,11 @@ async function start() {
 
   // 鈹€鈹€鈹€ 寮傛鐢熸垚鎺ュ彛 鈹€鈹€鈹€
 
+  const publicAsyncTransientResults = new EphemeralImageResultCache();
+
   function publicAsyncTaskPayload(req: Request, task: PublicAsyncGenerationTask) {
-    const imageUrl = task.imagePath ? toPublicAssetUrl(req, task.imagePath) : '';
+    const resultSource = task.imagePath || publicAsyncTransientResults.get(task.id);
+    const imageUrl = resultSource ? toPublicImageResultUrl(req, resultSource) : '';
     return {
       id: task.id,
       taskId: task.id,
@@ -6558,57 +6641,11 @@ async function start() {
       status: task.status,
       generationStatus: task.generationStatus,
       results: imageUrl ? [{ url: imageUrl }] : [],
+      ...(task.status === 'succeeded' && !imageUrl ? { resultExpired: true } : {}),
       progress: task.status === 'succeeded' ? 100 : task.progress,
       retryAfterSeconds: task.status === 'succeeded' || task.status === 'failed' ? 0 : task.retryAfterSeconds,
-      ...(task.error ? { error: sanitizeExternalErrorMessage(task.error, '图像生成失败') } : {}),
+      ...(task.error ? { error: publicImageErrorMessage(task.error) } : {}),
     };
-  }
-
-  async function persistPublicAsyncGeneration(task: PublicAsyncGenerationTask, imagePath: string) {
-    const apiRequestMs = Math.max(0, Date.now() - new Date(task.createdAt).getTime());
-    const username = `api-${task.apiKeyId}`.slice(0, 80);
-    if (USE_SUPABASE) {
-      const db = await getSupabaseDb();
-      await db.insertGeneration({
-        userId: `api-key:${task.apiKeyId}`,
-        username,
-        prompt: task.prompt,
-        modelId: task.modelId,
-        modelName: task.modelName,
-        dimensions: task.dimensions,
-        imageSize: task.imageSize,
-        imagePath,
-        creditsUsed: task.creditsUsed,
-        apiRequestMs,
-        referenceImages: task.referenceImages,
-        createdAt: task.createdAt,
-      });
-      return;
-    }
-
-    await withWriteDb((db) => {
-      ensureSchema(db);
-      db.run(
-        `INSERT INTO generations (
-          user_id, username, prompt, model_id, model_name, dimensions, image_size,
-          image_path, credits_used, api_request_ms, reference_images, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          `api-key:${task.apiKeyId}`,
-          username,
-          task.prompt,
-          task.modelId,
-          task.modelName,
-          task.dimensions,
-          task.imageSize,
-          imagePath,
-          task.creditsUsed,
-          apiRequestMs,
-          serializeReferenceImages(task.referenceImages),
-          task.createdAt,
-        ],
-      );
-    });
   }
 
   async function readPublicAsyncTask(taskId: string, apiKeyHash: string) {
@@ -6637,7 +6674,7 @@ async function start() {
   async function refreshPublicAsyncTask(taskId: string, apiKeyHash: string) {
     const task = await readPublicAsyncTask(taskId, apiKeyHash);
     if (!task) return null;
-    if ((task.status === 'succeeded' && task.imagePath) || (task.status === 'failed' && task.refunded)) return task;
+    if (task.status === 'succeeded' || (task.status === 'failed' && task.refunded)) return task;
     if (!task.upstreamId) return task;
 
     const upstream = await queryVisionaryAsyncStatus(task.upstreamId, task.modelId, task.imageSize);
@@ -6657,32 +6694,32 @@ async function start() {
 
     if (nextStatus === 'succeeded') {
       const existing = await readPublicAsyncTask(taskId, apiKeyHash);
-      if (existing?.status === 'succeeded' && existing.imagePath) return existing;
+      if (existing?.status === 'succeeded') return existing;
 
       const imageSource =
         upstream.results?.find((item) => item.url || item.content)?.url ||
         upstream.results?.[0]?.content;
       if (!imageSource) throw new Error('Visionary async task succeeded without an image URL');
-      const imagePath = await persistGeneratedImage(imageSource);
+      const durableImageSource = durablePublicImageResultSource(imageSource);
+      if (!durableImageSource) publicAsyncTransientResults.set(taskId, imageSource);
 
-      return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
-        if (current.status === 'succeeded' && current.imagePath) return current;
+      return updatePublicAsyncTask(taskId, apiKeyHash, (current) => {
+        if (current.status === 'succeeded') return current;
         const nextTask: PublicAsyncGenerationTask = {
           ...current,
           status: 'succeeded',
           generationStatus: normalizeString(upstream.generationStatus) || 'succeeded',
           progress: 100,
           retryAfterSeconds: 0,
-          imagePath,
+          imagePath: durableImageSource || undefined,
           updatedAt: nowIso(),
         };
-        await persistPublicAsyncGeneration(nextTask, imagePath);
         return nextTask;
       });
     }
 
     if (nextStatus === 'failed') {
-      const error = getVisionaryErrorMessage(upstream, '图像生成失败');
+      const error = publicImageErrorMessage(getVisionaryErrorMessage(upstream, '图像生成失败'));
       return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
         if (current.status === 'failed' && current.refunded) return current;
         if (!current.refunded && current.creditsUsed > 0) {
@@ -6736,9 +6773,7 @@ async function start() {
   let publicAsyncQueuePumpRequested = false;
 
   async function failPublicAsyncTask(task: PublicAsyncGenerationTask, error: unknown) {
-    const message = error instanceof Error
-      ? sanitizeExternalErrorMessage(error.message, 'Async generation failed')
-      : 'Async generation failed';
+    const message = publicImageErrorMessage(error instanceof Error ? error.message : 'Async generation failed');
     await updatePublicAsyncTask(task.id, task.apiKeyHash, async (current) => {
       if (current.status === 'succeeded' || (current.status === 'failed' && current.refunded)) return current;
       if (!current.refunded && current.creditsUsed > 0) {
@@ -6788,20 +6823,19 @@ async function start() {
           images: current.referenceImages,
           requestContext,
         });
-        const imagePath = await persistGeneratedImage(generatedImageSource);
-        await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
-        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, async (latest) => {
-          if (latest.status === 'succeeded' && latest.imagePath) return latest;
+        const durableImageSource = durablePublicImageResultSource(generatedImageSource);
+        if (!durableImageSource) publicAsyncTransientResults.set(current.id, generatedImageSource);
+        current = await updatePublicAsyncTask(current.id, current.apiKeyHash, (latest) => {
+          if (latest.status === 'succeeded') return latest;
           const completed: PublicAsyncGenerationTask = {
             ...latest,
             status: 'succeeded',
             generationStatus: 'succeeded',
             progress: 100,
             retryAfterSeconds: 0,
-            imagePath,
+            imagePath: durableImageSource || undefined,
             updatedAt: nowIso(),
           };
-          await persistPublicAsyncGeneration(completed, imagePath);
           return completed;
         });
         await cleanupTemporaryReferenceImages(current?.temporaryReferenceImages || []);
@@ -6900,9 +6934,7 @@ async function start() {
       if (unfinishedSnapshotCount >= PUBLIC_ASYNC_MAX_PENDING) {
         throw new Error(`Async generation queue is full (capacity ${PUBLIC_ASYNC_MAX_PENDING})`);
       }
-      if (suppliedReferenceImages.length > MAX_REFERENCE_IMAGE_COUNT) {
-        throw new Error(`A maximum of ${MAX_REFERENCE_IMAGE_COUNT} reference images is supported`);
-      }
+      validateReferenceImageSources(suppliedReferenceImages);
       const remoteReferenceImages = suppliedReferenceImages.filter((item: string) => /^https:\/\//i.test(item));
       const dataReferenceImages = suppliedReferenceImages.filter((item: string) => item.startsWith('data:image/'));
       const unsupportedReferenceImages = suppliedReferenceImages.filter(
@@ -6986,11 +7018,9 @@ async function start() {
         await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
       }
       console.error('[async-generate]', error);
-      const message = error instanceof Error
-        ? sanitizeExternalErrorMessage(error.message, 'Async generation failed')
-        : 'Async generation failed';
-      const status = getPublicApiErrorStatus(message);
-      res.status(status).json({ error: message });
+      const rawMessage = error instanceof Error ? error.message : 'Async generation failed';
+      const status = getPublicApiErrorStatus(rawMessage);
+      res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
     }
   };
 
@@ -7217,7 +7247,7 @@ async function start() {
       updateJob({
         status: 'failed',
         progress: Math.max(12, generationJobs.get(jobId)?.progress || 12),
-        error: error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Generate failed') : 'Generate failed',
+        error: publicImageErrorMessage(error instanceof Error ? error.message : 'Generate failed'),
         completedAt: nowIso(),
       });
     }
@@ -7544,6 +7574,7 @@ async function start() {
     }
 
     try {
+      validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)));
       let modelId = normalizeModelId(model);
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
@@ -7715,9 +7746,9 @@ async function start() {
       res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
       console.error('[generate]', error);
-      const message = error instanceof Error ? sanitizeExternalErrorMessage(error.message, 'Generate failed') : 'Generate failed';
-      const status = getPublicApiErrorStatus(message);
-      res.status(status).json({ error: message });
+      const rawMessage = error instanceof Error ? error.message : 'Generate failed';
+      const status = getPublicApiErrorStatus(rawMessage);
+      res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
     }
   });
 
@@ -7770,6 +7801,40 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 绠＄悊鍛樻瑙?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  app.post('/api/user/assets/download', requireAuth, async (req, res) => {
+    const requestedSource = normalizeString(req.body?.source);
+    if (!requestedSource) {
+      res.status(400).json({ error: '下载地址无效' });
+      return;
+    }
+
+    try {
+      const storedSource = await findOwnedAssetSource(req, requestedSource);
+      if (!storedSource) {
+        res.status(404).json({ error: '文件不存在或已过期' });
+        return;
+      }
+
+      const asset = await readOwnedAsset(req, storedSource);
+      if (!asset?.buffer.length) {
+        res.status(404).json({ error: '文件不存在或已过期' });
+        return;
+      }
+
+      const extension = asset.contentType.startsWith('video/')
+        ? asset.contentType === 'video/webm' ? 'webm' : 'mp4'
+        : fileExtensionFromMimeType(asset.contentType);
+      res.setHeader('Content-Type', asset.contentType);
+      res.setHeader('Content-Length', String(asset.buffer.length));
+      res.setHeader('Content-Disposition', `attachment; filename="pixory-${Date.now()}.${extension}"`);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.send(asset.buffer);
+    } catch (error) {
+      console.error('[asset-download]', error);
+      res.status(502).json({ error: '下载失败，请稍后重试' });
+    }
+  });
 
   app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
     const recordsPage = parsePaginationValue(req.query.recordsPage, 1, 1, 100000);

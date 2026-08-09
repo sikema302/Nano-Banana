@@ -55,7 +55,7 @@ VISIONARY_GPT_IMAGE_2_API_KEY=your_gpt_image_2_standard_key
 VISIONARY_GPT_IMAGE_2_HD_API_KEY=your_gpt_image_2_2k_4k_key
 JWT_SECRET=your_random_secret
 ADMIN_USERNAMES=admin
-IMAGE_RETENTION_DAYS=3
+IMAGE_RETENTION_DAYS=2
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ALLOW_MULTI_DEVICE_LOGIN=true
 ```
@@ -79,7 +79,7 @@ Notes:
 - `VITE_*` variables are safe for the frontend build.
 - Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT-image-2 Plus standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT-image-2 Plus 2K/4K. `VISIONARY_API_KEY` remains a fallback.
 - GPT-image-2 pricing is checked against Visionary's machine-readable configuration every 72 hours. Valid pricing changes are applied without a redeploy; broader API documentation changes are flagged in the admin dashboard for review. Configure the interval with `VISIONARY_DOC_SYNC_INTERVAL_HOURS`.
-- Image retention defaults to 3 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
+- Image retention defaults to 2 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
 - Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
 
 ## Build and checks
@@ -176,13 +176,21 @@ npm run db:sync:supabase
 ## Public API (Async)
 
 Pixory submits generation through the same server-side model gateway used by the
-website and immediately returns Pixory's own task ID. GPT Image requests use the
-configured primary provider first and automatically fall back to Visionary when
-the primary provider is unavailable or quota-limited. Provider switching does
-not change public model names, request/response formats, task IDs, polling
-endpoints, or billing. Tasks are bound to the API key that created them, survive
-server restarts through the configured database, and persist the completed image
-locally before returning it. Failed tasks automatically refund reserved credits.
+website and immediately returns Pixory's own task ID. Every request follows the
+enabled channel order configured for its model and resolution. Explicit channel
+failures move seamlessly to the next configured choice without changing public
+model names, request/response formats, task IDs, polling endpoints, or billing.
+Task metadata is bound to the API key that created it and
+survives server restarts through the configured database. Public API results are
+not copied into local storage or R2: upstream HTTPS result URLs are returned
+directly, while inline Base64 results are kept only in a short-lived in-memory
+cache so clients should fetch them promptly. Generation metadata remains visible
+in admin history without an image path. Failed tasks automatically refund
+reserved credits.
+
+A failed channel is skipped only briefly for the same resolution, ratio, and
+quality, then automatically returns to its configured cost priority. Prompt-policy
+and reference-image errors never penalize a channel or alter the configured order.
 
 ### Submit async task
 

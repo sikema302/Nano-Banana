@@ -38,3 +38,14 @@ test('success and admin reset immediately restore a channel', () => {
   failover.reset();
   assert.deepEqual(failover.candidates('banana:4K', channels), channels);
 });
+
+test('isolates cooldowns by the exact generation configuration', () => {
+  const failover = createImageChannelFailover({ cooldownMs: 30_000, now: () => 1_000 });
+  const channels = ['cheap-first', 'fallback'];
+  const squareRoute = 'banana:2K:1:1:default';
+  const portraitRoute = 'banana:2K:9:16:default';
+
+  failover.markFailure(squareRoute, 'cheap-first');
+  assert.deepEqual(failover.candidates(squareRoute, channels), ['fallback']);
+  assert.deepEqual(failover.candidates(portraitRoute, channels), channels);
+});

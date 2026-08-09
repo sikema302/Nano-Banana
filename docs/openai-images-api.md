@@ -35,7 +35,7 @@ The response follows the OpenAI Images shape:
   "created": 1785067200,
   "data": [
     {
-      "url": "https://pixory.top/uploads/generated/example.png",
+      "url": "https://upstream-images.example/result.png",
       "revised_prompt": "A cinematic harbor at sunrise"
     }
   ]
@@ -45,11 +45,24 @@ The response follows the OpenAI Images shape:
 Set `response_format` to `b64_json` to receive Base64 image data. `n` currently
 must be `1`.
 
+Public API output images are not copied into PIXORY local storage or R2. The API
+returns an upstream HTTPS result URL directly when one is available. Provider
+results that exist only as inline image data are returned from a bounded,
+short-lived memory cache and should be downloaded promptly. Generation metadata,
+status, duration, and billing remain in admin history, with an empty image path.
+If an inline asynchronous result expires before it is fetched, its task remains
+in `succeeded` state with an empty `results` array and `resultExpired: true`.
+
+User-facing generation failures are intentionally provider-neutral. They are
+reported as a sensitive-prompt correction, a specific reference-image problem,
+a temporary image-service outage, or model congestion. Responses never expose
+the upstream model, provider, fallback order, or internal switching behavior.
+
 PIXORY extensions supported by this endpoint:
 
 - `dimensions`, `aspect_ratio`, or `aspectRatio`: any ratio supported by the web UI.
 - `imageSize` or `image_size`: `gpt-image-2` supports `STANDARD`, `2K`, and `4K`; `nano-banana-pro` supports `1K`, `2K`, and `4K`.
-- `reference_images` or `images`: up to 9 HTTPS URLs or image data URLs.
+- `reference_images` or `images`: up to 6 HTTPS URLs or image data URLs; Base64 images must be no larger than 25 MB each.
 - `optimizeChineseText`: Nano Banana billing option. When enabled it adds 8 PIXORY credits, but no upstream native enhancement feature or enhancement endpoint is called.
 
 For asynchronous use, keep using:

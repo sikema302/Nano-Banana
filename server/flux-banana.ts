@@ -1,3 +1,5 @@
+import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
+
 export type FluxBananaInput = {
   prompt: string;
   ratio: string;
@@ -211,7 +213,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   try {
     const parts: GeminiPart[] = [{ text: input.prompt }];
     parts.push(...await Promise.all(
-      input.images.slice(0, 9).map((source) => referencePart(source, controller.signal, fetchImpl)),
+      input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, controller.signal, fetchImpl)),
     ));
     requestSent = true;
     const baseUrl = options.baseUrl.replace(/\/+$/, '');

@@ -364,6 +364,65 @@ function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+function fileExtensionForDownload(source: string, mimeType: string) {
+  const mimeExtensions: Record<string, string> = {
+    'image/gif': 'gif',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/svg+xml': 'svg',
+    'image/webp': 'webp',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  };
+  const normalizedMimeType = mimeType.split(';')[0].trim().toLowerCase();
+  if (mimeExtensions[normalizedMimeType]) return mimeExtensions[normalizedMimeType];
+
+  try {
+    const pathname = new URL(source, window.location.href).pathname;
+    const extension = pathname.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1]?.toLowerCase();
+    if (extension) return extension === 'jpeg' ? 'jpg' : extension;
+  } catch {
+    // Use PNG when the source does not expose a usable file extension.
+  }
+  return 'png';
+}
+
+export async function downloadAsset(source: string, suggestedName = 'pixory-image') {
+  if (!source) throw new Error('下载地址无效');
+
+  let response: Response;
+  if (source.startsWith('data:')) {
+    response = await fetch(source);
+  } else {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    const token = getToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    response = await fetch(toApiUrl('/api/user/assets/download'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ source }),
+    });
+  }
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => '');
+    throw new Error(getApiErrorMessage(parseJsonPayload(responseText), responseText) || '下载失败');
+  }
+
+  const blob = await response.blob();
+  const extension = fileExtensionForDownload(source, blob.type);
+  const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = `${baseName || 'pixory-image'}.${extension}`;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+}
+
 function setSession(token: string, user: UserInfo) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -878,7 +937,7 @@ export async function updateAdminProviderRouting(patch: Partial<ProviderRoutingC
   );
 }
 
-export async function cleanupAdminImages(retentionDays = 3) {
+export async function cleanupAdminImages(retentionDays = 2) {
   return request<{
     cleanup: AdminImageCleanupResult;
     imageStorage: AdminImageStorageStats;
