@@ -2,6 +2,12 @@ name: Migrate production images to R2
 
 on:
   workflow_dispatch:
+    inputs:
+      delete_local_copies:
+        description: Delete each local copy only after its R2 object size is verified
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: production-r2-migration
@@ -17,6 +23,7 @@ jobs:
       SERVER_USER: root
       PROJECT_PATH: /var/www/nano-banana
       SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+      DELETE_LOCAL_COPIES: ${{ inputs.delete_local_copies }}
 
     steps:
       - name: Install SSH client
@@ -25,15 +32,18 @@ jobs:
       - name: Upload and verify recent images
         run: |
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
-            "$SERVER_USER@$SERVER_HOST" "PROJECT_PATH='$PROJECT_PATH' bash -s" <<'REMOTE'
+            "$SERVER_USER@$SERVER_HOST" \
+              "PROJECT_PATH='$PROJECT_PATH' DELETE_LOCAL_COPIES='$DELETE_LOCAL_COPIES' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$PROJECT_PATH"
           test -s .env.local
+          migration_args=(--max-age-days 3 --concurrency 3)
+          if [ "$DELETE_LOCAL_COPIES" = true ]; then
+            migration_args+=(--delete-after-upload)
+          fi
           timeout --signal=TERM --kill-after=30s 75m \
             nice -n 10 npm run storage:r2:migrate -- \
-              --max-age-days 3 \
-              --concurrency 3 \
-              --delete-after-upload
+              "${migration_args[@]}"
           echo '=== local image storage after migration ==='
           du -sh uploads/generated uploads/thumbnails 2>/dev/null || true
           curl -fsS http://127.0.0.1:3001/api/ready
