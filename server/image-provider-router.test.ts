@@ -496,7 +496,7 @@ test('Nano Banana 1K can fall back after an explicit Junliai failure', async () 
   assert.equal(fallbackCalls, 1);
 });
 
-test('uses the Junliai nano-banana-2 override for the independent Banana 1K channel', async () => {
+test('uses the Junliai nano-banana-2 override for independent Banana 1K and 2K channels', async () => {
   const store = createStore();
   let request: { url: string; init?: RequestInit } | null = null;
   const router = createImageProviderRouter({
@@ -531,6 +531,23 @@ test('uses the Junliai nano-banana-2 override for the independent Banana 1K chan
     model: 'nano-banana-2',
     prompt: 'A lighthouse',
     size: '1024x1024',
+    response_format: 'b64_json',
+  });
+
+  assert.equal(
+    await router.generate({
+      ...input,
+      modelId: 'Nano_Banana_Pro',
+      imageSize: '2K',
+      providerRouting: 'junliai_only',
+      upstreamModelOverride: 'nano-banana-2',
+    }),
+    'data:image/png;base64,aW1hZ2U=',
+  );
+  assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+    model: 'nano-banana-2',
+    prompt: 'A lighthouse',
+    size: '2048x2048',
     response_format: 'b64_json',
   });
 });

@@ -12,7 +12,6 @@ type FluxBananaOptions = {
   apiKey: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-  random?: () => number;
   sleepImpl?: (milliseconds: number) => Promise<void>;
 };
 
@@ -62,12 +61,9 @@ function normalizeImageSize(value: string) {
   return ['1K', '2K', '4K'].includes(value) ? value : '1K';
 }
 
-export function selectFluxBananaModel(imageSize: string, random: () => number = Math.random) {
+export function selectFluxBananaModel(imageSize: string) {
   const normalized = normalizeImageSize(imageSize);
   if (normalized === '4K') return FLUX_BANANA_PRO_MODEL;
-  if (normalized === '2K') {
-    return random() < 0.5 ? FLUX_BANANA_PRO_MODEL : FLUX_BANANA_FLASH_MODEL;
-  }
   return FLUX_BANANA_FLASH_MODEL;
 }
 
@@ -207,7 +203,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   const fetchImpl = options.fetchImpl || fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15 * 60_000);
-  const model = selectFluxBananaModel(input.imageSize, options.random);
+  const model = selectFluxBananaModel(input.imageSize);
   let requestSent = false;
 
   try {

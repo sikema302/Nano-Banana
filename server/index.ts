@@ -30,7 +30,7 @@ import {
 } from './generated-image-download.js';
 import { durablePublicImageResultSource, EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
-import { getGptImageCredits, normalizeGptImageQuality } from '../src/lib/model-pricing.js';
+import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
 import {
   MAX_REFERENCE_IMAGE_BYTES,
@@ -40,13 +40,19 @@ import {
 import { createImageChannelFailover } from './image-channel-failover.js';
 import { normalizePublicApiProviderRouting } from './public-api-routing.js';
 import {
-  getVideoGenerationCredits,
   supportsVideoConfiguration,
   type VideoDurationSeconds,
   type VideoModelId,
   type VideoRatio,
   type VideoResolution,
 } from '../src/lib/video-pricing.js';
+import {
+  DEFAULT_MODEL_CREDIT_PRICING,
+  getConfiguredImageCredits,
+  getConfiguredVideoCredits,
+  normalizeModelCreditPricing,
+  type ModelCreditPricing,
+} from '../src/lib/model-credit-config.js';
 import {
   getActiveGptImagePricing,
   getVisionaryDocSyncStatus,
@@ -82,6 +88,18 @@ import {
 import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-redemption.js';
 import { createNotificationService } from './notifications.js';
 import { resolveApiKeyDisplayCredits, type CreditValues } from './api-key-credits.js';
+import {
+  availableCreditsForBucket,
+  creditBucketForModel,
+  debitCreditBalances,
+  normalizeCreditBalances,
+  reconcileCreditBalances,
+  refundCreditBalances,
+  totalCreditBalance,
+  type CreditBalances,
+  type CreditBucket,
+  type CreditDebit,
+} from './user-credit-pools.js';
 import {
   createR2ObjectStorage,
   legacyAssetObjectKey,
@@ -155,6 +173,7 @@ type PublicUser = {
   isAdmin: boolean;
   canRedeemInvite: boolean;
   creditsRemaining?: number;
+  creditBalances?: CreditBalances;
 };
 
 type PromoCouponRecord = {
@@ -294,6 +313,7 @@ type PublicAsyncGenerationTask = {
   retryAfterSeconds: number;
   creditsUsed: number;
   refunded: boolean;
+  accountDebit?: CreditDebit;
   prompt: string;
   modelId: string;
   modelName: string;
@@ -621,6 +641,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'flux', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '4K': [
       { id: 'flux', enabled: true },
@@ -739,6 +760,8 @@ async function getSqlJsReady() {
 // 鈹€鈹€鈹€ 甯搁噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const ADMIN_INITIAL_CREDITS = 3859;
+const MODEL_CREDIT_PRICING_SETTING_KEY = 'model_credit_pricing_v1';
+const USER_CREDIT_POOLS_SETTING_PREFIX = 'user_credit_pools_v1:';
 const INVITE_RECLAIM_THRESHOLD = 17;
 const INVITE_RECLAIM_DAYS = 7;
 const SUPABASE_SYNC_TABLES = [
@@ -804,6 +827,8 @@ const models = [
     creditsCost: 24,
   },
 ] as const;
+
+let activeModelCreditPricing: ModelCreditPricing = normalizeModelCreditPricing(DEFAULT_MODEL_CREDIT_PRICING);
 
 const tokenSecret =
   process.env.JWT_SECRET ||
@@ -887,33 +912,36 @@ async function reserveChatCredits(user: AuthUser) {
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.ensureUserCredits(user.userId, user.username, 0);
-    const credits = await db.getUserCredits(user.userId);
-    if (credits.remainingCredits < CHAT_MESSAGE_CREDITS) return null;
-    await db.incrementUsedCredits(user.userId, CHAT_MESSAGE_CREDITS);
-    await db.syncInviteCodeBalanceForUser(user.userId);
-    return credits.remainingCredits - CHAT_MESSAGE_CREDITS;
+  } else {
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      ensureUserCredits(db, user.userId, user.username, 0);
+    });
   }
-  return withWriteDb((db) => {
-    ensureSchema(db);
-    ensureUserCredits(db, user.userId, user.username, 0);
-    const credits = getUserCredits(db, user.userId);
-    if (credits.remainingCredits < CHAT_MESSAGE_CREDITS) return null;
-    db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [CHAT_MESSAGE_CREDITS, nowIso(), user.userId]);
-    syncInviteCodeBalanceForUser(db, user.userId);
-    return credits.remainingCredits - CHAT_MESSAGE_CREDITS;
-  });
+  const credits = await getUserCreditDetails(user.userId);
+  if (availableCreditsForBucket(credits.creditBalances, 'general') < CHAT_MESSAGE_CREDITS) return null;
+  const charged = await debitUserCredits(user.userId, 'general', CHAT_MESSAGE_CREDITS);
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.syncInviteCodeBalanceForUser(user.userId);
+  } else {
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      syncInviteCodeBalanceForUser(db, user.userId);
+    });
+  }
+  return charged.remainingCredits;
 }
 
 async function refundChatCredits(userId: string) {
+  await refundUserCredits(userId, { gpt: 0, banana: 0, general: CHAT_MESSAGE_CREDITS });
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
-    await db.incrementUsedCredits(userId, -CHAT_MESSAGE_CREDITS);
     await db.syncInviteCodeBalanceForUser(userId);
     return;
   }
   await withWriteDb((db) => {
     ensureSchema(db);
-    db.run('UPDATE user_credits SET used_credits = MAX(0, used_credits - ?), updated_at = ? WHERE user_id = ?', [CHAT_MESSAGE_CREDITS, nowIso(), userId]);
     syncInviteCodeBalanceForUser(db, userId);
   });
 }
@@ -1789,20 +1817,14 @@ function toPublicUser(user: AuthUser): PublicUser {
 }
 
 function getModelCredits(modelId: string, imageSize = '', quality = '') {
-  if (modelId === 'gpt-image-2') {
-    return getGptImageCredits(imageSize, quality, getActiveGptImagePricing());
-  }
-  if (modelId === 'Nano_Banana_Pro') {
-    if (imageSize === '1K') return 20;
-    if (imageSize === '4K') return 30;
-    return 24;
-  }
-  return 1;
+  return getConfiguredImageCredits(activeModelCreditPricing, modelId, imageSize, quality);
 }
 
 function getNanoBananaEnhancementCredits(modelId: string, imageSize: string, enabled: boolean) {
   if (!enabled || modelId !== 'Nano_Banana_Pro') return 0;
-  if (imageSize === '1K' || imageSize === '2K' || imageSize === '4K') return 8;
+  if (imageSize === '1K' || imageSize === '2K' || imageSize === '4K') {
+    return activeModelCreditPricing.nanoBanana.enhancement;
+  }
   return 0;
 }
 
@@ -3108,31 +3130,26 @@ async function deletePublicApiKeyUnlocked(id: string) {
   return true;
 }
 
-async function reserveAccountApiKeyCredits(record: PublicApiKeyRecord, credits: number) {
+async function reserveAccountApiKeyCredits(record: PublicApiKeyRecord, credits: number, bucket: CreditBucket) {
   const ownerUserId = record.ownerUserId!;
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.ensureUserCredits(ownerUserId, record.ownerUsername || record.createdBy, 0);
-    const balance = await db.getUserCredits(ownerUserId);
-    if (balance.remainingCredits < credits) {
-      throw new Error(`API Key \u6240\u5c5e\u8d26\u53f7\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${credits}\uff0c\u5269\u4f59 ${balance.remainingCredits}`);
-    }
-    await db.incrementUsedCredits(ownerUserId, credits);
-    return { ...balance, usedCredits: balance.usedCredits + credits };
+  } else {
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      ensureUserCredits(db, ownerUserId, record.ownerUsername || record.createdBy, 0);
+    });
   }
-  return withWriteDb((db) => {
-    ensureSchema(db);
-    ensureUserCredits(db, ownerUserId, record.ownerUsername || record.createdBy, 0);
-    const balance = getUserCredits(db, ownerUserId);
-    if (balance.remainingCredits < credits) {
-      throw new Error(`API Key \u6240\u5c5e\u8d26\u53f7\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${credits}\uff0c\u5269\u4f59 ${balance.remainingCredits}`);
-    }
-    incrementUserUsedCredits(db, ownerUserId, credits);
-    return { ...balance, usedCredits: balance.usedCredits + credits };
-  });
+  const balance = await getUserCreditDetails(ownerUserId);
+  const available = availableCreditsForBucket(balance.creditBalances, bucket);
+  if (available < credits) {
+    throw new Error(`API Key \u6240\u5c5e\u8d26\u53f7\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${credits}\uff0c\u53ef\u7528 ${available}`);
+  }
+  return debitUserCredits(ownerUserId, bucket, credits);
 }
 
-async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: number) {
+async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: number, bucket: CreditBucket) {
   const keyHash = hashPublicApiKey(plainKey);
   const records = await readPublicApiKeyRecords();
   const index = records.findIndex((record) => record.keyHash === keyHash);
@@ -3146,10 +3163,10 @@ async function reservePublicApiKeyCreditsUnlocked(plainKey: string, credits: num
   }
   if (record.pausedAt) throw new Error('API Key \u5df2\u6682\u505c');
   if (record.billingMode === 'account' && record.ownerUserId) {
-    const balance = await reserveAccountApiKeyCredits(record, credits);
+    const balance = await reserveAccountApiKeyCredits(record, credits, bucket);
     records[index] = { ...record, lastUsedAt: nowIso() };
     await writePublicApiKeyRecords(records);
-    return { ...records[index], totalCredits: balance.totalCredits, usedCredits: balance.usedCredits };
+    return { ...records[index], totalCredits: balance.totalCredits, usedCredits: balance.usedCredits, accountDebit: balance.debit };
   }
   const remainingCredits = Math.max(0, record.totalCredits - record.usedCredits);
   if (remainingCredits < credits) {
@@ -3213,6 +3230,7 @@ function normalizePublicAsyncTask(value: Partial<PublicAsyncGenerationTask>): Pu
     retryAfterSeconds: Math.max(0, Number(value.retryAfterSeconds ?? 3)),
     creditsUsed: Math.max(0, Math.floor(Number(value.creditsUsed || 0))),
     refunded: Boolean(value.refunded),
+    accountDebit: value.accountDebit ? normalizeCreditBalances(value.accountDebit) : undefined,
     prompt: normalizeString(value.prompt),
     modelId: normalizeString(value.modelId),
     modelName: normalizeString(value.modelName),
@@ -3302,23 +3320,14 @@ function withPublicAsyncTaskMutationLock<T>(operation: () => Promise<T>): Promis
   return result;
 }
 
-async function refundPublicApiKeyCreditsUnlocked(keyId: string, credits: number) {
+async function refundPublicApiKeyCreditsUnlocked(keyId: string, credits: number, accountDebit?: CreditDebit) {
   const records = await readPublicApiKeyRecords();
   const target = records.find((record) => record.id === keyId);
   if (target?.billingMode === 'account' && target.ownerUserId) {
-    if (USE_SUPABASE) {
-      const db = await getSupabaseDb();
-      const balance = await db.getUserCredits(target.ownerUserId);
-      await db.incrementUsedCredits(target.ownerUserId, -Math.min(balance.usedCredits, credits));
-    } else {
-      await withWriteDb((db) => {
-        ensureSchema(db);
-        db.run(
-          'UPDATE user_credits SET used_credits = MAX(0, used_credits - ?), updated_at = ? WHERE user_id = ?',
-          [Math.max(0, Math.floor(credits)), nowIso(), target.ownerUserId],
-        );
-      });
-    }
+    await refundUserCredits(
+      target.ownerUserId,
+      accountDebit || { gpt: 0, banana: 0, general: Math.max(0, Math.floor(credits)) },
+    );
     return;
   }
   await writePublicApiKeyRecords(
@@ -3356,12 +3365,12 @@ function deletePublicApiKey(id: string) {
   return withPublicApiKeyMutationLock(() => deletePublicApiKeyUnlocked(id));
 }
 
-function reservePublicApiKeyCredits(plainKey: string, credits: number) {
-  return withPublicApiKeyMutationLock(() => reservePublicApiKeyCreditsUnlocked(plainKey, credits));
+function reservePublicApiKeyCredits(plainKey: string, credits: number, bucket: CreditBucket) {
+  return withPublicApiKeyMutationLock(() => reservePublicApiKeyCreditsUnlocked(plainKey, credits, bucket));
 }
 
-function refundPublicApiKeyCredits(keyId: string, credits: number) {
-  return withPublicApiKeyMutationLock(() => refundPublicApiKeyCreditsUnlocked(keyId, credits));
+function refundPublicApiKeyCredits(keyId: string, credits: number, accountDebit?: CreditDebit) {
+  return withPublicApiKeyMutationLock(() => refundPublicApiKeyCreditsUnlocked(keyId, credits, accountDebit));
 }
 
 function getAdminApiCreditMapSqlite(db: SqlDatabase) {
@@ -3695,6 +3704,129 @@ function getAdminCreditSummary(db: SqlDatabase) {
 
 function getUserCredits(db: SqlDatabase, userId: string) {
   return toCreditSummary(getOne<Record<string, unknown>>(db, 'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?', [userId]));
+}
+
+function userCreditPoolsSettingKey(userId: string) {
+  return `${USER_CREDIT_POOLS_SETTING_PREFIX}${userId}`;
+}
+
+function getUserCreditDetailsSqlite(db: SqlDatabase, userId: string) {
+  const summary = getUserCredits(db, userId);
+  const key = userCreditPoolsSettingKey(userId);
+  const raw = getSetting(db, key, '');
+  const balances = reconcileCreditBalances(parseJsonSetting(raw, {}), summary.remainingCredits);
+  const serialized = JSON.stringify(balances);
+  if (serialized !== raw) setSetting(db, key, serialized);
+  return { ...summary, remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+}
+
+let userCreditMutationQueue: Promise<unknown> = Promise.resolve();
+
+function withUserCreditMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = userCreditMutationQueue.then(operation, operation);
+  userCreditMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function getUserCreditDetailsUnlocked(userId: string) {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    const summary = await db.getUserCredits(userId);
+    const key = userCreditPoolsSettingKey(userId);
+    const raw = await db.getSetting(key, '');
+    const balances = reconcileCreditBalances(parseJsonSetting(raw, {}), summary.remainingCredits);
+    const serialized = JSON.stringify(balances);
+    if (serialized !== raw) await db.setSetting(key, serialized);
+    return { ...summary, remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+  }
+  return withWriteDb((db) => {
+    ensureSchema(db);
+    return getUserCreditDetailsSqlite(db, userId);
+  });
+}
+
+function getUserCreditDetails(userId: string) {
+  return withUserCreditMutationLock(() => getUserCreditDetailsUnlocked(userId));
+}
+
+async function debitUserCredits(userId: string, bucket: CreditBucket, amount: number) {
+  return withUserCreditMutationLock(async () => {
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      const current = await getUserCreditDetailsUnlocked(userId);
+      const charged = debitCreditBalances(current.creditBalances, bucket, amount);
+      await db.incrementUsedCredits(userId, totalCreditBalance(charged.debit));
+      await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(charged.balances));
+      const summary = await db.getUserCredits(userId);
+      return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
+    }
+    return withWriteDb((db) => {
+      ensureSchema(db);
+      const current = getUserCreditDetailsSqlite(db, userId);
+      const charged = debitCreditBalances(current.creditBalances, bucket, amount);
+      incrementUserUsedCredits(db, userId, totalCreditBalance(charged.debit));
+      setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(charged.balances));
+      const summary = getUserCredits(db, userId);
+      return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
+    });
+  });
+}
+
+async function refundUserCredits(userId: string, debit: CreditDebit) {
+  return withUserCreditMutationLock(async () => {
+    const refundAmount = totalCreditBalance(normalizeCreditBalances(debit));
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      const current = await getUserCreditDetailsUnlocked(userId);
+      const balances = refundCreditBalances(current.creditBalances, debit);
+      await db.incrementUsedCredits(userId, -Math.min(current.usedCredits, refundAmount));
+      await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(balances));
+      return { ...(await db.getUserCredits(userId)), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+    }
+    return withWriteDb((db) => {
+      ensureSchema(db);
+      const current = getUserCreditDetailsSqlite(db, userId);
+      const balances = refundCreditBalances(current.creditBalances, debit);
+      db.run('UPDATE user_credits SET used_credits = MAX(0, used_credits - ?), updated_at = ? WHERE user_id = ?', [
+        Math.min(current.usedCredits, refundAmount),
+        nowIso(),
+        userId,
+      ]);
+      setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
+      return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+    });
+  });
+}
+
+async function rechargeUserCreditPools(userId: string, additions: CreditBalances) {
+  return withUserCreditMutationLock(async () => {
+    const normalized = normalizeCreditBalances(additions);
+    const added = totalCreditBalance(normalized);
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      const current = await getUserCreditDetailsUnlocked(userId);
+      const balances = {
+        gpt: current.creditBalances.gpt + normalized.gpt,
+        banana: current.creditBalances.banana + normalized.banana,
+        general: current.creditBalances.general + normalized.general,
+      };
+      await db.setUserTotalCredits(userId, current.totalCredits + added);
+      await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(balances));
+      return { ...(await db.getUserCredits(userId)), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+    }
+    return withWriteDb((db) => {
+      ensureSchema(db);
+      const current = getUserCreditDetailsSqlite(db, userId);
+      const balances = {
+        gpt: current.creditBalances.gpt + normalized.gpt,
+        banana: current.creditBalances.banana + normalized.banana,
+        general: current.creditBalances.general + normalized.general,
+      };
+      setUserTotalCredits(db, userId, current.totalCredits + added);
+      setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
+      return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
+    });
+  });
 }
 
 function isInviteManagedUser(db: SqlDatabase, userId: string) {
@@ -4114,23 +4246,12 @@ async function resolveExternalUserId(db: SqlDatabase, legacyUserId: number, user
 // 鈹€鈹€鈹€ 鑾峰彇鐢ㄦ埛绉垎锛堢粺涓€鎺ュ彛锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 async function getPublicUser(user: AuthUser) {
-  if (USE_SUPABASE) {
-    const db = await getSupabaseDb();
-    const credits = await db.getUserCredits(user.userId);
-    return {
-      ...toPublicUser(user),
-      creditsRemaining: credits.remainingCredits,
-    };
-  }
-
-  const credits = await withReadDb((db) => {
-    ensureSchema(db);
-    return getUserCredits(db, user.userId);
-  });
+  const credits = await getUserCreditDetails(user.userId);
 
   return {
     ...toPublicUser(user),
     creditsRemaining: credits.remainingCredits,
+    creditBalances: credits.creditBalances,
   };
 }
 
@@ -4232,7 +4353,7 @@ async function parseVisionaryJsonResponse<T>(response: globalThis.Response, fall
 
 function getPublicApiErrorStatus(message: string) {
   if (/invalid|无效|停用|revoked/i.test(message)) return 401;
-  if (/额度不足|余额不足|credits?.*(not enough|insufficient)|insufficient/i.test(message)) return 402;
+  if (/积分不足|额度不足|余额不足|credits?.*(not enough|insufficient)|insufficient/i.test(message)) return 402;
   if (/queue capacity|queue is full|队列已满/i.test(message)) return 429;
   return 500;
 }
@@ -5481,6 +5602,13 @@ async function start() {
       });
     },
   };
+  activeModelCreditPricing = normalizeModelCreditPricing(parseJsonSetting(
+    await visionaryDocSyncStore.get(
+      MODEL_CREDIT_PRICING_SETTING_KEY,
+      JSON.stringify({ ...DEFAULT_MODEL_CREDIT_PRICING, gptImage2: getActiveGptImagePricing() }),
+    ),
+    DEFAULT_MODEL_CREDIT_PRICING,
+  ));
   const notificationService = createNotificationService(visionaryDocSyncStore);
   providerRouting = createProviderRouting({
     store: visionaryDocSyncStore,
@@ -5941,10 +6069,7 @@ async function start() {
           return;
         }
 
-        const [matches, credits] = await Promise.all([
-          bcrypt.compare(password, record.password_hash),
-          db.getUserCredits(record.id),
-        ]);
+        const matches = await bcrypt.compare(password, record.password_hash);
         if (!matches) {
           res.status(401).json({ error: 'Invalid username or password' });
           return;
@@ -5958,10 +6083,7 @@ async function start() {
 
         res.json({
           token,
-          user: {
-            ...toPublicUser(authUser),
-            creditsRemaining: credits.remainingCredits,
-          },
+          user: await getPublicUser(authUser),
         });
         return;
       }
@@ -6242,9 +6364,14 @@ async function start() {
   });
 
   app.get('/api/models', requireAuth, async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
-      models,
-      gptImagePricing: getActiveGptImagePricing(),
+      models: models.map((model) => ({
+        ...model,
+        creditsCost: getModelCredits(model.id, model.id === 'gpt-image-2' ? 'STANDARD' : '2K'),
+      })),
+      gptImagePricing: activeModelCreditPricing.gptImage2,
+      modelCreditPricing: activeModelCreditPricing,
       providerRouting: await providerRouting!.get(),
     });
   });
@@ -6455,7 +6582,7 @@ async function start() {
       return;
     }
 
-    let reservedKey: PublicApiKeyRecord | null = null;
+    let reservedKey: (PublicApiKeyRecord & { accountDebit?: CreditDebit }) | null = null;
     let creditsUsed = 0;
 
     try {
@@ -6472,7 +6599,7 @@ async function start() {
           ? dedicatedPolicy.credits
           : getModelCredits(modelId, imageSize, quality)
             + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
-        reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
+        reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed, creditBucketForModel(modelId));
 
         const createdAt = nowIso();
         const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
@@ -6511,7 +6638,7 @@ async function start() {
       });
     } catch (error) {
       if (reservedKey && creditsUsed > 0) {
-        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
+        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch(() => undefined);
       }
 
       console.error('[public-generate]', error);
@@ -6843,7 +6970,7 @@ async function start() {
       return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
         if (current.status === 'failed' && current.refunded) return current;
         if (!current.refunded && current.creditsUsed > 0) {
-          await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed);
+          await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed, current.accountDebit);
         }
         return {
           ...current,
@@ -6897,7 +7024,7 @@ async function start() {
     await updatePublicAsyncTask(task.id, task.apiKeyHash, async (current) => {
       if (current.status === 'succeeded' || (current.status === 'failed' && current.refunded)) return current;
       if (!current.refunded && current.creditsUsed > 0) {
-        await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed);
+        await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed, current.accountDebit);
       }
       return {
         ...current,
@@ -7050,7 +7177,7 @@ async function start() {
       });
       return;
     }
-    let reservedKey: PublicApiKeyRecord | null = null;
+    let reservedKey: (PublicApiKeyRecord & { accountDebit?: CreditDebit }) | null = null;
     let creditsUsed = 0;
     let temporaryReferenceImages: string[] = [];
 
@@ -7092,7 +7219,7 @@ async function start() {
         ? dedicatedPolicy.credits
         : getModelCredits(modelId, imageSize, quality)
           + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveOptimizeChineseText);
-      reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed);
+      reservedKey = await reservePublicApiKeyCredits(apiKey, creditsUsed, creditBucketForModel(modelId));
 
       const publicTask: PublicAsyncGenerationTask = {
         id: `pxgen_${Date.now()}_${randomHex(8)}`,
@@ -7104,6 +7231,7 @@ async function start() {
         retryAfterSeconds: 3,
         creditsUsed,
         refunded: false,
+        accountDebit: reservedKey.accountDebit,
         prompt,
         modelId,
         modelName,
@@ -7144,7 +7272,7 @@ async function start() {
     } catch (error) {
       await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       if (reservedKey && creditsUsed > 0) {
-        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed).catch(() => undefined);
+        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch(() => undefined);
       }
       console.error('[async-generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Async generation failed';
@@ -7391,6 +7519,45 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
+    try {
+      const modelId = normalizeModelId(normalizeString(req.body?.model));
+      const imageSize = await normalizeRoutedImageSize(normalizeString(req.body?.imageSize), modelId);
+      const quality = modelId === 'gpt-image-2'
+        ? normalizeGptQuality(normalizeString(req.body?.quality).toLowerCase(), imageSize)
+        : '';
+      const creditsUsed = getModelCredits(modelId, imageSize, quality)
+        + getNanoBananaEnhancementCredits(
+          modelId,
+          imageSize,
+          resolveAiEnhancementBillingRequested(req.body || {}),
+        );
+      const bucket = creditBucketForModel(modelId);
+
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+        });
+      }
+
+      const balance = await getUserCreditDetails(req.authUser!.userId);
+      const availableCredits = availableCreditsForBucket(balance.creditBalances, bucket);
+      if (availableCredits < creditsUsed) {
+        res.status(402).json({
+          error: `当前模型积分不足，需要 ${creditsUsed} 积分，可用 ${availableCredits} 积分`,
+          requiredCredits: creditsUsed,
+          availableCredits,
+        });
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '检查积分失败';
+      res.status(getPublicApiErrorStatus(message)).json({ error: publicImageErrorMessage(message) });
+      return;
+    }
     if (!generationWorkQueue.canAccept()) {
       res.status(429).json({ error: '当前任务较多，请稍后重试' });
       return;
@@ -7455,6 +7622,8 @@ async function start() {
     videoPath?: string;
     error?: string;
     creditsRemaining?: number;
+    creditDebit?: CreditDebit;
+    creditRefunded?: boolean;
   };
 
   const videoJobs = new Map<string, VideoGenerationJob>();
@@ -7466,7 +7635,7 @@ async function start() {
   };
 
   function publicVideoJob(req: Request, job: VideoGenerationJob) {
-    const creditsUsed = getVideoGenerationCredits(job.modelId, job.resolution, job.seconds);
+    const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, job.modelId, job.resolution, job.seconds);
     return {
       id: job.id,
       status: job.status,
@@ -7490,7 +7659,7 @@ async function start() {
     if (!job) return;
     const requestStartedAt = Date.now();
     const metricConfiguration = `${job.resolution} / ${job.seconds}s / ${job.ratio}`;
-    const creditsUsed = getVideoGenerationCredits(job.modelId, job.resolution, job.seconds);
+    const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, job.modelId, job.resolution, job.seconds);
     const recordVideoRequest = async (modelId: string, success: boolean, durationMs: number, errorMessage = '', videoPath = '') => {
       try {
         const requestId = await recordGenerationRequest({
@@ -7523,24 +7692,7 @@ async function start() {
       const created = await createJunliaiVideoTask(job);
       update({ progress: 12 });
       const videoPath = await waitForJunliaiVideo(created.taskId, (progress) => update({ progress }));
-      let creditsRemaining = 0;
-      if (USE_SUPABASE) {
-        const db = await getSupabaseDb();
-        await db.incrementUsedCredits(job.userId, creditsUsed);
-        await db.syncInviteCodeBalanceForUser(job.userId);
-        creditsRemaining = (await db.getUserCredits(job.userId)).remainingCredits;
-      } else {
-        creditsRemaining = await withWriteDb((db) => {
-          ensureSchema(db);
-          db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
-            creditsUsed,
-            nowIso(),
-            job.userId,
-          ]);
-          syncInviteCodeBalanceForUser(db, job.userId);
-          return getUserCredits(db, job.userId).remainingCredits;
-        });
-      }
+      const creditsRemaining = (await getUserCreditDetails(job.userId)).remainingCredits;
 
       const apiRequestMs = Math.max(0, Date.now() - requestStartedAt);
       try {
@@ -7601,6 +7753,21 @@ async function start() {
       update({ status: 'succeeded', progress: 100, videoPath, creditsRemaining, completedAt: nowIso() });
     } catch (error) {
       console.error('[video-generation]', error);
+      let creditsRemaining: number | undefined;
+      if (job.creditDebit && !job.creditRefunded) {
+        const refunded = await refundUserCredits(job.userId, job.creditDebit);
+        job.creditRefunded = true;
+        creditsRemaining = refunded.remainingCredits;
+        if (USE_SUPABASE) {
+          const db = await getSupabaseDb();
+          await db.syncInviteCodeBalanceForUser(job.userId);
+        } else {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            syncInviteCodeBalanceForUser(db, job.userId);
+          });
+        }
+      }
       const durationMs = Math.max(0, Date.now() - requestStartedAt);
       const errorMessage = sanitizeExternalErrorMessage(
         error instanceof Error ? error.message : 'Video generation failed',
@@ -7617,6 +7784,7 @@ async function start() {
       update({
         status: 'failed',
         error: errorMessage,
+        creditsRemaining,
         completedAt: nowIso(),
       });
     }
@@ -7662,17 +7830,24 @@ async function start() {
       res.status(429).json({ error: 'Generation queue is busy. Please retry shortly.' });
       return;
     }
+    let reservedDebit: CreditDebit | undefined;
     try {
-      const credits = USE_SUPABASE
-        ? await (await getSupabaseDb()).getUserCredits(req.authUser!.userId)
-        : await withReadDb((db) => {
-            ensureSchema(db);
-            return getUserCredits(db, req.authUser!.userId);
-          });
-      const creditsUsed = getVideoGenerationCredits(modelId, resolution, seconds);
-      if (credits.remainingCredits < creditsUsed) {
+      const credits = await getUserCreditDetails(req.authUser!.userId);
+      const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, modelId, resolution, seconds);
+      if (availableCreditsForBucket(credits.creditBalances, 'general') < creditsUsed) {
         res.status(402).json({ error: `当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分` });
         return;
+      }
+      const charged = await debitUserCredits(req.authUser!.userId, 'general', creditsUsed);
+      reservedDebit = charged.debit;
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+        });
       }
       const now = nowIso();
       const job: VideoGenerationJob = {
@@ -7687,24 +7862,46 @@ async function start() {
         resolution,
         seconds,
         referenceImages,
+        creditDebit: reservedDebit,
         createdAt: now,
         updatedAt: now,
       };
       videoJobs.set(job.id, job);
-      void generationWorkQueue.enqueue(job.id, 'video', () => runVideoJob(job.id)).catch((error) => {
+      void generationWorkQueue.enqueue(job.id, 'video', () => runVideoJob(job.id)).catch(async (error) => {
         const current = videoJobs.get(job.id);
         if (!current) return;
+        let creditsRemaining: number | undefined;
+        if (current.creditDebit && !current.creditRefunded) {
+          const refunded = await refundUserCredits(current.userId, current.creditDebit);
+          current.creditRefunded = true;
+          creditsRemaining = refunded.remainingCredits;
+          if (USE_SUPABASE) {
+            const db = await getSupabaseDb();
+            await db.syncInviteCodeBalanceForUser(current.userId);
+          } else {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              syncInviteCodeBalanceForUser(db, current.userId);
+            });
+          }
+        }
         Object.assign(current, {
           status: 'failed',
           error: error instanceof QueueCapacityError
             ? 'Generation queue is busy. Please retry shortly.'
             : 'The task could not be started. Please retry shortly.',
+          creditsRemaining,
           completedAt: nowIso(),
           updatedAt: nowIso(),
         });
       });
       res.status(202).json({ job: publicVideoJob(req, job) });
     } catch (error) {
+      if (reservedDebit) {
+        await refundUserCredits(req.authUser!.userId, reservedDebit).catch((refundError) => {
+          console.error('[video-generation] failed to refund reserved credits:', refundError);
+        });
+      }
       res.status(500).json({ error: error instanceof Error ? error.message : '创建视频任务失败' });
     }
   });
@@ -7746,6 +7943,7 @@ async function start() {
       return;
     }
 
+    let reservedUserDebit: CreditDebit | null = null;
     try {
       validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)));
       let modelId = normalizeModelId(model);
@@ -7757,6 +7955,7 @@ async function start() {
       const effectiveBillAiEnhancement = shouldEnhanceNanoBanana(modelId, imageSize, billAiEnhancement);
       let creditsUsed = getModelCredits(modelId, imageSize, quality)
         + getNanoBananaEnhancementCredits(modelId, imageSize, effectiveBillAiEnhancement);
+      const creditBucket = creditBucketForModel(modelId);
 
       // Credits check
       if (creditsUsed > 0) {
@@ -7780,6 +7979,13 @@ async function start() {
           });
         }
       }
+
+      const poolCredits = await getUserCreditDetails(req.authUser!.userId);
+      const availableModelCredits = availableCreditsForBucket(poolCredits.creditBalances, creditBucket);
+      if (availableModelCredits < creditsUsed) {
+        throw new Error(`当前可用于该模型的积分不足，需要 ${creditsUsed}，可用 ${availableModelCredits}`);
+      }
+      reservedUserDebit = (await debitUserCredits(req.authUser!.userId, creditBucket, creditsUsed)).debit;
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
@@ -7843,17 +8049,11 @@ async function start() {
         if (USE_SUPABASE) {
           const db = await getSupabaseDb();
           await db.reclaimLowBalanceInviteCodes();
-          await db.incrementUsedCredits(req.authUser!.userId, creditsUsed);
           await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
             reclaimLowBalanceInviteCodes(db);
-            db.run('UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ?', [
-              creditsUsed,
-              nowIso(),
-              req.authUser!.userId,
-            ]);
             syncInviteCodeBalanceForUser(db, req.authUser!.userId);
           });
         }
@@ -7918,6 +8118,11 @@ async function start() {
 
       res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
+      if (reservedUserDebit) {
+        await refundUserCredits(req.authUser!.userId, reservedUserDebit).catch((refundError) => {
+          console.error('[generate-credit-refund]', refundError);
+        });
+      }
       console.error('[generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';
       const status = getPublicApiErrorStatus(rawMessage);
@@ -8579,6 +8784,26 @@ async function start() {
     }
   });
 
+  app.get('/api/admin/model-credit-pricing', requireAuth, requireAdmin, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ modelCreditPricing: activeModelCreditPricing });
+  });
+
+  app.put('/api/admin/model-credit-pricing', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const next = normalizeModelCreditPricing({
+        ...(req.body || {}),
+        updatedAt: nowIso(),
+      });
+      await visionaryDocSyncStore.set(MODEL_CREDIT_PRICING_SETTING_KEY, JSON.stringify(next));
+      activeModelCreditPricing = next;
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ modelCreditPricing: next });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : '模型积分配置保存失败' });
+    }
+  });
+
   app.put('/api/admin/provider-routing', requireAuth, requireAdmin, async (req, res) => {
     try {
       const patch: ProviderRoutingPatch = {};
@@ -8834,10 +9059,11 @@ async function start() {
             const rightTime = right.lastGeneratedAt ? new Date(right.lastGeneratedAt).getTime() : 0;
             return sort === 'recent-asc' ? leftTime - rightTime : rightTime - leftTime;
           });
-        const pagedUsers = paginateArray(filteredUsers, page, pageSize).map((item) => ({
+        const pagedUsers = await Promise.all(paginateArray(filteredUsers, page, pageSize).map(async (item) => ({
           ...item,
+          creditBalances: (await getUserCreditDetails(item.userId)).creditBalances,
           usageTrend: trendByUserId.get(item.userId) || Array.from({ length: 7 }, () => 0),
-        }));
+        })));
 
         res.json({
           users: pagedUsers,
@@ -8863,7 +9089,10 @@ async function start() {
           pageSize,
         });
         return {
-          users: result.users,
+          users: result.users.map((item) => ({
+            ...item,
+            creditBalances: getUserCreditDetailsSqlite(db, item.userId).creditBalances,
+          })),
           usersPage: toPagination(page, pageSize, result.total),
         };
       });
@@ -8911,7 +9140,12 @@ async function start() {
 
   app.post('/api/admin/users/:userId/recharge', requireAuth, requireAdmin, async (req, res) => {
     const userId = normalizeString(req.params.userId);
-    const requestedCredits = Math.floor(Number(req.body?.credits));
+    const additions = normalizeCreditBalances({
+      gpt: req.body?.gptCredits,
+      banana: req.body?.bananaCredits,
+      general: req.body?.generalCredits ?? req.body?.credits,
+    });
+    const requestedCredits = totalCreditBalance(additions);
     if (!userId) {
       res.status(400).json({ error: 'User ID is required' });
       return;
@@ -8940,14 +9174,15 @@ async function start() {
           return;
         }
 
-        await db.setUserTotalCredits(userId, target.total_credits + requestedCredits);
+        const credits = await rechargeUserCreditPools(userId, additions);
         await db.syncInviteCodeBalanceForUser(userId);
         if (!isAdminTarget) await db.adjustAdminTotalCredits(-requestedCredits);
 
         res.json({
-          credits: await db.getUserCredits(userId),
+          credits,
           adminCredits: await db.getAdminCreditSummary(),
           rechargedCredits: requestedCredits,
+          rechargedByType: additions,
         });
         return;
       }
@@ -8967,14 +9202,21 @@ async function start() {
           throw new Error(`admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}`);
         }
 
-        const currentCredits = toCreditSummary(target);
+        const currentCredits = getUserCreditDetailsSqlite(db, userId);
+        const balances = {
+          gpt: currentCredits.creditBalances.gpt + additions.gpt,
+          banana: currentCredits.creditBalances.banana + additions.banana,
+          general: currentCredits.creditBalances.general + additions.general,
+        };
         setUserTotalCredits(db, userId, currentCredits.totalCredits + requestedCredits);
+        setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
         syncInviteCodeBalanceForUser(db, userId);
         if (!isAdminTarget) adjustAdminTotalCredits(db, -requestedCredits);
         return {
-          credits: getUserCredits(db, userId),
+          credits: { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances },
           adminCredits: getAdminCreditSummary(db),
           rechargedCredits: requestedCredits,
+          rechargedByType: additions,
         };
       });
       res.json(payload);
@@ -8997,6 +9239,7 @@ async function start() {
     }
 
     try {
+      await withUserCreditMutationLock(async () => {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const creditRows = await db.getAllCreditRows();
@@ -9016,7 +9259,7 @@ async function start() {
         await db.incrementUsedCredits(userId, requestedCredits);
         await db.syncInviteCodeBalanceForUser(userId);
         res.json({
-          credits: await db.getUserCredits(userId),
+          credits: await getUserCreditDetailsUnlocked(userId),
           adminCredits: await db.getAdminCreditSummary(),
           deductedCredits: requestedCredits,
         });
@@ -9040,12 +9283,13 @@ async function start() {
         incrementUserUsedCredits(db, userId, requestedCredits);
         syncInviteCodeBalanceForUser(db, userId);
         return {
-          credits: getUserCredits(db, userId),
+          credits: getUserCreditDetailsSqlite(db, userId),
           adminCredits: getAdminCreditSummary(db),
           deductedCredits: requestedCredits,
         };
       });
       res.json(payload);
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : '用户积分扣除失败';
       res.status(message.includes('不存在') ? 404 : 400).json({ error: message });

@@ -90,6 +90,7 @@ import {
   updateUserApiKey,
   updateAdminNotification,
   updateAdminProviderRouting,
+  updateAdminModelCreditPricing,
   startGenerateImageJob,
   startGenerateVideoJob,
   type AdminDashboardStats,
@@ -97,6 +98,7 @@ import {
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
+  type CreditBalances,
   type GeneratedImagePayload,
   type GenerationJobInfo,
   type VideoGenerationJobInfo,
@@ -121,9 +123,14 @@ import {
 } from './lib/api';
 import {
   DEFAULT_GPT_IMAGE_PRICING,
-  getGptImageCredits,
   type GptImagePricing,
 } from './lib/model-pricing';
+import {
+  DEFAULT_MODEL_CREDIT_PRICING,
+  getConfiguredImageCredits,
+  getConfiguredVideoCredits,
+  type ModelCreditPricing,
+} from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import {
@@ -134,7 +141,6 @@ import {
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
 import {
-  getVideoGenerationCredits,
   getVideoModelConfig,
   VIDEO_GENERATION_MODELS,
   type VideoDurationSeconds,
@@ -177,7 +183,7 @@ type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' |
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'batchCreate' | 'chat' | 'history' | 'apiDocs' | 'admin';
-type AdminSection = 'dashboard' | 'notifications' | 'invites' | 'users' | 'records' | 'apiKeys';
+type AdminSection = 'dashboard' | 'modelCredits' | 'notifications' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
   home: '/',
@@ -266,6 +272,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'flux', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: true },
+      { id: 'junliai-nano-banana-2', enabled: true },
     ],
     '4K': [
       { id: 'flux', enabled: true },
@@ -281,9 +288,9 @@ const providerChannelDetails: Record<string, { title: string; description: strin
   'junliai-economy': { title: 'Junli · GPT Image 2 低价', description: '适用于 Image2 1K / STANDARD' },
   'junliai-firefly': { title: 'Junli · Firefly GPT Image 2', description: '适用于 Image2 1K / 2K / 4K' },
   visionary: { title: 'Visionary', description: '按当前模型与分辨率选择对应线路' },
-  flux: { title: 'Flux', description: '1K Flash；2K 随机 Flash / Pro；4K Pro' },
+  flux: { title: 'Flux', description: '1K / 2K 固定 Flash；4K Pro' },
   junliai: { title: 'Junli · Nano Banana Pro', description: '使用既有 Nano Banana Pro 线路' },
-  'junliai-nano-banana-2': { title: 'Junli · Nano Banana 2', description: '仅用于 Banana 1K' },
+  'junliai-nano-banana-2': { title: 'Junli · Nano Banana 2', description: '用于 Banana 1K / 2K' },
 };
 
 function isImageResolutionEnabled(
@@ -578,27 +585,19 @@ function getModelCredits(
     quality?: GptQualityOption;
     optimizeChineseText?: boolean;
     pricing?: GptImagePricing;
+    modelCreditPricing?: ModelCreditPricing;
   },
 ) {
   if (!model) return 0;
+  const configuredPricing = options?.modelCreditPricing || DEFAULT_MODEL_CREDIT_PRICING;
   if (model.id === 'gpt-image-2') {
-    return getGptImageCredits(
-      options?.imageSize || 'STANDARD',
-      options?.quality || 'auto',
-      options?.pricing,
-    );
+    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || 'STANDARD', options?.quality || 'auto');
   }
   if (model.id === 'Nano_Banana_Pro') {
-    const baseCredits = options?.imageSize === '1K'
-      ? 20
-      : options?.imageSize === '4K'
-        ? 30
-        : typeof model.creditsCost === 'number'
-          ? model.creditsCost
-          : 24;
+    const baseCredits = getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
     const enhancementCredits = options?.optimizeChineseText
       ? options.imageSize === '1K' || options.imageSize === '2K' || options.imageSize === '4K'
-        ? 8
+        ? configuredPricing.nanoBanana.enhancement
         : 0
       : 0;
     return baseCredits + enhancementCredits;
@@ -613,6 +612,13 @@ function getModelSortOrder(modelId: string) {
   return 99;
 }
 
+function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana' | 'general') {
+  if (!user) return 0;
+  const balances = user.creditBalances;
+  if (!balances) return user.creditsRemaining ?? 0;
+  return bucket === 'general' ? balances.general : balances[bucket] + balances.general;
+}
+
 function getModelSuccessRate(modelId: string) {
   if (modelId === 'gpt-image-2') return '99%成功率';
   return '';
@@ -621,15 +627,17 @@ function getModelSuccessRate(modelId: string) {
 function CreditsSummary({
   user,
   selectedModel,
+  creditsCost,
+  creditsRemaining,
   onOpenPurchase,
 }: {
   user: UserInfo | null;
   selectedModel: ModelInfo | null;
+  creditsCost: number;
+  creditsRemaining: number;
   onOpenPurchase: () => void;
 }) {
-  const creditsRemaining = typeof user?.creditsRemaining === 'number' ? user.creditsRemaining : null;
-  const creditsCost = getModelCredits(selectedModel);
-  const insufficientCredits = creditsRemaining !== null && creditsRemaining < creditsCost;
+  const insufficientCredits = Boolean(user) && creditsRemaining < creditsCost;
 
   return (
     <div className="space-y-1 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
@@ -1059,6 +1067,7 @@ function SidePanel({
 function VideoCreateView({
   user,
   providerRouting,
+  modelCreditPricing,
   onSwitchImage,
   onLogin,
   onPurchase,
@@ -1066,6 +1075,7 @@ function VideoCreateView({
 }: {
   user: UserInfo | null;
   providerRouting: ProviderRoutingConfig;
+  modelCreditPricing: ModelCreditPricing;
   onSwitchImage: () => void;
   onLogin: () => void;
   onPurchase: () => void;
@@ -1077,7 +1087,8 @@ function VideoCreateView({
   const [resolution, setResolution] = useState<VideoResolution>('1080p');
   const [seconds, setSeconds] = useState<VideoDurationSeconds>(4);
   const modelConfig = getVideoModelConfig(modelId);
-  const creditsNeeded = getVideoGenerationCredits(modelId, resolution, seconds);
+  const creditsNeeded = getConfiguredVideoCredits(modelCreditPricing, modelId, resolution, seconds);
+  const availableVideoCredits = getAvailableUserCredits(user, 'general');
   const [references, setReferences] = useState<UploadPreview[]>([]);
   const [job, setJob] = useState<VideoGenerationJobInfo | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
@@ -1149,7 +1160,7 @@ function VideoCreateView({
       return;
     }
 
-    if ((user.creditsRemaining ?? 0) < creditsNeeded) {
+    if (availableVideoCredits < creditsNeeded) {
       setError(`积分不足，${resolution} 视频需要 ${creditsNeeded} 积分`);
       return;
     }
@@ -1344,7 +1355,7 @@ function VideoCreateView({
 
           <div className="mt-auto space-y-2">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
-              <span>使用积分：<span className="text-white">{creditsNeeded}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span></span>
+              <span>使用积分：<span className="text-white">{creditsNeeded}</span>/<span className="text-white">{availableVideoCredits}</span></span>
               <button
                 className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
                 type="button"
@@ -1356,7 +1367,7 @@ function VideoCreateView({
             {error ? <div className="app-alert app-alert-error">{error}</div> : null}
             <button
               className="btn-primary flex w-full items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={generating || !user || (user.creditsRemaining ?? 0) < creditsNeeded}
+              disabled={generating || !user || availableVideoCredits < creditsNeeded}
               type="submit"
             >
               {generating ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
@@ -2958,6 +2969,117 @@ function AdminNotificationsPanel({ onNotice }: { onNotice: (message: string) => 
   );
 }
 
+function AdminModelCreditPanel({
+  pricing,
+  onSave,
+}: {
+  pricing: ModelCreditPricing;
+  onSave: (pricing: ModelCreditPricing) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<ModelCreditPricing>(pricing);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setDraft(pricing), [pricing]);
+
+  const setGpt = (key: keyof ModelCreditPricing['gptImage2'], value: number) => {
+    setDraft((current) => ({ ...current, gptImage2: { ...current.gptImage2, [key]: value } }));
+  };
+  const setBanana = (key: keyof ModelCreditPricing['nanoBanana'], value: number) => {
+    setDraft((current) => ({ ...current, nanoBanana: { ...current.nanoBanana, [key]: value } }));
+  };
+  const setVideo = (modelId: VideoModelId, key: string, value: number) => {
+    setDraft((current) => ({
+      ...current,
+      video: {
+        ...current.video,
+        [modelId]: { ...current.video[modelId], [key]: value },
+      },
+    }));
+  };
+  const creditInput = (value: number, onChange: (value: number) => void) => (
+    <input
+      className="input w-28 text-right font-black"
+      min={1}
+      max={100000}
+      step={1}
+      type="number"
+      value={value}
+      onChange={(event) => onChange(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+    />
+  );
+  const row = (label: string, description: string, input: ReactNode) => (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 py-3 last:border-0">
+      <div><div className="text-sm font-bold text-zinc-100">{label}</div><div className="mt-1 text-[11px] text-zinc-500">{description}</div></div>
+      {input}
+    </div>
+  );
+
+  return (
+    <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-black text-white">模型积分管理</h2>
+          <p className="mt-1 text-xs text-zinc-500">保存后服务端立即生效，已登录客户端会在 15 秒内自动同步最新积分。</p>
+        </div>
+        <button
+          className="btn-primary"
+          type="button"
+          disabled={saving}
+          onClick={() => void (async () => {
+            setSaving(true);
+            try { await onSave(draft); } finally { setSaving(false); }
+          })()}
+        >
+          {saving ? '保存中...' : '保存并立即生效'}
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-sky-100">GPT-image-2</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 GPT 专用积分，不足部分自动扣通用积分。</p>
+          <div className="mt-3">
+            {row('STANDARD', '标准清晰度', creditInput(draft.gptImage2.standard, (value) => setGpt('standard', value)))}
+            {row('2K 普通', 'auto / low / medium', creditInput(draft.gptImage2.twoK, (value) => setGpt('twoK', value)))}
+            {row('2K 高质量', 'quality=high', creditInput(draft.gptImage2.twoKHigh, (value) => setGpt('twoKHigh', value)))}
+            {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage2.fourK, (value) => setGpt('fourK', value)))}
+            {row('4K 高质量', 'quality=high', creditInput(draft.gptImage2.fourKHigh, (value) => setGpt('fourKHigh', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-amber-100">Nano Banana Pro</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 Banana 专用积分，不足部分自动扣通用积分。</p>
+          <div className="mt-3">
+            {row('1K', '基础档位', creditInput(draft.nanoBanana.oneK, (value) => setBanana('oneK', value)))}
+            {row('2K', '标准档位', creditInput(draft.nanoBanana.twoK, (value) => setBanana('twoK', value)))}
+            {row('4K', '高清档位', creditInput(draft.nanoBanana.fourK, (value) => setBanana('fourK', value)))}
+            {row('AI 增强附加', '开启中文文字增强时额外收取', creditInput(draft.nanoBanana.enhancement, (value) => setBanana('enhancement', value)))}
+          </div>
+        </section>
+
+        {([
+          ['gemini-veo31', 'Gemini Veo 3.1', ['720p:4', '720p:6', '720p:8', '1080p:4', '1080p:6', '1080p:8']],
+          ['firefly-video', 'Firefly Video', ['720p:5', '1080p:5']],
+        ] as const).map(([modelId, title, tiers]) => (
+          <section key={modelId} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+            <h3 className="font-black text-violet-100">{title}</h3>
+            <p className="mt-1 text-[11px] text-zinc-500">视频与其他非图片模型仅扣通用积分。</p>
+            <div className="mt-3">
+              {tiers.map((tier) => row(
+                tier.replace(':', ' · ') + ' 秒',
+                '分辨率与时长组合',
+                creditInput(Number(draft.video[modelId]?.[tier] || 1), (value) => setVideo(modelId, tier, value)),
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+      {draft.updatedAt ? <p className="mt-4 text-right text-[11px] text-zinc-600">最近保存：{new Date(draft.updatedAt).toLocaleString('zh-CN')}</p> : null}
+    </div>
+  );
+}
+
 function AdminView({
   users,
   usersPage,
@@ -2970,6 +3092,7 @@ function AdminView({
   providerMetrics,
   providerRisks,
   providerRouting,
+  modelCreditPricing,
   visionaryDocSync,
   imageStorageStats,
   recordsStats,
@@ -2987,6 +3110,7 @@ function AdminView({
   onDeleteUser,
   onCleanupImages,
   onUpdateProviderRouting,
+  onUpdateModelCreditPricing,
   onLoadSection,
   onPreview,
   onNotice,
@@ -3002,6 +3126,7 @@ function AdminView({
   providerMetrics: ProviderMetricRow[];
   providerRisks: ProviderRiskRecord[];
   providerRouting: ProviderRoutingConfig;
+  modelCreditPricing: ModelCreditPricing;
   visionaryDocSync: VisionaryDocSyncStatus | null;
   imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
@@ -3017,11 +3142,12 @@ function AdminView({
   onDeleteInviteCodesBatch: (codes: string[]) => Promise<string[]>;
   onRechargeInviteCode: (code: string, credits: number) => Promise<void>;
   onReclaimInviteCode: (code: string, credits: number) => Promise<void>;
-  onRechargeUser: (user: AdminUserSummary, credits: number) => Promise<void>;
+  onRechargeUser: (user: AdminUserSummary, credits: CreditBalances) => Promise<void>;
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
   onCleanupImages: (retentionDays: number) => Promise<void>;
   onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice: string) => Promise<void>;
+  onUpdateModelCreditPricing: (pricing: ModelCreditPricing) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
     params?: {
@@ -3050,6 +3176,8 @@ function AdminView({
   const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
   const [rechargingUserId, setRechargingUserId] = useState('');
+  const [rechargeUser, setRechargeUser] = useState<AdminUserSummary | null>(null);
+  const [rechargeAmounts, setRechargeAmounts] = useState<CreditBalances>({ gpt: 0, banana: 0, general: 0 });
   const [deductingUserId, setDeductingUserId] = useState('');
   const [deletingUserId, setDeletingUserId] = useState('');
   const [redemptionUser, setRedemptionUser] = useState<AdminUserSummary | null>(null);
@@ -3101,22 +3229,31 @@ function AdminView({
   const currentInviteUsageRate = dashboardStats.inviteUsageRate || (totalInviteCodes > 0 ? Math.round((usedInviteCodes / totalInviteCodes) * 100) : 0);
 
   async function handleRechargeUser(user: AdminUserSummary) {
-    const rawValue = window.prompt(`\u8bf7\u8f93\u5165\u8981\u7ed9 ${user.username} \u5145\u503c\u7684\u79ef\u5206`, '100');
-    if (rawValue === null) return;
+    setRechargeUser(user);
+    setRechargeAmounts({ gpt: 0, banana: 0, general: 0 });
+  }
 
-    const rechargeCredits = Math.floor(Number(rawValue));
-    if (!Number.isFinite(rechargeCredits) || rechargeCredits <= 0) {
-      window.alert('\u8bf7\u8f93\u5165\u5927\u4e8e 0 \u7684\u6574\u6570\u79ef\u5206');
+  async function submitUserRecharge() {
+    if (!rechargeUser) return;
+    const credits = {
+      gpt: Math.max(0, Math.floor(Number(rechargeAmounts.gpt) || 0)),
+      banana: Math.max(0, Math.floor(Number(rechargeAmounts.banana) || 0)),
+      general: Math.max(0, Math.floor(Number(rechargeAmounts.general) || 0)),
+    };
+    const total = credits.gpt + credits.banana + credits.general;
+    if (total <= 0) {
+      window.alert('请至少填写一种大于 0 的积分');
       return;
     }
-    if (rechargeCredits > adminCredits.remainingCredits) {
-      window.alert(`admin \u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff0c\u5f53\u524d\u5269\u4f59 ${adminCredits.remainingCredits}`);
+    if (rechargeUser.username.toLowerCase() !== 'admin' && total > adminCredits.remainingCredits) {
+      window.alert(`admin 剩余积分不足，当前剩余 ${adminCredits.remainingCredits}`);
       return;
     }
 
-    setRechargingUserId(user.userId);
+    setRechargingUserId(rechargeUser.userId);
     try {
-      await onRechargeUser(user, rechargeCredits);
+      await onRechargeUser(rechargeUser, credits);
+      setRechargeUser(null);
     } finally {
       setRechargingUserId('');
     }
@@ -3576,6 +3713,7 @@ function AdminView({
   }
 
   const menuItems: Array<{ id: AdminSection; label: string }> = [
+    { id: 'modelCredits', label: '模型积分管理' },
     { id: 'dashboard', label: '看板' },
     { id: 'notifications', label: '通知管理' },
     { id: 'invites', label: '邀请码' },
@@ -4076,6 +4214,10 @@ function AdminView({
             ) : null}
 
             {section === 'notifications' ? <AdminNotificationsPanel onNotice={onNotice} /> : null}
+
+            {section === 'modelCredits' ? (
+              <AdminModelCreditPanel pricing={modelCreditPricing} onSave={onUpdateModelCreditPricing} />
+            ) : null}
 
             {section === 'invites' ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-white/8 bg-black/35 p-4">
@@ -4710,6 +4852,49 @@ function AdminView({
           </div>
         </div>
       ) : null}
+      {rechargeUser ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onMouseDown={() => setRechargeUser(null)}>
+          <div className="w-full max-w-md rounded-[24px] border border-white/12 bg-[#111119] p-5 shadow-[0_28px_90px_rgba(0,0,0,0.65)]" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-white">给 {rechargeUser.username} 充值积分</h2>
+                <p className="mt-1 text-xs text-zinc-500">三种积分可同时充值；用户头像处仍显示合计积分。</p>
+              </div>
+              <button className="rounded-lg p-2 text-zinc-500 hover:bg-white/8 hover:text-white" type="button" onClick={() => setRechargeUser(null)}><X size={16} /></button>
+            </div>
+            <div className="mt-5 grid gap-3">
+              {([
+                ['gpt', 'GPT 积分', '只能用于 GPT 模型'],
+                ['banana', 'Banana 积分', '只能用于 Banana 模型'],
+                ['general', '通用积分', '可以用于所有模型、视频和聊天'],
+              ] as const).map(([key, label, hint]) => (
+                <label key={key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+                  <span className="flex items-center justify-between text-xs"><strong className="text-zinc-200">{label}</strong><span className="text-zinc-600">{hint}</span></span>
+                  <input
+                    className="input mt-2 w-full"
+                    min={0}
+                    step={1}
+                    type="number"
+                    value={rechargeAmounts[key]}
+                    onChange={(event) => setRechargeAmounts((current) => ({ ...current, [key]: Math.max(0, Math.floor(Number(event.target.value) || 0)) }))}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between rounded-xl bg-sky-500/8 px-3 py-2 text-xs">
+              <span className="text-zinc-400">本次合计</span>
+              <strong className="text-sky-200">{rechargeAmounts.gpt + rechargeAmounts.banana + rechargeAmounts.general} 积分</strong>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="btn-ghost" type="button" onClick={() => setRechargeUser(null)}>取消</button>
+              <button className="btn-primary" type="button" disabled={rechargingUserId === rechargeUser.userId} onClick={() => void submitUserRecharge()}>
+                {rechargingUserId === rechargeUser.userId ? '充值中...' : '确认充值'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {redemptionUser ? (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
           <button
@@ -4788,6 +4973,7 @@ export default function App() {
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
   const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
+  const [modelCreditPricing, setModelCreditPricing] = useState<ModelCreditPricing>(DEFAULT_MODEL_CREDIT_PRICING);
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -4859,6 +5045,7 @@ export default function App() {
   const [promoCouponNowMs, setPromoCouponNowMs] = useState(() => Date.now());
   const [notificationPayload, setNotificationPayload] = useState<NotificationPayload>({ notifications: [], unreadCount: 0, popup: null });
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [creditDetailsOpen, setCreditDetailsOpen] = useState(false);
   const shownNotificationIdsRef = useRef(new Set<string>());
   const hasVisitedCreateRef = useRef(false);
 
@@ -4875,11 +5062,13 @@ export default function App() {
     quality: gptQuality,
     optimizeChineseText: effectiveOptimizeChineseText,
     pricing: gptImagePricing,
+    modelCreditPricing,
   });
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
-  const hasEnoughCredits =
-    typeof user?.creditsRemaining === 'number' ? user.creditsRemaining >= selectedModelCredits * batchCount : true;
+  const selectedCreditBucket = selectedModel === 'gpt-image-2' ? 'gpt' : selectedModel === 'Nano_Banana_Pro' ? 'banana' : 'general';
+  const selectedAvailableCredits = getAvailableUserCredits(user, selectedCreditBucket);
+  const hasEnoughCredits = user ? selectedAvailableCredits >= selectedModelCredits * batchCount : true;
   const promoCouponExpiresAtMs = new Date(promoCoupon?.expiresAt || '').getTime();
   const activePromoCoupon = promoCoupon?.active && Number.isFinite(promoCouponExpiresAtMs) && promoCouponExpiresAtMs > promoCouponNowMs
     ? promoCoupon
@@ -5048,11 +5237,12 @@ export default function App() {
         .then((payload) => {
           setModels([...payload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
           setGptImagePricing(payload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
+          setModelCreditPricing(payload.modelCreditPricing || DEFAULT_MODEL_CREDIT_PRICING);
           setProviderRouting(payload.providerRouting || defaultProviderRouting);
         })
         .catch(() => undefined);
     };
-    const timer = window.setInterval(refreshPricing, 15 * 60 * 1000);
+    const timer = window.setInterval(refreshPricing, 15 * 1000);
     window.addEventListener('focus', refreshPricing);
     return () => {
       window.clearInterval(timer);
@@ -5232,6 +5422,7 @@ export default function App() {
 
       setModels([...modelPayload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
       setGptImagePricing(modelPayload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
+      setModelCreditPricing(modelPayload.modelCreditPricing || DEFAULT_MODEL_CREDIT_PRICING);
       setProviderRouting(modelPayload.providerRouting || defaultProviderRouting);
       setSelectedModel((current) => {
         const exists = modelPayload.models.some((item) => item.id === current);
@@ -5357,6 +5548,13 @@ export default function App() {
     setAdminLoading(true);
     try {
       if (section === 'apiKeys') {
+        return;
+      }
+
+      if (section === 'modelCredits') {
+        const payload = await fetchModels();
+        setModelCreditPricing(payload.modelCreditPricing || DEFAULT_MODEL_CREDIT_PRICING);
+        setGptImagePricing(payload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
         return;
       }
 
@@ -5535,7 +5733,7 @@ export default function App() {
     }
   }
 
-  async function handleRechargeUserCredits(user: AdminUserSummary, credits: number) {
+  async function handleRechargeUserCredits(user: AdminUserSummary, credits: CreditBalances) {
     try {
       const payload = await rechargeAdminUserCredits(user.userId, credits);
       setAdminOverview((current) => ({
@@ -5546,11 +5744,13 @@ export default function App() {
               totalCredits: payload.credits.totalCredits,
               usedCredits: payload.credits.usedCredits,
               remainingCredits: payload.credits.remainingCredits,
+              creditBalances: payload.credits.creditBalances,
             }
           : item),
         adminCredits: payload.adminCredits,
       }));
       setNotice(`\u5df2\u7ed9\u7528\u6237 ${user.username} \u5145\u503c ${payload.rechargedCredits} \u79ef\u5206`);
+      void fetchMe().then(setUser).catch(() => undefined);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '\u7528\u6237\u5145\u503c\u5931\u8d25');
       throw error;
@@ -5568,6 +5768,7 @@ export default function App() {
               totalCredits: payload.credits.totalCredits,
               usedCredits: payload.credits.usedCredits,
               remainingCredits: payload.credits.remainingCredits,
+              creditBalances: payload.credits.creditBalances,
             }
           : item),
         adminCredits: payload.adminCredits,
@@ -5642,6 +5843,13 @@ export default function App() {
     const payload = await updateAdminProviderRouting(patch);
     setProviderRouting(payload.providerRouting);
     setNotice(notice);
+  }
+
+  async function handleUpdateModelCreditPricing(pricing: ModelCreditPricing) {
+    const payload = await updateAdminModelCreditPricing(pricing);
+    setModelCreditPricing(payload.modelCreditPricing);
+    setGptImagePricing(payload.modelCreditPricing.gptImage2);
+    setNotice('模型积分已保存并立即生效');
   }
 
   async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -5900,6 +6108,11 @@ export default function App() {
       return;
     }
 
+    if (!hasEnoughCredits) {
+      setGenerationError(`\u5f53\u524d\u6a21\u578b\u79ef\u5206\u4e0d\u8db3\uff0c\u9700\u8981 ${selectedModelCredits * batchCount} \u79ef\u5206\uff0c\u53ef\u7528 ${selectedAvailableCredits} \u79ef\u5206`);
+      return;
+    }
+
     setLoading(true);
     setPendingGenerationSlot(true);
     setInFlightGeneratedImages([]);
@@ -6013,6 +6226,11 @@ export default function App() {
     if (!user || !sourceImage || editVersions.length === 0) return;
     if (!requestedChange) {
       setGenerationError('请先描述想修改的内容');
+      return;
+    }
+
+    if (selectedAvailableCredits < selectedModelCredits) {
+      setGenerationError(`当前模型积分不足，需要 ${selectedModelCredits} 积分，可用 ${selectedAvailableCredits} 积分`);
       return;
     }
 
@@ -6603,7 +6821,13 @@ export default function App() {
                 {notice}
               </div>
             ) : null}
-            <CreditsSummary selectedModel={selectedModelInfo} user={user} onOpenPurchase={openPurchasePage} />
+            <CreditsSummary
+              selectedModel={selectedModelInfo}
+              user={user}
+              creditsCost={selectedModelCredits}
+              creditsRemaining={selectedAvailableCredits}
+              onOpenPurchase={openPurchasePage}
+            />
 
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
@@ -6803,17 +7027,35 @@ export default function App() {
               </button>
             ) : null}
             {user ? (
-              <div className="flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
+              <div className="relative flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
                 <div className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
                   <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
                   <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
                 </div>
-                <div className="min-w-0 leading-tight">
+                <button
+                  className="min-w-0 text-left leading-tight"
+                  type="button"
+                  onClick={() => setCreditDetailsOpen((current) => !current)}
+                >
                   <p className="max-w-24 truncate text-[13px] font-semibold text-zinc-100">{user.username}</p>
                   <p className="mt-0.5 whitespace-nowrap text-[10px] font-medium text-zinc-500">
                     {user.isAdmin ? '管理员' : '正式用户'} <span className="px-0.5">•</span> 积分{user.creditsRemaining ?? 0}
                   </p>
-                </div>
+                </button>
+                {creditDetailsOpen ? (
+                  <div className="absolute right-8 top-10 z-[80] w-56 rounded-2xl border border-white/12 bg-[#11111a] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-white">积分明细</span>
+                      <span className="text-xs font-black text-sky-200">合计 {user.creditsRemaining ?? 0}</span>
+                    </div>
+                    <div className="mt-3 space-y-2 text-xs">
+                      <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">GPT 积分</span><strong className="text-white">{user.creditBalances?.gpt ?? 0}</strong></div>
+                      <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">Banana 积分</span><strong className="text-white">{user.creditBalances?.banana ?? 0}</strong></div>
+                      <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">通用积分</span><strong className="text-white">{user.creditBalances?.general ?? user.creditsRemaining ?? 0}</strong></div>
+                    </div>
+                    <p className="mt-3 text-[10px] leading-4 text-zinc-500">专用积分仅用于对应模型；专用积分不足时会自动使用通用积分。</p>
+                  </div>
+                ) : null}
                 <button
                   className="btn-ghost min-h-0 shrink-0 px-1.5 py-1.5 text-zinc-500 hover:text-white"
                   type="button"
@@ -6851,6 +7093,7 @@ export default function App() {
             <VideoCreateView
               user={user}
               providerRouting={providerRouting}
+              modelCreditPricing={modelCreditPricing}
               onSwitchImage={() => setCreationMode('image')}
               onLogin={() => {
                 setAuthMode('login');
@@ -6859,6 +7102,7 @@ export default function App() {
               onPurchase={openPurchasePage}
               onCreditsChange={(creditsRemaining) => {
                 setUser((current) => current ? { ...current, creditsRemaining } : current);
+                void fetchMe().then(setUser).catch(() => undefined);
               }}
             />
           ) : null}
@@ -7157,7 +7401,7 @@ export default function App() {
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
                   <span>
-                    {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{user?.creditsRemaining ?? 0}</span>
+                    {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{selectedAvailableCredits}</span>
                   </span>
                   <button
                     className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
@@ -7277,6 +7521,7 @@ export default function App() {
               user={user}
               models={models}
               gptImagePricing={gptImagePricing}
+              modelCreditPricing={modelCreditPricing}
               providerRouting={providerRouting}
               onLogin={() => {
                 setAuthMode('login');
@@ -7285,6 +7530,7 @@ export default function App() {
               onPurchase={openPurchasePage}
               onCreditsChange={(creditsRemaining) => {
                 setUser((current) => current ? { ...current, creditsRemaining } : current);
+                void fetchMe().then(setUser).catch(() => undefined);
               }}
               onGenerationComplete={() => {
                 void loadHistory();
@@ -7297,8 +7543,11 @@ export default function App() {
             <ChatView
               loggedIn={Boolean(user)}
               username={user?.username}
-              creditsRemaining={user?.creditsRemaining}
-              onCreditsChange={(creditsRemaining) => setUser((current) => current ? { ...current, creditsRemaining } : current)}
+              creditsRemaining={getAvailableUserCredits(user, 'general')}
+              onCreditsChange={(creditsRemaining) => {
+                setUser((current) => current ? { ...current, creditsRemaining } : current);
+                void fetchMe().then(setUser).catch(() => undefined);
+              }}
               onLogin={() => {
                 setAuthMode('login');
                 setAuthOpen(true);
@@ -7327,6 +7576,7 @@ export default function App() {
               providerMetrics={adminOverview.providerMetrics}
               providerRisks={adminOverview.providerRisks}
               providerRouting={providerRouting}
+              modelCreditPricing={modelCreditPricing}
               visionaryDocSync={adminOverview.visionaryDocSync}
               imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
@@ -7344,6 +7594,7 @@ export default function App() {
               onDeleteUser={handleDeleteAdminUser}
               onCleanupImages={handleCleanupImages}
               onUpdateProviderRouting={handleUpdateProviderRouting}
+              onUpdateModelCreditPricing={handleUpdateModelCreditPricing}
               onLoadSection={loadAdminSection}
               onPreview={setPreviewImage}
               onNotice={setNotice}
@@ -7359,7 +7610,7 @@ export default function App() {
                 locks={editLocks}
                 loading={loading}
                 creditsCost={selectedModelCredits}
-                creditsRemaining={user?.creditsRemaining ?? 0}
+                creditsRemaining={selectedAvailableCredits}
                 onInstructionChange={(value) => setEditInstruction(value.slice(0, MAX_PROMPT_LENGTH))}
                 onToggleLock={toggleEditLock}
                 onSelectVersion={(image) => {

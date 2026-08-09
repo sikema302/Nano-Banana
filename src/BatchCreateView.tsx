@@ -24,7 +24,8 @@ import {
   type ReferenceUploadInput,
   type UserInfo,
 } from './lib/api';
-import { getGptImageCredits, type GptImagePricing } from './lib/model-pricing';
+import type { GptImagePricing } from './lib/model-pricing';
+import { getConfiguredImageCredits, type ModelCreditPricing } from './lib/model-credit-config';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import {
   MAX_REFERENCE_IMAGE_BYTES,
@@ -62,6 +63,7 @@ interface BatchCreateViewProps {
   user: UserInfo | null;
   models: ModelInfo[];
   gptImagePricing: GptImagePricing;
+  modelCreditPricing: ModelCreditPricing;
   providerRouting: ProviderRoutingConfig;
   onLogin: () => void;
   onPurchase: () => void;
@@ -136,20 +138,15 @@ function getCredits(
   quality: ImageQuality,
   optimizeChineseText: boolean,
   pricing: GptImagePricing,
+  modelCreditPricing: ModelCreditPricing,
 ) {
   if (!model) return 0;
-  if (model.id === 'gpt-image-2') return getGptImageCredits(imageSize, quality, pricing);
+  if (model.id === 'gpt-image-2') return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
   if (model.id === 'Nano_Banana_Pro') {
-    const base = imageSize === '1K'
-      ? 20
-      : imageSize === '4K'
-        ? 30
-        : typeof model.creditsCost === 'number'
-          ? model.creditsCost
-          : 24;
+    const base = getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
     const enhancementCredits = optimizeChineseText
       ? imageSize === '1K' || imageSize === '2K' || imageSize === '4K'
-        ? 8
+        ? modelCreditPricing.nanoBanana.enhancement
         : 0
       : 0;
     return base + enhancementCredits;
@@ -355,6 +352,7 @@ export default function BatchCreateView({
   user,
   models,
   gptImagePricing,
+  modelCreditPricing,
   providerRouting,
   onLogin,
   onPurchase,
@@ -388,9 +386,14 @@ export default function BatchCreateView({
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
   const taskCount = mode === 'unified' ? sourceImages.length : activePrompts.length;
-  const creditsPerTask = getCredits(model, imageSize, quality, effectiveOptimizeChineseText, gptImagePricing);
+  const creditsPerTask = getCredits(model, imageSize, quality, effectiveOptimizeChineseText, gptImagePricing, modelCreditPricing);
   const estimatedCredits = creditsPerTask * taskCount;
-  const creditsRemaining = user?.creditsRemaining || 0;
+  const creditBucket = model?.id === 'gpt-image-2' ? 'gpt' : model?.id === 'Nano_Banana_Pro' ? 'banana' : 'general';
+  const creditsRemaining = user?.creditBalances
+    ? creditBucket === 'general'
+      ? user.creditBalances.general
+      : user.creditBalances[creditBucket] + user.creditBalances.general
+    : user?.creditsRemaining || 0;
   const hasEnoughCredits = !user || creditsRemaining >= estimatedCredits;
   const succeededCount = tasks.filter((task) => task.status === 'succeeded').length;
   const failedCount = tasks.filter((task) => task.status === 'failed').length;

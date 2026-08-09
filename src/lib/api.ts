@@ -1,4 +1,5 @@
 import type { GptImagePricing } from './model-pricing';
+import type { ModelCreditPricing } from './model-credit-config';
 
 export type ImageCategory = 'favorite' | 'backup' | 'discarded';
 
@@ -8,6 +9,13 @@ export interface UserInfo {
   isAdmin?: boolean;
   canRedeemInvite?: boolean;
   creditsRemaining?: number;
+  creditBalances?: CreditBalances;
+}
+
+export interface CreditBalances {
+  gpt: number;
+  banana: number;
+  general: number;
 }
 
 export type NotificationKind = 'normal' | 'update' | 'maintenance' | 'urgent';
@@ -128,6 +136,7 @@ export interface AdminUserSummary {
   totalCredits: number;
   usedCredits: number;
   remainingCredits: number;
+  creditBalances?: CreditBalances;
   apiKeyId?: string;
   quotaSource?: 'key' | 'account';
   ownerUserId?: string;
@@ -147,6 +156,7 @@ export interface CreditSummary {
   totalCredits: number;
   usedCredits: number;
   remainingCredits: number;
+  creditBalances?: CreditBalances;
 }
 
 export interface PromoCouponInfo {
@@ -790,6 +800,7 @@ export async function fetchModels() {
   return request<{
     models: ModelInfo[];
     gptImagePricing: GptImagePricing;
+    modelCreditPricing: ModelCreditPricing;
     providerRouting: ProviderRoutingConfig;
   }>('/api/models', {}, true);
 }
@@ -941,6 +952,21 @@ export async function updateAdminProviderRouting(patch: Partial<ProviderRoutingC
   );
 }
 
+export async function fetchAdminModelCreditPricing() {
+  return request<{ modelCreditPricing: ModelCreditPricing }>('/api/admin/model-credit-pricing', {}, true);
+}
+
+export async function updateAdminModelCreditPricing(pricing: ModelCreditPricing) {
+  return request<{ modelCreditPricing: ModelCreditPricing }>(
+    '/api/admin/model-credit-pricing',
+    {
+      method: 'PUT',
+      body: JSON.stringify(pricing),
+    },
+    true,
+  );
+}
+
 export async function cleanupAdminImages(retentionDays = 2) {
   return request<{
     cleanup: AdminImageCleanupResult;
@@ -1004,16 +1030,21 @@ export async function fetchAdminUserInviteRedemptions(userId: string) {
   );
 }
 
-export async function rechargeAdminUserCredits(userId: string, credits: number) {
+export async function rechargeAdminUserCredits(userId: string, credits: CreditBalances) {
   return request<{
     credits: CreditSummary;
     adminCredits: CreditSummary;
     rechargedCredits: number;
+    rechargedByType: CreditBalances;
   }>(
     `/api/admin/users/${encodeURIComponent(userId)}/recharge`,
     {
       method: 'POST',
-      body: JSON.stringify({ credits }),
+      body: JSON.stringify({
+        gptCredits: credits.gpt,
+        bananaCredits: credits.banana,
+        generalCredits: credits.general,
+      }),
     },
     true,
   );

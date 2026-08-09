@@ -9,10 +9,9 @@ import {
 } from './flux-banana.js';
 
 test('selects the required Flux model for each banana resolution', () => {
-  assert.equal(selectFluxBananaModel('1K', () => 0.99), FLUX_BANANA_FLASH_MODEL);
-  assert.equal(selectFluxBananaModel('2K', () => 0.1), FLUX_BANANA_PRO_MODEL);
-  assert.equal(selectFluxBananaModel('2K', () => 0.9), FLUX_BANANA_FLASH_MODEL);
-  assert.equal(selectFluxBananaModel('4K', () => 0.1), FLUX_BANANA_PRO_MODEL);
+  assert.equal(selectFluxBananaModel('1K'), FLUX_BANANA_FLASH_MODEL);
+  assert.equal(selectFluxBananaModel('2K'), FLUX_BANANA_FLASH_MODEL);
+  assert.equal(selectFluxBananaModel('4K'), FLUX_BANANA_PRO_MODEL);
 });
 
 test('calls the native Gemini image endpoint and reads inlineData', async () => {
@@ -28,7 +27,6 @@ test('calls the native Gemini image endpoint and reads inlineData', async () => 
     {
       baseUrl: 'https://api.ai-media.vip',
       apiKey: 'secret',
-      random: () => 0.9,
       fetchImpl: async (url, init) => {
         requestUrl = String(url);
         requestInit = init;

@@ -36,6 +36,7 @@ const defaults: ProviderRoutingConfig = {
       { id: 'flux', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: true },
+      { id: 'junliai-nano-banana-2', enabled: true },
     ],
     '4K': [
       { id: 'flux', enabled: true },
@@ -65,6 +66,7 @@ test('persists independent provider order and switches for each resolution', asy
       { id: 'junliai' as const, enabled: true },
       { id: 'flux' as const, enabled: false },
       { id: 'visionary' as const, enabled: true },
+      { id: 'junliai-nano-banana-2' as const, enabled: true },
     ],
   };
   const updated = await routing.update({ bananaRoutes: nextBananaRoutes });
@@ -74,7 +76,7 @@ test('persists independent provider order and switches for each resolution', asy
   assert.deepEqual(updated.image2Routes, defaults.image2Routes);
   assert.deepEqual(
     enabledProviderIds(updated.bananaRoutes['2K']),
-    ['junliai', 'visionary'],
+    ['junliai', 'visionary', 'junliai-nano-banana-2'],
   );
   assert.deepEqual(JSON.parse(values.get('provider_routing_v1') || '{}'), updated);
 });
@@ -128,6 +130,10 @@ test('migrates legacy switches into every compatible resolution route', async ()
   }
   assert.equal(
     config.bananaRoutes['1K'].find((route) => route.id === 'junliai-nano-banana-2')?.enabled,
+    false,
+  );
+  assert.equal(
+    config.bananaRoutes['2K'].find((route) => route.id === 'junliai-nano-banana-2')?.enabled,
     false,
   );
 });

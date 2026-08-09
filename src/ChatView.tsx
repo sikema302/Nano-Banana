@@ -163,6 +163,11 @@ export default function ChatView({ loggedIn, username, creditsRemaining = 0, onL
       return;
     }
 
+    if (creditsRemaining < CHAT_CREDITS) {
+      setError(`当前通用积分不足，本次对话需要 ${CHAT_CREDITS} 积分。`);
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
