@@ -69,6 +69,11 @@ import { getInviteRedemptionCredits, INVITE_REDEMPTION_ERRORS } from './invite-r
 import { createNotificationService } from './notifications.js';
 import { resolveApiKeyDisplayCredits, type CreditValues } from './api-key-credits.js';
 import {
+  createR2ObjectStorage,
+  legacyAssetObjectKey,
+  thumbnailUrlForImage,
+} from './r2-storage.js';
+import {
   getPromoCouponPrefix,
   getPromoCouponSchedule,
   normalizePromoDiscountPercent,
@@ -419,6 +424,8 @@ const promoCouponCodeCache = new Map<PromoCouponDiscountPercent, Promise<string[
 dotenv.config({ path: path.join(ROOT_DIR, '.env.local') });
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 dns.setDefaultResultOrder('ipv4first');
+
+const R2_STORAGE = createR2ObjectStorage();
 
 const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 'pixory.top';
 const CANONICAL_WEB_ORIGIN =
@@ -1097,9 +1104,7 @@ function parseReferenceImages(raw: unknown) {
 
 function thumbnailPathForImage(imagePath: string) {
   const normalized = normalizeString(imagePath);
-  if (!normalized.startsWith('/uploads/generated/')) return '';
-  const fileName = path.basename(normalized);
-  return `/uploads/thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`;
+  return thumbnailUrlForImage(normalized, R2_STORAGE?.config.publicBaseUrl || '');
 }
 
 function toSavedImage(row: Record<string, unknown>) {
@@ -4829,12 +4834,38 @@ async function writeGeneratedImage(buffer: Buffer, extension: string) {
   const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
   const target = path.join(GENERATED_DIR, fileName);
   await fs.writeFile(target, buffer);
+  let thumbnailPath = '';
   try {
-    await createGeneratedThumbnail(buffer, fileName);
+    thumbnailPath = await createGeneratedThumbnail(buffer, fileName);
   } catch (error) {
     console.error(`[thumbnail] failed for ${fileName}`, error);
   }
-  return `/uploads/generated/${fileName}`;
+
+  const localImagePath = `/uploads/generated/${fileName}`;
+  if (!R2_STORAGE) return localImagePath;
+
+  try {
+    const thumbnailFile = thumbnailPath
+      ? path.join(THUMBNAILS_DIR, path.basename(thumbnailPath))
+      : '';
+    const thumbnailBuffer = thumbnailFile ? await fs.readFile(thumbnailFile).catch(() => null) : null;
+    const uploads = [R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer)];
+    if (thumbnailBuffer && thumbnailFile) {
+      uploads.push(
+        R2_STORAGE.putVerifiedObject(`thumbnails/${path.basename(thumbnailFile)}`, thumbnailBuffer, 'image/webp'),
+      );
+    }
+
+    const [publicImageUrl] = await Promise.all(uploads);
+    await Promise.all([
+      fs.unlink(target).catch(() => undefined),
+      thumbnailFile && thumbnailBuffer ? fs.unlink(thumbnailFile).catch(() => undefined) : Promise.resolve(),
+    ]);
+    return publicImageUrl;
+  } catch (error) {
+    console.error(`[r2-upload] failed for ${fileName}; keeping local fallback`, error);
+    return localImagePath;
+  }
 }
 
 async function backfillGeneratedThumbnails() {
@@ -5383,6 +5414,16 @@ async function start() {
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
     app.use('/uploads', express.static(UPLOADS_DIR));
+    if (R2_STORAGE) {
+      app.get(/^\/uploads\/(?:generated|thumbnails)\/[^/]+$/, (req, res, next) => {
+        const key = legacyAssetObjectKey(req.path);
+        if (!key) {
+          next();
+          return;
+        }
+        res.redirect(302, R2_STORAGE.publicUrl(key));
+      });
+    }
   }
 
   app.get('/api/health', (_req, res) => {
@@ -5390,6 +5431,7 @@ async function start() {
       ok: true,
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
+      imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
     });
   });
 
@@ -5403,7 +5445,11 @@ async function start() {
           db.exec('SELECT 1');
         });
       }
-      res.json({ ok: true, databaseProvider: DATABASE_PROVIDER });
+      res.json({
+        ok: true,
+        databaseProvider: DATABASE_PROVIDER,
+        imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
+      });
     } catch (error) {
       console.error('[ready] database check failed:', error);
       res.status(503).json({ ok: false, databaseProvider: DATABASE_PROVIDER });
@@ -9893,6 +9939,7 @@ async function start() {
 
   const httpServer = app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
+    console.log(`[image-storage] provider=${R2_STORAGE ? `r2 bucket=${R2_STORAGE.config.bucketName}` : 'local'}`);
     if (typeof process.send === 'function') {
       process.send('ready');
     }

@@ -13,6 +13,8 @@
     "backup:data": "tsx scripts/backup-business-data.ts",
     "verify:backup": "tsx scripts/backup-business-data.ts --verify",
     "restore:data": "tsx scripts/restore-business-data.ts",
+    "storage:r2:verify": "tsx scripts/verify-r2-storage.ts",
+    "storage:r2:migrate": "tsx scripts/migrate-uploads-to-r2.ts",
     "test:server": "tsx --test server/*.test.ts src/lib/*.test.ts",
     "build": "vite build",
     "preview": "vite preview",
@@ -27,6 +29,7 @@
     "rollback:server:list": "powershell -ExecutionPolicy Bypass -File scripts/rollback-server.ps1 -ListBackups"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1106.0",
     "@google/genai": "^1.29.0",
     "@supabase/supabase-js": "^2.104.0",
     "@tailwindcss/vite": "^4.1.14",

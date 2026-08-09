@@ -24,6 +24,11 @@ jobs:
       SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
       VISIONARY_NANO_LITE_API_KEY: ${{ secrets.VISIONARY_NANO_LITE_API_KEY }}
       FLUX_BANANA_API_KEY: ${{ secrets.FLUX_BANANA_API_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
 
     steps:
       - name: Check out source
@@ -85,6 +90,14 @@ jobs:
           printf '%s' "$FLUX_BANANA_API_KEY" | \
             sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
               "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-flux-banana-key'"
+          {
+            printf 'R2_ACCOUNT_ID="%s"\n' "$R2_ACCOUNT_ID"
+            printf 'R2_ACCESS_KEY_ID="%s"\n' "$R2_ACCESS_KEY_ID"
+            printf 'R2_SECRET_ACCESS_KEY="%s"\n' "$R2_SECRET_ACCESS_KEY"
+            printf 'R2_BUCKET_NAME="%s"\n' "$R2_BUCKET_NAME"
+            printf 'R2_PUBLIC_BASE_URL="%s"\n' "$R2_PUBLIC_BASE_URL"
+          } | sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-r2-env'"
 
       - name: Capture sanitized production diagnostics
         run: |
@@ -147,6 +160,7 @@ jobs:
           migrate_to_sqlite="${MIGRATE_TO_SQLITE:-false}"
           nano_lite_key_file='/tmp/nano-banana-nano-lite-key'
           flux_banana_key_file='/tmp/nano-banana-flux-banana-key'
+          r2_env_file='/tmp/nano-banana-r2-env'
           ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
           if ! grep -qx 'Port 2223' "$ssh_ports" 2>/dev/null; then
             printf 'Port 2222\nPort 2223\n' > "$ssh_ports"
@@ -188,6 +202,15 @@ jobs:
           fi
           rm -f "$flux_banana_key_file"
 
+          if [ -s "$r2_env_file" ]; then
+            touch .env.local
+            (grep -v -E '^R2_(ACCOUNT_ID|ACCESS_KEY_ID|SECRET_ACCESS_KEY|BUCKET_NAME|PUBLIC_BASE_URL)=' .env.local || true) > .env.local.next
+            cat "$r2_env_file" >> .env.local.next
+            mv .env.local.next .env.local
+            chmod 600 .env.local
+          fi
+          rm -f "$r2_env_file"
+
           # Keep the 2 GB production host from OOM-killing Node during image bursts.
           if ! swapon --show | grep -q '/swapfile'; then
             if [ ! -f /swapfile ]; then
@@ -214,6 +237,8 @@ jobs:
           else
             echo 'Dependencies unchanged; skipping npm ci.'
           fi
+
+          timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify
 
           migration_lock="$project/.runtime/database-migration.lock"
           migration_env_backup="$backups/$timestamp-pre-sqlite.env"

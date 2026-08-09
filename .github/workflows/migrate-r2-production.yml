@@ -1,0 +1,49 @@
+name: Migrate production images to R2
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: production-r2-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SERVER_HOST: 154.9.24.91
+      SSH_PORT: "2223"
+      SERVER_USER: root
+      PROJECT_PATH: /var/www/nano-banana
+      SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+
+    steps:
+      - name: Install SSH client
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Upload and verify recent images
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            "$SERVER_USER@$SERVER_HOST" "PROJECT_PATH='$PROJECT_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$PROJECT_PATH"
+          test -s .env.local
+          timeout --signal=TERM --kill-after=30s 75m \
+            nice -n 10 npm run storage:r2:migrate -- \
+              --max-age-days 3 \
+              --concurrency 3 \
+              --delete-after-upload
+          echo '=== local image storage after migration ==='
+          du -sh uploads/generated uploads/thumbnails 2>/dev/null || true
+          curl -fsS http://127.0.0.1:3001/api/ready
+          echo
+          REMOTE
+
+      - name: Verify public endpoints
+        run: |
+          curl -fsS --connect-timeout 5 --max-time 15 https://pixory.top/api/ready
+          image_domain_http="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
+            -w '%{http_code}' https://img.pixory.top/)"
+          echo "image_domain_http=$image_domain_http"
+          test "$image_domain_http" = 404 || test "$image_domain_http" = 200
