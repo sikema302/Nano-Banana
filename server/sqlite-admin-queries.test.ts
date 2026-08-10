@@ -7,8 +7,30 @@ import {
   ADMIN_OVERVIEW_RECORDS_SQL,
   ADMIN_USERS_SQL,
   ADMIN_USER_USAGE_TRENDS_SQL,
+  buildSqliteInviteCodeListQuery,
   buildSqliteAdminUsersPage,
 } from './sqlite-admin-queries.js';
+
+test('SQLite invite code query filters by code, redeemer, username, and status', async () => {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run('CREATE TABLE invite_codes (code TEXT PRIMARY KEY, credits INTEGER, created_at TEXT, redeemed_by TEXT)');
+  db.run('CREATE TABLE user_credits (user_id TEXT PRIMARY KEY, username TEXT)');
+  db.run('CREATE TABLE user_migrations (legacy_user_id INTEGER PRIMARY KEY, supabase_user_id TEXT UNIQUE, username TEXT)');
+  db.run("INSERT INTO invite_codes VALUES ('PIXORY-UNUSED', 100, '2026-08-01T00:00:00.000Z', NULL)");
+  db.run("INSERT INTO invite_codes VALUES ('PIXORY-USED', 50, '2026-08-02T00:00:00.000Z', 'user-uuid')");
+  db.run("INSERT INTO user_credits VALUES ('user-uuid', 'Alice')");
+
+  const query = buildSqliteInviteCodeListQuery({ status: 'used', search: 'alice' });
+  const statement = db.prepare(`SELECT i.code ${query.fromClause} ${query.whereClause} ORDER BY ${query.orderBy}`, query.parameters);
+  const rows: Record<string, unknown>[] = [];
+  while (statement.step()) rows.push(statement.getAsObject());
+  statement.free();
+  db.close();
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].code, 'PIXORY-USED');
+});
 
 test('SQLite admin overview records query executes and excludes demo rows', async () => {
   const SQL = await initSqlJs();

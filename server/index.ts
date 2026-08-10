@@ -21,6 +21,7 @@ import {
   ADMIN_OVERVIEW_RECORDS_SQL,
   ADMIN_USERS_SQL,
   ADMIN_USER_USAGE_TRENDS_SQL,
+  buildSqliteInviteCodeListQuery,
   buildSqliteAdminUsersPage,
 } from './sqlite-admin-queries.js';
 import {
@@ -9002,12 +9003,35 @@ async function start() {
 
       const payload = await withReadDb((db) => {
         ensureSchema(db);
-        const total = Number(getOne<{ total: number }>(db, 'SELECT COUNT(*) AS total FROM invite_codes')?.total || 0);
+        const query = buildSqliteInviteCodeListQuery({ status, sort, search });
+        const total = Number(getOne<{ total: number }>(
+          db,
+          `SELECT COUNT(*) AS total ${query.fromClause} ${query.whereClause}`,
+          query.parameters,
+        )?.total || 0);
         const inviteCodes = runQuery<Record<string, unknown>>(
           db,
-          'SELECT code, credits, issued_credits, created_by, created_at, redeemed_by, redeemed_at, low_balance_since FROM invite_codes ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?',
-          [pageSize, (page - 1) * pageSize],
-        ).map(toInviteCode);
+          `
+            SELECT
+              i.code,
+              i.credits,
+              i.issued_credits,
+              i.created_by,
+              i.created_at,
+              i.redeemed_by,
+              i.redeemed_at,
+              i.low_balance_since,
+              COALESCE(NULLIF(credits.username, ''), NULLIF(migration.username, ''), '') AS redeemed_username
+            ${query.fromClause}
+            ${query.whereClause}
+            ORDER BY ${query.orderBy}
+            LIMIT ? OFFSET ?
+          `,
+          [...query.parameters, pageSize, (page - 1) * pageSize],
+        ).map((row) => ({
+          ...toInviteCode(row),
+          redeemedUsername: String(row.redeemed_username || ''),
+        }));
         return {
           inviteCodes,
           inviteCodesPage: toPagination(page, pageSize, total),

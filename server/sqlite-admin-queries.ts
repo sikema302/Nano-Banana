@@ -88,6 +88,53 @@ export const ADMIN_USER_USAGE_TRENDS_SQL = `
     AND datetime(created_at) >= datetime('now', '-7 days')
 `;
 
+export type SqliteInviteCodeListOptions = {
+  status?: string;
+  sort?: string;
+  search?: string;
+};
+
+export function buildSqliteInviteCodeListQuery(options: SqliteInviteCodeListOptions) {
+  const search = options.search?.trim().toLowerCase() || '';
+  const conditions: string[] = [];
+  const parameters: string[] = [];
+
+  if (options.status === 'used') {
+    conditions.push("i.redeemed_by IS NOT NULL AND i.redeemed_by != ''");
+  } else if (options.status === 'unused') {
+    conditions.push("(i.redeemed_by IS NULL OR i.redeemed_by = '')");
+  }
+
+  if (search) {
+    const pattern = `%${search.replace(/[\\%_]/g, '\\$&')}%`;
+    conditions.push(`(
+      LOWER(i.code) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(i.redeemed_by, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(NULLIF(credits.username, ''), NULLIF(migration.username, ''), '')) LIKE ? ESCAPE '\\'
+    )`);
+    parameters.push(pattern, pattern, pattern);
+  }
+
+  const orderBy = options.sort === 'created-asc'
+    ? 'datetime(i.created_at) ASC'
+    : options.sort === 'credits-desc'
+      ? 'i.credits DESC, datetime(i.created_at) DESC'
+      : options.sort === 'credits-asc'
+        ? 'i.credits ASC, datetime(i.created_at) DESC'
+        : 'datetime(i.created_at) DESC';
+
+  return {
+    fromClause: `
+      FROM invite_codes i
+      LEFT JOIN user_credits credits ON credits.user_id = i.redeemed_by
+      LEFT JOIN user_migrations migration ON migration.supabase_user_id = i.redeemed_by
+    `,
+    whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    parameters,
+    orderBy,
+  };
+}
+
 type AdminApiKey = {
   id: string;
   totalCredits: number;
