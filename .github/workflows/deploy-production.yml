@@ -224,6 +224,10 @@ jobs:
           touch .env.local
           sed -i '/^PUBLIC_ASYNC_CONCURRENCY=/d' .env.local
           printf 'PUBLIC_ASYNC_CONCURRENCY="2"\n' >> .env.local
+          sed -i '/^GENERATION_MAX_CONCURRENCY=/d' .env.local
+          printf 'GENERATION_MAX_CONCURRENCY="3"\n' >> .env.local
+          sed -i '/^VIDEO_MAX_CONCURRENCY=/d' .env.local
+          printf 'VIDEO_MAX_CONCURRENCY="1"\n' >> .env.local
           chmod 600 .env.local
 
           dependency_stamp='node_modules/.pixory-package-lock.sha256'
@@ -299,7 +303,10 @@ jobs:
             # Always reload after replacing the release files. This also
             # recovers cleanly when a previous deploy unpacked files but failed
             # before PM2 could activate them.
-            pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000
+            if ! pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000; then
+              echo 'Rolling reload did not report ready; falling back to a single-process restart.'
+              pm2 restart nano-banana --update-env
+            fi
           fi
           pm2 save >/dev/null
           # Startup includes database initialization and retention checks; allow

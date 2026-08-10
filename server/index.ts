@@ -479,7 +479,7 @@ const PUBLIC_ASYNC_CONCURRENCY = Math.max(
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 100, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 2, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 3, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
