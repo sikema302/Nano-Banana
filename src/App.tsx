@@ -713,7 +713,7 @@ function StageCard({
       </div>
 
       {loading ? (
-        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0" style={{ paddingRight: showActivity ? 145 : undefined }}>
+        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
           <div className="pointer-events-none absolute inset-0 opacity-70">
             <div className="generation-grid h-full w-full" />
           </div>
@@ -744,10 +744,9 @@ function StageCard({
           <div className="relative mt-2 text-[11px] font-semibold text-[#ffd9ef]/90">
             {getGenerationHint(percent)}
           </div>
-          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       ) : item ? (
-        <div className="relative flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3" style={{ paddingRight: showActivity ? 145 : undefined }}>
+        <div className="relative flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3">
           <div className="min-w-0">
             <button
               className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-pink-200"
@@ -807,12 +806,10 @@ function StageCard({
               </button>
             </div>
           ) : null}
-          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       ) : (
-        <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[18px] border border-white/6 bg-black/45 px-4 py-3 text-[12px] font-black text-zinc-200 sm:ml-3 sm:py-0" style={{ paddingRight: showActivity ? 145 : undefined }}>
+        <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[18px] border border-white/6 bg-black/45 px-4 py-3 text-[12px] font-black text-zinc-200 sm:ml-3 sm:py-0">
           等待下单...
-          {showActivity ? <CreationHeatSlot count={activityPreviewCount || 0} /> : null}
         </div>
       )}
     </article>
@@ -7291,9 +7288,6 @@ export default function App() {
                       );
                     })}
                   </div>
-                  {isNanoBananaPro && imageSize === '1K' ? (
-                    <p className="text-[10px] leading-4 text-zinc-500">1K 会按后台设置的专属渠道顺序依次尝试。</p>
-                  ) : null}
                 </section>
 
                 {showGptQuality ? (
