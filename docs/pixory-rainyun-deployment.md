@@ -85,7 +85,7 @@ Main environment file:
 Important production variables:
 
 ```env
-DATABASE_PROVIDER=supabase
+DATABASE_PROVIDER=sqlite
 SUPABASE_URL=https://cpjsjdvbkspkopakmlnv.supabase.co
 CORS_ORIGIN=http://154.9.24.91,http://154.9.24.91:3001,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
 ```
@@ -98,6 +98,9 @@ Server-only secrets should remain only on the server:
 - `VISIONARY_GPT_IMAGE_2_HD_API_KEY`
 - `VISIONARY_API_KEY` as a fallback
 - `JWT_SECRET`
+- `BACKUP_ENCRYPTION_KEY`
+
+The active database is `/var/www/nano-banana/data/app.sqlite`. Encrypted daily snapshots are written to `data/sqlite-backups`; keep the `data` directory on persistent storage and include it in host-level backups.
 
 Visionary key routing:
 
@@ -194,7 +197,7 @@ curl https://pixory.top/api/health
 Expected response:
 
 ```json
-{"ok":true,"userStorage":"Supabase","databaseProvider":"supabase"}
+{"ok":true,"userStorage":"SQLite","databaseProvider":"sqlite","imageStorageProvider":"r2"}
 ```
 
 ## Common issues

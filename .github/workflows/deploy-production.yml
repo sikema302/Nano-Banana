@@ -238,7 +238,10 @@ jobs:
             echo 'Dependencies unchanged; skipping npm ci.'
           fi
 
-          timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify
+          # R2 upload failures already fall back to local storage at runtime. A
+          # transient Cloudflare route outage must not leave new files on disk
+          # while preventing PM2 from activating the same release.
+          timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify -- --allow-unavailable
 
           migration_lock="$project/.runtime/database-migration.lock"
           migration_env_backup="$backups/$timestamp-pre-sqlite.env"

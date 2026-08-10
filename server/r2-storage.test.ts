@@ -10,6 +10,7 @@ import {
   thumbnailUrlForImage,
   type R2CommandClient,
 } from './r2-storage.js';
+import { verifyR2Storage } from '../scripts/verify-r2-storage.js';
 
 const env = {
   R2_ACCOUNT_ID: 'account-id',
@@ -26,6 +27,17 @@ test('requires a complete R2 configuration while allowing local-only development
     /R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_BASE_URL/,
   );
   assert.equal(readR2Config(env)?.publicBaseUrl, 'https://img.example.com');
+});
+
+test('deployment R2 checks remain strict unless local fallback is explicitly allowed', async () => {
+  const unavailableStorage = {
+    async verifyRoundTrip() {
+      throw new Error('connect ETIMEDOUT');
+    },
+  };
+
+  await assert.rejects(verifyR2Storage(unavailableStorage), /ETIMEDOUT/);
+  assert.equal(await verifyR2Storage(unavailableStorage, true), false);
 });
 
 test('maps legacy and public generated image paths to stable object keys and thumbnails', () => {

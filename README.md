@@ -1,12 +1,12 @@
 # Pixory Studio
 
-Pixory Studio is a full-stack image generation app with a React + Vite frontend and an Express backend. It supports prompt-based generation, reference image uploads, user auth, invite codes, saved image buckets, admin tools, and Supabase-backed persistence.
+Pixory Studio is a full-stack image generation app with a React + Vite frontend and an Express backend. It supports prompt-based generation, reference image uploads, user auth, invite codes, saved image buckets, admin tools, and SQLite-backed production persistence.
 
 ## Stack
 
 - Frontend: React, Vite, Tailwind CSS
 - Backend: Node.js, Express, TSX
-- Database: Supabase
+- Database: SQLite in production; Supabase remains available as an optional provider and migration source
 - Image provider: Visionary API
 - Process/runtime: PM2 on Debian Linux
 
@@ -43,12 +43,7 @@ Example local configuration:
 ```env
 NODE_ENV=development
 PORT=3001
-DATABASE_PROVIDER=supabase
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-SUPABASE_PUBLISHABLE_KEY=your_publishable_key
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
+DATABASE_PROVIDER=sqlite
 VISIONARY_API_KEY=your_fallback_visionary_key
 VISIONARY_BANANA_PRO_API_KEY=your_banana_pro_key
 VISIONARY_GPT_IMAGE_2_API_KEY=your_gpt_image_2_standard_key
@@ -63,9 +58,11 @@ GENERATION_MAX_CONCURRENCY=2
 VIDEO_MAX_CONCURRENCY=1
 ```
 
-### Business data backups
+### Database backups
 
-When Supabase persistence is enabled, the server creates encrypted business-data backups on startup when needed and every 24 hours. Backups include users, credits, invite codes, text-only generation metadata, API keys, and app settings. The `images` table, generation image/reference fields, and all uploaded/generated image files are intentionally excluded.
+In SQLite mode, the server creates an encrypted, compressed snapshot of `data/app.sqlite` on startup when the latest backup is older than six hours and every 24 hours afterward. Backups are stored in `data/sqlite-backups`, verified after creation, and the newest 14 files are retained.
+
+The business-data commands below remain available for Supabase mode. They include users, credits, invite codes, text-only generation metadata, API keys, and app settings, while intentionally excluding image bytes and image/reference fields.
 
 ```bash
 npm run backup:data
@@ -74,7 +71,7 @@ npm run restore:data -- --file data/business-backups/<backup-file>       # dry r
 npm run restore:data -- --file data/business-backups/<backup-file> --confirm
 ```
 
-Backups are stored in `data/business-backups` and the newest 30 files are retained by default. Set `BACKUP_ENCRYPTION_KEY` to a stable private value when possible; otherwise the server derives encryption from `JWT_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`.
+Set `BACKUP_ENCRYPTION_KEY` to a stable private value so SQLite and business-data backups remain decryptable after credential rotation. Otherwise the server derives encryption from `JWT_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`.
 
 Notes:
 
@@ -85,7 +82,7 @@ Notes:
 - Image retention defaults to 2 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
 - Image and video generation share a resource-aware admission queue. By default, at most two generation tasks run at once and at most one can be a video task. New work pauses after CPU reaches 85%, memory reaches 85% (or available memory falls below 300 MB), or event-loop lag reaches 200 ms for five consecutive two-second samples. Work resumes after ten healthy samples; in-flight work is never interrupted. `/api/health` and `/api/ready` expose the current `loadControl` status.
 - The R2 migration defaults to two workers and waits on the same CPU, memory, and event-loop pressure thresholds before starting each file.
-- Set `DATABASE_PROVIDER=supabase` for production on Linux servers.
+- Keep `DATABASE_PROVIDER=sqlite` on the persistent production server. Do not use SQLite on Vercel's ephemeral filesystem.
 
 ## Build and checks
 
@@ -138,15 +135,15 @@ Detailed deployment, domain, SSL, and rollback notes:
 
 - [Pixory Rainyun Deployment Guide](docs/pixory-rainyun-deployment.md)
 
-## Supabase setup
+## Database migration
 
-Run the initial schema in Supabase SQL Editor:
+Production was migrated from Supabase to SQLite. To create and validate a new SQLite snapshot from a Supabase source without replacing the active database, run:
 
-```text
-supabase/migrations/20260426000000_init_bananas_ai.sql
+```bash
+npm run db:migrate:sqlite -- --output data/app.sqlite.next --backup-dir data/migration-backups
 ```
 
-If needed, sync old local SQLite data into Supabase:
+The production workflow performs the final protected switch only for a push whose commit message contains `[migrate-sqlite]`; it does not repeat the migration when production already reports SQLite. The reverse synchronization command remains available for disaster recovery or a deliberate provider rollback:
 
 ```bash
 npm run db:sync:supabase
