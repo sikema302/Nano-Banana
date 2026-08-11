@@ -691,7 +691,7 @@ function StageCard({
   const currentBatch = progress ? Math.min(progress.completed + 1, progress.total) : 1;
 
   return (
-    <article className="stage-card relative flex min-h-[118px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[118px] sm:flex-row sm:p-3">
+    <article className="stage-card relative flex min-h-[108px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[108px] sm:flex-row sm:p-3">
       <div
         className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[112px] ${
           loading ? 'border-pink-300/25 bg-pink-300/10' : 'border-white/8 bg-black/45'
@@ -707,7 +707,7 @@ function StageCard({
           </button>
         ) : (
           <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-black text-zinc-300">
-            灶台空闲中
+            空闲中
           </div>
         )}
       </div>
@@ -6407,16 +6407,22 @@ export default function App() {
   async function downloadCurrentImage() {
     if (!currentImage) return;
     try {
+      console.log('[downloadCurrentImage] 开始下载，imageUrl:', currentImage.imageUrl);
       await downloadAsset(currentImage.imageUrl, `pixory-${Date.now()}`);
+      console.log('[downloadCurrentImage] 下载完成');
     } catch (error) {
+      console.error('[downloadCurrentImage] 下载失败:', error);
       setNotice(error instanceof Error ? error.message : '下载失败');
     }
   }
 
-  async function downloadDisplayImage(item: DisplayImage) {
+  async function downloadDisplayImage(item: DisplayImage | SavedImage | GenerationRecord) {
     try {
+      console.log('[downloadDisplayImage] 开始下载，imageUrl:', item.imageUrl);
       await downloadAsset(item.imageUrl, `pixory-${Date.now()}`);
+      console.log('[downloadDisplayImage] 下载完成');
     } catch (error) {
+      console.error('[downloadDisplayImage] 下载失败:', error);
       setNotice(error instanceof Error ? error.message : '下载失败');
     }
   }
@@ -7489,8 +7495,13 @@ export default function App() {
               }}
             />
           ) : activeTab === 'create' ? (
-            <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
-              <div className="custom-scrollbar grid auto-rows-auto gap-3 pr-0 lg:h-full lg:auto-rows-[118px] lg:overflow-y-auto lg:pr-1">
+            <section className="overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.01)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-5 sm:pt-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
+              {/* 图片保留时限提示 */}
+              <div className="mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-amber-500/10 bg-amber-500/[0.04] px-3 py-2">
+                <Clock3 size={13} className="shrink-0 text-amber-400/80" />
+                <span className="text-[11px] leading-tight text-amber-400/80">图片仅保存 48 小时，超时自动清理，请及时下载</span>
+              </div>
+              <div className="custom-scrollbar grid auto-rows-auto gap-3 pr-0 lg:flex-1 lg:min-h-0 lg:auto-rows-[108px] lg:overflow-y-auto lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard

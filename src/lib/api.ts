@@ -420,10 +420,12 @@ export async function downloadAsset(source: string, suggestedName = 'pixory-imag
 
   if (!response.ok) {
     const responseText = await response.text().catch(() => '');
+    console.error('[downloadAsset] 请求失败 status:', response.status, 'response:', responseText);
     throw new Error(getApiErrorMessage(parseJsonPayload(responseText), responseText) || '下载失败');
   }
 
   const blob = await response.blob();
+  console.log('[downloadAsset] blob 大小:', blob.size, '类型:', blob.type);
   const extension = fileExtensionForDownload(source, blob.type);
   const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
   const objectUrl = URL.createObjectURL(blob);
@@ -433,8 +435,12 @@ export async function downloadAsset(source: string, suggestedName = 'pixory-imag
   link.style.display = 'none';
   document.body.appendChild(link);
   link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  console.log('[downloadAsset] 下载触发完成:', link.download);
+  // 延迟移除，避免浏览器在下载触发前就清理了元素
+  window.setTimeout(() => {
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, 100);
 }
 
 function setSession(token: string, user: UserInfo) {
