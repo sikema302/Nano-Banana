@@ -408,7 +408,7 @@ jobs:
           REMOTE
 
           deploy_status='running'
-          for attempt in $(seq 1 255); do
+          for attempt in $(seq 1 360); do
             deploy_status="$(sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
               "$SERVER_USER@$SERVER_HOST" "if [ -f '$deploy_status_file' ]; then cat '$deploy_status_file'; else printf running; fi")" \
               || deploy_status='running'
@@ -419,7 +419,7 @@ jobs:
           done
 
           sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "cat '$deploy_log'; rm -f '$deploy_log' '$deploy_status_file' '$deploy_script'"
+            "$SERVER_USER@$SERVER_HOST" "cat '$deploy_log' 2>/dev/null || true; echo '--- deploy status ---'; cat '$deploy_status_file' 2>/dev/null || true; rm -f '$deploy_log' '$deploy_status_file' '$deploy_script'"
           if ! [[ "$deploy_status" =~ ^[0-9]+$ ]]; then
             echo 'Deployment status was not reported before the polling deadline.'
             exit 1
