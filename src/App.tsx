@@ -91,6 +91,9 @@ import {
   updateAdminNotification,
   updateAdminProviderRouting,
   updateAdminModelCreditPricing,
+  fetchAdminAutomationStatus,
+  startAdminCommit,
+  startAdminDeploy,
   startGenerateImageJob,
   startGenerateVideoJob,
   type AdminDashboardStats,
@@ -120,6 +123,7 @@ import {
   type UserInfo,
   type UserApiKeyInfo,
   type VisionaryDocSyncStatus,
+  type AdminAutomationOperation,
 } from './lib/api';
 import {
   DEFAULT_GPT_IMAGE_PRICING,
@@ -183,6 +187,7 @@ interface ActiveImageGeneration {
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
+  { id: 'Seedream_4', name: 'Seedream 4', description: '\u5373\u68a6 Seedream 4 \u751f\u56fe\u6a21\u578b' },
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
@@ -256,14 +261,17 @@ const defaultProviderRouting: ProviderRoutingConfig = {
     '1K': [
       { id: 'junliai-economy', enabled: true },
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '2K': [
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
   },
@@ -273,6 +281,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: true },
       { id: 'junliai-nano-banana-2', enabled: true },
+      { id: 'schat-nano-banana-2', enabled: false },
     ],
     '2K': [
       { id: 'flux', enabled: true },
@@ -286,8 +295,14 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
+  seedreamRoutes: {
+    '1K': [],
+    '2K': [{ id: 'schat-seedream-4', enabled: false }],
+    '4K': [{ id: 'schat-seedream-4', enabled: false }],
+  },
   junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
+  schatSeedance25: true,
 };
 
 const providerChannelDetails: Record<string, { title: string; description: string }> = {
@@ -297,6 +312,9 @@ const providerChannelDetails: Record<string, { title: string; description: strin
   flux: { title: 'Flux', description: '1K / 2K 固定 Flash；4K Pro' },
   junliai: { title: 'Junli · Nano Banana Pro', description: '使用既有 Nano Banana Pro 线路' },
   'junliai-nano-banana-2': { title: 'Junli · Nano Banana 2', description: '用于 Banana 1K / 2K' },
+  'schat-gpt-image-2': { title: 'Schat · GPT Image 2', description: '兼容现有 Image2 参数与分辨率' },
+  'schat-nano-banana-2': { title: 'Schat · Nano Banana 2', description: '用于 Banana 1K' },
+  'schat-seedream-4': { title: 'Schat · Seedream 4', description: '用于 Seedream 2K / 4K' },
 };
 
 function isImageResolutionEnabled(
@@ -307,7 +325,9 @@ function isImageResolutionEnabled(
   const resolution = imageSize === '2K' || imageSize === '4K' ? imageSize : '1K';
   const channels = modelId === 'Nano_Banana_Pro'
     ? routing.bananaRoutes[resolution]
-    : routing.image2Routes[resolution];
+    : modelId === 'Seedream_4'
+      ? routing.seedreamRoutes[resolution]
+      : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -608,6 +628,9 @@ function getModelCredits(
       : 0;
     return baseCredits + enhancementCredits;
   }
+  if (model.id === 'Seedream_4') {
+    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
+  }
   if (typeof model.creditsCost === 'number') return model.creditsCost;
   return 1;
 }
@@ -615,6 +638,7 @@ function getModelCredits(
 function getModelSortOrder(modelId: string) {
   if (modelId === 'gpt-image-2') return 0;
   if (modelId === 'Nano_Banana_Pro') return 1;
+  if (modelId === 'Seedream_4') return 2;
   return 99;
 }
 
@@ -1106,7 +1130,9 @@ function VideoCreateView({
 
   const isVideoModelEnabled = (candidate: VideoModelId) => candidate === 'gemini-veo31'
     ? providerRouting.junliaiGeminiVeo31
-    : providerRouting.junliaiFireflyVideo;
+    : candidate === 'seedance2.5'
+      ? providerRouting.schatSeedance25
+      : providerRouting.junliaiFireflyVideo;
 
   function selectVideoModel(nextModelId: VideoModelId) {
     const next = getVideoModelConfig(nextModelId);
@@ -1121,7 +1147,7 @@ function VideoCreateView({
     if (isVideoModelEnabled(modelId)) return;
     const next = VIDEO_GENERATION_MODELS.find((candidate) => isVideoModelEnabled(candidate.id));
     if (next) selectVideoModel(next.id);
-  }, [modelId, providerRouting.junliaiFireflyVideo, providerRouting.junliaiGeminiVeo31]);
+  }, [modelId, providerRouting.junliaiFireflyVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25]);
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const files: File[] = event.target.files ? Array.from(event.target.files) : [];
@@ -1772,7 +1798,7 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro。'],
+    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro、seedream-4。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
@@ -1783,6 +1809,7 @@ function ApiDocsView({
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
+    { model: 'seedream-4', name: 'Seedream 4', cost: '2K 18 / 4K 20', note: '仅支持 2K、4K，使用通用积分。' },
   ];
   const gptPixelGroups = [
     {
@@ -2990,6 +3017,9 @@ function AdminModelCreditPanel({
   const setBanana = (key: keyof ModelCreditPricing['nanoBanana'], value: number) => {
     setDraft((current) => ({ ...current, nanoBanana: { ...current.nanoBanana, [key]: value } }));
   };
+  const setSeedream = (key: keyof ModelCreditPricing['seedream'], value: number) => {
+    setDraft((current) => ({ ...current, seedream: { ...current.seedream, [key]: value } }));
+  };
   const setVideo = (modelId: VideoModelId, key: string, value: number) => {
     setDraft((current) => ({
       ...current,
@@ -3051,6 +3081,15 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-emerald-100">Seedream 4</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">使用通用积分，仅提供 2K 与 4K。</p>
+          <div className="mt-3">
+            {row('2K', '标准档位', creditInput(draft.seedream.twoK, (value) => setSeedream('twoK', value)))}
+            {row('4K', '高清档位', creditInput(draft.seedream.fourK, (value) => setSeedream('fourK', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
           <h3 className="font-black text-amber-100">Nano Banana Pro</h3>
           <p className="mt-1 text-[11px] text-zinc-500">扣 Banana 专用积分，不足部分自动扣通用积分。</p>
           <div className="mt-3">
@@ -3064,6 +3103,7 @@ function AdminModelCreditPanel({
         {([
           ['gemini-veo31', 'Gemini Veo 3.1', ['720p:4', '720p:6', '720p:8', '1080p:4', '1080p:6', '1080p:8']],
           ['firefly-video', 'Firefly Video', ['720p:5', '1080p:5']],
+          ['seedance2.5', 'Seedance 2.5', Array.from({ length: 26 }, (_, index) => `720p:${index + 4}`)],
         ] as const).map(([modelId, title, tiers]) => (
           <section key={modelId} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
             <h3 className="font-black text-violet-100">{title}</h3>
@@ -3178,6 +3218,11 @@ function AdminView({
   const [deletingCode, setDeletingCode] = useState('');
   const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
+  const [automation, setAutomation] = useState<AdminAutomationOperation | null>(null);
+  const [automationRunning, setAutomationRunning] = useState(false);
+  const [automationMessage, setAutomationMessage] = useState('');
+  const [automationBusy, setAutomationBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const [rechargingUserId, setRechargingUserId] = useState('');
   const [rechargeUser, setRechargeUser] = useState<AdminUserSummary | null>(null);
   const [rechargeAmounts, setRechargeAmounts] = useState<CreditBalances>({ gpt: 0, banana: 0, general: 0 });
@@ -3453,6 +3498,38 @@ function AdminView({
   useEffect(() => {
     setRecordPage(1);
   }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
+
+  useEffect(() => {
+    let disposed = false;
+    const load = async () => {
+      try {
+        const payload = await fetchAdminAutomationStatus();
+        if (!disposed) {
+          setAutomation(payload.operation);
+          setAutomationRunning(payload.running);
+          setPendingFiles(payload.pendingFiles || []);
+        }
+      } catch { /* best effort */ }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 2_000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
+
+  async function runAutomation(kind: 'commit' | 'deploy') {
+    setAutomationBusy(true);
+    try {
+      const payload = kind === 'commit'
+        ? await startAdminCommit(automationMessage.trim() || undefined)
+        : await startAdminDeploy(automationMessage.trim() || undefined);
+      setAutomation(payload.operation);
+      setAutomationRunning(true);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '操作启动失败');
+    } finally {
+      setAutomationBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (section === 'apiKeys') return;
@@ -3779,6 +3856,41 @@ function AdminView({
                 </div>
               ))}
             </div>
+            <div className="rounded-[22px] border border-amber-300/15 bg-amber-500/[0.04] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-black text-white">代码与部署</h2>
+                  <p className="mt-1 text-xs text-zinc-500">仅管理员可见。部署会执行检查、推送并等待 GitHub Actions 滚动更新完成。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    className="input min-h-9 w-56 px-3 py-2 text-xs"
+                    placeholder="提交说明（可选）"
+                    value={automationMessage}
+                    onChange={(event) => setAutomationMessage(event.target.value.slice(0, 200))}
+                    disabled={automationRunning || automationBusy}
+                  />
+                  <button type="button" className="btn-secondary min-h-9 px-3 text-xs font-black" disabled={automationRunning || automationBusy} onClick={() => void runAutomation('commit')}>
+                    提交代码
+                  </button>
+                  <button type="button" className="btn-primary min-h-9 px-3 text-xs font-black" disabled={automationRunning || automationBusy} onClick={() => void runAutomation('deploy')}>
+                    {automationRunning ? '部署中…' : '提交并部署'}
+                  </button>
+                </div>
+              </div>
+              {automation ? (
+                <div className="mt-3 rounded-xl border border-white/8 bg-black/35 p-3">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-zinc-300">
+                    <span>{automation.kind === 'deploy' ? '部署任务' : '提交任务'} · {automation.status}</span>
+                    <span>{new Date(automation.startedAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-zinc-500">{automation.error || automation.output || '等待输出…'}</pre>
+                </div>
+              ) : null}
+              <div className="mt-3 text-[10px] text-zinc-500">
+                {pendingFiles.length > 0 ? `待提交文件（${pendingFiles.length}）：${pendingFiles.join(' · ')}` : '当前没有待提交文件'}
+              </div>
+            </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <div>
                 <h2 className="text-base font-black text-white">生图渠道顺序</h2>
@@ -3790,6 +3902,7 @@ function AdminView({
                 {([
                   { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理' },
                   { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由' },
+                  { key: 'seedreamRoutes', title: 'Seedream', subtitle: '仅开放 2K / 4K 路由' },
                 ] as const).map((group) => (
                   <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -3797,7 +3910,9 @@ function AdminView({
                       <span className="text-[11px] text-zinc-500">{group.subtitle}</span>
                     </div>
                     <div className="mt-4 grid gap-4 xl:grid-cols-3">
-                      {(['1K', '2K', '4K'] as const).map((resolution) => {
+                      {(['1K', '2K', '4K'] as const)
+                        .filter((resolution) => group.key !== 'seedreamRoutes' || resolution !== '1K')
+                        .map((resolution) => {
                         const channels = providerRouting[group.key][resolution];
                         return (
                           <div key={resolution} className="rounded-[18px] border border-white/8 bg-black/30 p-3">
@@ -3917,6 +4032,7 @@ function AdminView({
                   {([
                     { key: 'junliaiGeminiVeo31', title: 'Gemini Veo 3.1' },
                     { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
+                    { key: 'schatSeedance25', title: 'Schat · Seedance 2.5' },
                   ] as const).map((route) => {
                     const enabled = providerRouting[route.key];
                     const updating = updatingProviderRoute === route.key;
@@ -5072,6 +5188,9 @@ export default function App() {
     modelCreditPricing,
   });
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
+  const visibleResolutionOptions = selectedModel === 'Seedream_4'
+    ? gptImageSizeOptions.filter((item) => item.value === '2K' || item.value === '4K')
+    : selectedResolutionOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const selectedCreditBucket = selectedModel === 'gpt-image-2' ? 'gpt' : selectedModel === 'Nano_Banana_Pro' ? 'banana' : 'general';
   const selectedAvailableCredits = getAvailableUserCredits(user, selectedCreditBucket);
@@ -5288,11 +5407,13 @@ export default function App() {
     if (!isImageResolutionEnabled(providerRouting, selectedModel, imageSize)) {
       const candidates: ImageSizeOption[] = selectedModel === 'Nano_Banana_Pro'
         ? ['1K', '2K', '4K']
-        : ['STANDARD', '2K', '4K'];
+        : selectedModel === 'Seedream_4'
+          ? ['2K', '4K']
+          : ['STANDARD', '2K', '4K'];
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }
-    if (!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && creationMode === 'video') {
+    if (!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && !providerRouting.schatSeedance25 && creationMode === 'video') {
       setCreationMode('image');
     }
   }, [
@@ -5300,8 +5421,10 @@ export default function App() {
     imageSize,
     providerRouting.junliaiGeminiVeo31,
     providerRouting.junliaiFireflyVideo,
+    providerRouting.schatSeedance25,
     providerRouting.image2Routes,
     providerRouting.bananaRoutes,
+    providerRouting.seedreamRoutes,
     selectedModel,
   ]);
 
@@ -5354,6 +5477,12 @@ export default function App() {
       setOptimizeChineseText(false);
       return;
     }
+    if (modelId === 'Seedream_4') {
+      setImageSize('2K');
+      setGptQuality('auto');
+      setOptimizeChineseText(false);
+      return;
+    }
     setImageSize((current) => {
       if (modelId === 'Nano_Banana_Pro') return '1K';
       return current === '2K' || current === '4K' ? current : 'STANDARD';
@@ -5393,12 +5522,17 @@ export default function App() {
   }
 
   function startEditSession(image: DisplayImage) {
-    const normalizedModel = image.modelName.toLowerCase().includes('nano banana') ? 'Nano_Banana_Pro' : 'gpt-image-2';
+    const normalizedName = image.modelName.toLowerCase();
+    const normalizedModel = normalizedName.includes('nano banana')
+      ? 'Nano_Banana_Pro'
+      : normalizedName.includes('seedream')
+        ? 'Seedream_4'
+        : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
     } else {
-      setImageSize(normalizedModel === 'Nano_Banana_Pro' ? '1K' : 'STANDARD');
+      setImageSize(normalizedModel === 'Nano_Banana_Pro' ? '1K' : normalizedModel === 'Seedream_4' ? '2K' : 'STANDARD');
     }
     if (dimensionOptions.some((item) => item.value === image.dimensions)) {
       setDimensions(image.dimensions as DimensionOption);
@@ -5855,14 +5989,13 @@ export default function App() {
   ) {
     const payload = await updateAdminProviderRouting(patch);
     setProviderRouting(payload.providerRouting);
-    setNotice(notice);
+    void notice;
   }
 
   async function handleUpdateModelCreditPricing(pricing: ModelCreditPricing) {
     const payload = await updateAdminModelCreditPricing(pricing);
     setModelCreditPricing(payload.modelCreditPricing);
     setGptImagePricing(payload.modelCreditPricing.gptImage2);
-    setNotice('模型积分已保存并立即生效');
   }
 
   async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -6843,7 +6976,7 @@ export default function App() {
                 {generationError}
               </div>
             ) : null}
-            {notice ? (
+            {notice && user?.isAdmin ? (
               <div className="app-alert">
                 {notice}
               </div>
@@ -7146,13 +7279,13 @@ export default function App() {
                 </button>
                 <button
                   className={`flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black transition ${
-                    providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo
+                    providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo || providerRouting.schatSeedance25
                       ? 'text-zinc-500 hover:text-zinc-200'
                       : 'cursor-not-allowed text-zinc-700'
                   }`}
                   type="button"
-                  disabled={!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo}
-                  title={providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo ? undefined : '管理员已关闭全部视频接口'}
+                  disabled={!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && !providerRouting.schatSeedance25}
+                  title={providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo || providerRouting.schatSeedance25 ? undefined : '管理员已关闭全部视频接口'}
                   onClick={() => setCreationMode('video')}
                 >
                   <Film size={13} />
@@ -7285,7 +7418,7 @@ export default function App() {
                 <section className="space-y-1.5">
                   <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
                   <div className="grid grid-cols-3 gap-2">
-                    {selectedResolutionOptions.map((item) => {
+                    {visibleResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
                       const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
 
@@ -7464,7 +7597,7 @@ export default function App() {
                 <div className="app-alert app-alert-error">{generationError}</div>
               ) : null}
 
-              {notice ? (
+              {notice && user?.isAdmin ? (
                 <div className="app-alert">{notice}</div>
               ) : null}
 

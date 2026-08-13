@@ -12,11 +12,17 @@ export type NanoBananaCreditPricing = {
   enhancement: number;
 };
 
+export type SeedreamCreditPricing = {
+  twoK: number;
+  fourK: number;
+};
+
 export type VideoCreditPricing = Record<VideoModelId, Partial<Record<`${VideoResolution}:${VideoDurationSeconds}`, number>>>;
 
 export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
   nanoBanana: NanoBananaCreditPricing;
+  seedream: SeedreamCreditPricing;
   video: VideoCreditPricing;
   updatedAt: string;
 };
@@ -28,6 +34,10 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     twoK: 24,
     fourK: 30,
     enhancement: 8,
+  },
+  seedream: {
+    twoK: 18,
+    fourK: 20,
   },
   video: {
     'gemini-veo31': {
@@ -42,6 +52,13 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
       '720p:5': 300,
       '1080p:5': 350,
     },
+    'seedance2.5': Object.fromEntries(
+      Array.from({ length: 26 }, (_, index) => {
+        const seconds = index + 4;
+        const documentCredits = 5 + 4 + index * 4;
+        return [`720p:${seconds}`, Math.ceil((documentCredits / 3) * 20)];
+      }),
+    ),
   },
   updatedAt: '',
 };
@@ -55,6 +72,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const source = value && typeof value === 'object' ? value as Partial<ModelCreditPricing> : {};
   const banana: Partial<NanoBananaCreditPricing> = source.nanoBanana && typeof source.nanoBanana === 'object'
     ? source.nanoBanana
+    : {};
+  const seedream: Partial<SeedreamCreditPricing> = source.seedream && typeof source.seedream === 'object'
+    ? source.seedream
     : {};
   const video = source.video && typeof source.video === 'object' ? source.video : {};
   const normalizeVideoModel = (modelId: VideoModelId) => {
@@ -73,9 +93,14 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       fourK: positiveCredit(banana.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.fourK),
       enhancement: positiveCredit(banana.enhancement, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.enhancement),
     },
+    seedream: {
+      twoK: positiveCredit(seedream.twoK, DEFAULT_MODEL_CREDIT_PRICING.seedream.twoK),
+      fourK: positiveCredit(seedream.fourK, DEFAULT_MODEL_CREDIT_PRICING.seedream.fourK),
+    },
     video: {
       'gemini-veo31': normalizeVideoModel('gemini-veo31'),
       'firefly-video': normalizeVideoModel('firefly-video'),
+      'seedance2.5': normalizeVideoModel('seedance2.5'),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };
@@ -97,6 +122,9 @@ export function getConfiguredImageCredits(
     if (imageSize === '1K') return pricing.nanoBanana.oneK;
     if (imageSize === '4K') return pricing.nanoBanana.fourK;
     return pricing.nanoBanana.twoK;
+  }
+  if (modelId === 'Seedream_4') {
+    return imageSize === '4K' ? pricing.seedream.fourK : pricing.seedream.twoK;
   }
   return 1;
 }

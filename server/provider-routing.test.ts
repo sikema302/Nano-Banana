@@ -14,14 +14,17 @@ const defaults: ProviderRoutingConfig = {
     '1K': [
       { id: 'junliai-economy', enabled: true },
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '2K': [
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
       { id: 'junliai-firefly', enabled: true },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
   },
@@ -31,6 +34,7 @@ const defaults: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: true },
       { id: 'junliai-nano-banana-2', enabled: true },
+      { id: 'schat-nano-banana-2', enabled: false },
     ],
     '2K': [
       { id: 'flux', enabled: true },
@@ -44,8 +48,14 @@ const defaults: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
+  seedreamRoutes: {
+    '1K': [],
+    '2K': [{ id: 'schat-seedream-4', enabled: false }],
+    '4K': [{ id: 'schat-seedream-4', enabled: false }],
+  },
   junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
+  schatSeedance25: true,
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
@@ -74,6 +84,7 @@ test('persists independent provider order and switches for each resolution', asy
   assert.deepEqual(updated.bananaRoutes['2K'], nextBananaRoutes['2K']);
   assert.deepEqual(updated.bananaRoutes['1K'], defaults.bananaRoutes['1K']);
   assert.deepEqual(updated.image2Routes, defaults.image2Routes);
+  assert.deepEqual(updated.seedreamRoutes, defaults.seedreamRoutes);
   assert.deepEqual(
     enabledProviderIds(updated.bananaRoutes['2K']),
     ['junliai', 'visionary', 'junliai-nano-banana-2'],
@@ -104,8 +115,10 @@ test('normalizes duplicates, unknown channels, and missing channels per resoluti
     { id: 'flux', enabled: true },
     { id: 'junliai', enabled: true },
     { id: 'junliai-nano-banana-2', enabled: true },
+    { id: 'schat-nano-banana-2', enabled: false },
   ]);
   assert.deepEqual(config.bananaRoutes['2K'], defaults.bananaRoutes['2K']);
+  assert.deepEqual(config.seedreamRoutes, defaults.seedreamRoutes);
 });
 
 test('migrates legacy switches into every compatible resolution route', async () => {

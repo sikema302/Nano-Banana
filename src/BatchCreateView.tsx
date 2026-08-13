@@ -151,6 +151,7 @@ function getCredits(
       : 0;
     return base + enhancementCredits;
   }
+  if (model.id === 'Seedream_4') return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize);
   return typeof model.creditsCost === 'number' ? model.creditsCost : 1;
 }
 
@@ -360,7 +361,7 @@ export default function BatchCreateView({
   onGenerationComplete,
 }: BatchCreateViewProps) {
   const availableModels = useMemo(
-    () => models.filter((item) => item.id === 'gpt-image-2' || item.id === 'Nano_Banana_Pro'),
+    () => models.filter((item) => item.id === 'gpt-image-2' || item.id === 'Nano_Banana_Pro' || item.id === 'Seedream_4'),
     [models],
   );
   const [mode, setMode] = useState<BatchMode>('unified');
@@ -382,6 +383,7 @@ export default function BatchCreateView({
 
   const model = availableModels.find((item) => item.id === selectedModel) || availableModels[0];
   const isNano = model?.id === 'Nano_Banana_Pro';
+  const isSeedream = model?.id === 'Seedream_4';
   const effectiveOptimizeChineseText = isNano && optimizeChineseText;
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
@@ -402,7 +404,10 @@ export default function BatchCreateView({
   const resolutionOptions: ImageSize[] = isNano
     ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
         providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
-    : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
+    : isSeedream
+      ? (['2K', '4K'] as ImageSize[]).filter((resolution) =>
+          providerRouting.seedreamRoutes[resolution].some((channel) => channel.enabled))
+      : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
         const routeResolution = resolution === 'STANDARD' ? '1K' : resolution;
         return providerRouting.image2Routes[routeResolution].some((channel) => channel.enabled);
       });
@@ -448,6 +453,12 @@ export default function BatchCreateView({
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
       setImageSize('STANDARD');
+      setQuality('auto');
+      setOptimizeChineseText(false);
+    } else if (modelId === 'Seedream_4') {
+      const nextImageSize = (['2K', '4K'] as const).find((resolution) =>
+        providerRouting.seedreamRoutes[resolution].some((channel) => channel.enabled));
+      setImageSize(nextImageSize || '2K');
       setQuality('auto');
       setOptimizeChineseText(false);
     } else {
@@ -944,7 +955,7 @@ export default function BatchCreateView({
                   ))}
                 </div>
               </section>
-            ) : (
+            ) : isNano ? (
               <section>
                 <div className="mb-2 text-[11px] font-black text-zinc-500">AI 增强</div>
                 <div className="grid grid-cols-2 gap-1.5">
@@ -961,7 +972,7 @@ export default function BatchCreateView({
                   ))}
                 </div>
               </section>
-            )}
+            ) : null}
           </div>
 
           <section className="mt-3">

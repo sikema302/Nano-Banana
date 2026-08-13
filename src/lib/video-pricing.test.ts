@@ -19,3 +19,10 @@ test('keeps the two video model capability sets independent', () => {
   assert.equal(supportsVideoConfiguration('firefly-video', '1080p', '1:1', 5), true);
   assert.equal(supportsVideoConfiguration('firefly-video', '1080p', '16:9', 8), false);
 });
+
+test('maps Seedance 2.5 document credits to Pixory credits', () => {
+  assert.equal(getVideoGenerationCredits('seedance2.5', '720p', 4), 60);
+  assert.equal(getVideoGenerationCredits('seedance2.5', '720p', 5), 87);
+  assert.equal(supportsVideoConfiguration('seedance2.5', '720p', '21:9', 29), true);
+  assert.equal(supportsVideoConfiguration('seedance2.5', '1080p', '16:9', 5), false);
+});

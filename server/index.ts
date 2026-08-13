@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn } from 'node:child_process';
 
 import bcrypt from 'bcryptjs';
 import compression from 'compression';
@@ -64,6 +65,7 @@ import {
   type ImageGenerationInput,
 } from './image-provider-router.js';
 import { generateFluxBanana } from './flux-banana.js';
+import { generateSchatImage } from './schat-image.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
   dedicatedJunliBananaPolicy,
@@ -564,6 +566,49 @@ const generationWorkQueue = new ResourceAwareWorkQueue(
   { video: VIDEO_MAX_CONCURRENCY },
 );
 
+type AdminAutomationOperation = {
+  id: string;
+  kind: 'commit' | 'deploy';
+  status: 'running' | 'succeeded' | 'failed';
+  output: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+};
+const adminAutomationOperations = new Map<string, AdminAutomationOperation>();
+let activeAdminAutomationId: string | null = null;
+
+function startAdminAutomation(kind: AdminAutomationOperation['kind'], scriptName: string, args: string[]) {
+  if (activeAdminAutomationId) throw new Error('已有提交或部署任务正在执行，请稍后查看状态');
+  const id = `admin_op_${Date.now()}_${randomHex(4)}`;
+  const operation: AdminAutomationOperation = {
+    id, kind, status: 'running', output: '', startedAt: nowIso(),
+  };
+  adminAutomationOperations.set(id, operation);
+  activeAdminAutomationId = id;
+  const script = path.join(process.cwd(), 'scripts', scriptName);
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], {
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: true,
+  });
+  const append = (chunk: Buffer) => {
+    operation.output = `${operation.output}${chunk.toString('utf8')}`.slice(-20_000);
+  };
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (error) => {
+    operation.status = 'failed'; operation.error = error.message; operation.finishedAt = nowIso(); activeAdminAutomationId = null;
+  });
+  child.on('close', (code) => {
+    operation.status = code === 0 ? 'succeeded' : 'failed';
+    operation.finishedAt = nowIso();
+    if (code !== 0) operation.error = operation.output.slice(-2_000) || `进程退出码 ${code}`;
+    activeAdminAutomationId = null;
+  });
+  return operation;
+}
+
 // 鈹€鈹€鈹€ 鐜鍙橀噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const VISIONARY_API_BASE_URL = (process.env.VISIONARY_API_BASE_URL || 'https://visionary.beer').replace(/\/+$/, '');
@@ -581,6 +626,13 @@ const FLUX_BANANA_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.FLUX_BANANA_TIMEOUT_MS || 15 * 60_000),
 );
+const SCHAT_BASE_URL = normalizeEnvValue(process.env.SCHAT_BASE_URL || 'https://www.schat.top/v1');
+const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
+const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
+const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || 'nano-banana-2');
+const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || 'seedream-4');
+const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
+const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 // Previous Chat2API primary integration is intentionally disabled:
 // CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
 const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
@@ -610,9 +662,11 @@ const IMAGE_CHANNEL_RETRY_COOLDOWN_MS = Math.max(
 );
 const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
 const VIDEO_MODEL_FIREFLY_ID = 'firefly-video';
+const VIDEO_MODEL_SEEDANCE_25_ID = 'seedance2.5';
 const VIDEO_MODEL_LABELS: Record<string, string> = {
   [VIDEO_MODEL_GEMINI_ID]: 'Gemini Veo 3.1',
   [VIDEO_MODEL_FIREFLY_ID]: 'Firefly Video',
+  [VIDEO_MODEL_SEEDANCE_25_ID]: 'Seedance 2.5',
 };
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v3';
@@ -621,14 +675,17 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '2K': [
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'schat-gpt-image-2', enabled: false },
       { id: 'visionary', enabled: true },
     ],
   },
@@ -638,6 +695,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'schat-nano-banana-2', enabled: false },
     ],
     '2K': [
       { id: 'flux', enabled: true },
@@ -651,8 +709,14 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
   },
+  seedreamRoutes: {
+    '1K': [],
+    '2K': [{ id: 'schat-seedream-4', enabled: false }],
+    '4K': [{ id: 'schat-seedream-4', enabled: false }],
+  },
   junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
   junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
+  schatSeedance25: Boolean(SCHAT_API_KEY),
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -827,6 +891,12 @@ const models = [
     name: 'Nano Banana Pro',
     description: '谷歌最强生图模型！',
     creditsCost: 24,
+  },
+  {
+    id: 'Seedream_4',
+    name: 'Seedream 4',
+    description: '即梦 Seedream 4 生图模型',
+    creditsCost: 18,
   },
 ] as const;
 
@@ -1839,6 +1909,7 @@ function normalizeImageSize(value: string, modelId: string) {
     if (value === '2K' || value === '4K') return value;
     return 'STANDARD';
   }
+  if (modelId === 'Seedream_4') return value === '4K' ? '4K' : '2K';
   if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
   if (value === '1K') return '1K';
   if (value === '4K') return '4K';
@@ -1935,6 +2006,7 @@ function modelNameFromId(modelId: string) {
 
 function normalizeModelId(modelId: string) {
   const normalized = normalizeString(modelId).toLowerCase();
+  if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
   const bananaAliases = [
     'nano-banana-pro',
     'nano_banana_pro',
@@ -1959,6 +2031,7 @@ function normalizePublicModelId(modelId: string) {
   if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalized)) {
     return 'gpt-image-2';
   }
+  if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
@@ -4549,6 +4622,20 @@ async function callConfiguredImageChannel(
   traceId: string,
 ) {
   if (input.modelId === 'Nano_Banana_Pro') {
+    if (channelId === 'schat-nano-banana-2') {
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Schat · Nano Banana 2',
+        SCHAT_NANO_BANANA_2_MODEL,
+        () => generateSchatImage(input, {
+          baseUrl: SCHAT_BASE_URL,
+          apiKey: SCHAT_API_KEY,
+          model: SCHAT_NANO_BANANA_2_MODEL,
+          timeoutMs: SCHAT_TIMEOUT_MS,
+        }),
+      );
+    }
     if (channelId === 'flux') {
       if (!FLUX_BANANA_API_KEY) {
         const error = new Error('Flux banana key is not configured') as Error & { safeToFallback: boolean };
@@ -4613,6 +4700,20 @@ async function callConfiguredImageChannel(
   }
 
   if (input.modelId === 'gpt-image-2') {
+    if (channelId === 'schat-gpt-image-2') {
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Schat · GPT Image 2',
+        SCHAT_GPT_IMAGE_2_MODEL,
+        () => generateSchatImage(input, {
+          baseUrl: SCHAT_BASE_URL,
+          apiKey: SCHAT_API_KEY,
+          model: SCHAT_GPT_IMAGE_2_MODEL,
+          timeoutMs: SCHAT_TIMEOUT_MS,
+        }),
+      );
+    }
     if (channelId === 'visionary') {
       return callMeasuredImageChannel(
         input,
@@ -4635,6 +4736,21 @@ async function callConfiguredImageChannel(
         traceId,
       });
     }
+  }
+
+  if (input.modelId === 'Seedream_4' && channelId === 'schat-seedream-4') {
+    return callMeasuredImageChannel(
+      input,
+      traceId,
+      'Schat · Seedream 4',
+      SCHAT_SEEDREAM_4_MODEL,
+      () => generateSchatImage(input, {
+        baseUrl: SCHAT_BASE_URL,
+        apiKey: SCHAT_API_KEY,
+        model: SCHAT_SEEDREAM_4_MODEL,
+        timeoutMs: SCHAT_TIMEOUT_MS,
+      }),
+    );
   }
 
   const error = new Error(`Image channel ${channelId} is unavailable`) as Error & { safeToFallback: boolean };
@@ -4662,7 +4778,9 @@ async function callImageGeneration(input: ImageGenerationInput) {
   const resolution = routingResolution(effectiveInput.imageSize);
   const configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
     ? enabledProviderIds(routing.bananaRoutes[resolution])
-    : enabledProviderIds(routing.image2Routes[resolution]);
+    : effectiveInput.modelId === 'Seedream_4'
+      ? enabledProviderIds(routing.seedreamRoutes[resolution])
+      : enabledProviderIds(routing.image2Routes[resolution]);
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -4702,8 +4820,8 @@ async function callImageGeneration(input: ImageGenerationInput) {
 
 function videoSize(ratio: string, resolution: string) {
   const sizes: Record<string, Record<string, string>> = {
-    '720p': { '16:9': '1280x720', '1:1': '720x720', '9:16': '720x1280' },
-    '1080p': { '16:9': '1920x1080', '1:1': '1080x1080', '9:16': '1080x1920' },
+    '720p': { '21:9': '1680x720', '16:9': '1280x720', '4:3': '960x720', '1:1': '720x720', '3:4': '720x960', '9:16': '720x1280' },
+    '1080p': { '21:9': '2520x1080', '16:9': '1920x1080', '4:3': '1440x1080', '1:1': '1080x1080', '3:4': '1080x1440', '9:16': '1080x1920' },
   };
   return sizes[resolution]?.[ratio] || sizes['720p']['16:9'];
 }
@@ -4742,14 +4860,18 @@ async function createJunliaiVideoTask(input: {
   seconds: VideoDurationSeconds;
   referenceImages: ReferenceUploadInput[];
 }) {
-  const url = `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos`;
+  const isSeedance = input.modelId === VIDEO_MODEL_SEEDANCE_25_ID;
+  const baseUrl = (isSeedance ? SCHAT_BASE_URL : JUNLIAI_BASE_URL).replace(/\/+$/, '');
+  const apiKey = isSeedance ? SCHAT_API_KEY : JUNLIAI_API_KEY;
+  const providerModel = isSeedance ? SCHAT_SEEDANCE_25_MODEL : input.modelId;
+  const url = `${baseUrl}/videos`;
   const headers: Record<string, string> = {
-    Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}`,
+    Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
   };
   let body: BodyInit;
   if (input.referenceImages.length > 0) {
     const form = new FormData();
-    form.set('model', input.modelId);
+    form.set('model', providerModel);
     form.set('prompt', input.prompt);
     form.set('seconds', String(input.seconds));
     form.set('size', videoSize(input.ratio, input.resolution));
@@ -4761,7 +4883,7 @@ async function createJunliaiVideoTask(input: {
   } else {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify({
-      model: input.modelId,
+      model: providerModel,
       prompt: input.prompt,
       seconds: String(input.seconds),
       size: videoSize(input.ratio, input.resolution),
@@ -4777,14 +4899,14 @@ async function createJunliaiVideoTask(input: {
   const payload = await parseJunliaiVideoResponse(response);
   const taskId = normalizeString(payload.id);
   if (!taskId) throw new Error('Video provider returned no task id');
-  return { taskId, payload };
+  return { taskId, payload, baseUrl, apiKey };
 }
 
-async function archiveJunliaiVideo(taskId: string, videoUrl: string) {
+async function archiveJunliaiVideo(taskId: string, videoUrl: string, baseUrl: string, apiKey: string) {
   const headers = videoUrl
     ? undefined
-    : { Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}` };
-  const source = videoUrl || `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos/${encodeURIComponent(taskId)}/content`;
+    : { Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}` };
+  const source = videoUrl || `${baseUrl}/videos/${encodeURIComponent(taskId)}/content`;
   const response = await fetch(source, { headers, signal: AbortSignal.timeout(5 * 60_000) });
   if (!response.ok) throw new Error(`Video download failed (${response.status})`);
   const buffer = Buffer.from(await response.arrayBuffer());
@@ -4794,14 +4916,14 @@ async function archiveJunliaiVideo(taskId: string, videoUrl: string) {
   return `/uploads/generated/${fileName}`;
 }
 
-async function waitForJunliaiVideo(taskId: string, onProgress: (progress: number) => void) {
+async function waitForJunliaiVideo(taskId: string, baseUrl: string, apiKey: string, onProgress: (progress: number) => void) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < VIDEO_JOB_TIMEOUT_MS) {
     const response = await fetch(
-      `${JUNLIAI_BASE_URL.replace(/\/+$/, '')}/v1/videos/${encodeURIComponent(taskId)}`,
+      `${baseUrl}/videos/${encodeURIComponent(taskId)}`,
       {
         headers: {
-          Authorization: /^Bearer\s/i.test(JUNLIAI_API_KEY) ? JUNLIAI_API_KEY : `Bearer ${JUNLIAI_API_KEY}`,
+          Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
         },
         signal: AbortSignal.timeout(30_000),
       },
@@ -4813,7 +4935,7 @@ async function waitForJunliaiVideo(taskId: string, onProgress: (progress: number
     if (status === 'completed' || status === 'succeeded') {
       const data = Array.isArray(payload.data) ? payload.data[0] as Record<string, unknown> | undefined : undefined;
       const url = normalizeString(payload.url || payload.video_url || data?.url);
-      return archiveJunliaiVideo(taskId, url);
+      return archiveJunliaiVideo(taskId, url, baseUrl, apiKey);
     }
     if (status === 'failed' || status === 'cancelled') {
       throw new Error(stringifyApiErrorValue(payload) || 'Video generation failed');
@@ -6579,7 +6701,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'seedream-4'],
       });
       return;
     }
@@ -7175,7 +7297,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'seedream-4'],
       });
       return;
     }
@@ -7683,7 +7805,7 @@ async function start() {
       try {
         const requestId = await recordGenerationRequest({
           modelId,
-          provider: 'Junliai',
+          provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
           configuration: metricConfiguration,
           durationMs,
           success,
@@ -7710,7 +7832,7 @@ async function start() {
     try {
       const created = await createJunliaiVideoTask(job);
       update({ progress: 12 });
-      const videoPath = await waitForJunliaiVideo(created.taskId, (progress) => update({ progress }));
+      const videoPath = await waitForJunliaiVideo(created.taskId, created.baseUrl, created.apiKey, (progress) => update({ progress }));
       const creditsRemaining = (await getUserCreditDetails(job.userId)).remainingCredits;
 
       const apiRequestMs = Math.max(0, Date.now() - requestStartedAt);
@@ -7763,7 +7885,7 @@ async function start() {
       }
       void providerMetrics?.record({
         modelId: job.modelId,
-        provider: 'Junliai',
+        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
         configuration: metricConfiguration,
         durationMs: apiRequestMs,
         success: true,
@@ -7794,7 +7916,7 @@ async function start() {
       );
       void providerMetrics?.record({
         modelId: job.modelId,
-        provider: 'Junliai',
+        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
         configuration: metricConfiguration,
         durationMs,
         success: false,
@@ -7836,12 +7958,15 @@ async function start() {
     const routing = await providerRouting!.get();
     const routeEnabled = modelId === VIDEO_MODEL_GEMINI_ID
       ? routing.junliaiGeminiVeo31
-      : routing.junliaiFireflyVideo;
+      : modelId === VIDEO_MODEL_SEEDANCE_25_ID
+        ? routing.schatSeedance25
+        : routing.junliaiFireflyVideo;
     if (!routeEnabled) {
       res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
       return;
     }
-    if (!JUNLIAI_API_KEY) {
+    const videoApiKey = modelId === VIDEO_MODEL_SEEDANCE_25_ID ? SCHAT_API_KEY : JUNLIAI_API_KEY;
+    if (!videoApiKey) {
       res.status(503).json({ error: '视频生成接口尚未配置' });
       return;
     }
@@ -8832,11 +8957,17 @@ async function start() {
       if (req.body?.bananaRoutes && typeof req.body.bananaRoutes === 'object') {
         patch.bananaRoutes = req.body.bananaRoutes;
       }
+      if (req.body?.seedreamRoutes && typeof req.body.seedreamRoutes === 'object') {
+        patch.seedreamRoutes = req.body.seedreamRoutes;
+      }
       if (typeof req.body?.junliaiGeminiVeo31 === 'boolean') {
         patch.junliaiGeminiVeo31 = req.body.junliaiGeminiVeo31;
       }
       if (typeof req.body?.junliaiFireflyVideo === 'boolean') {
         patch.junliaiFireflyVideo = req.body.junliaiFireflyVideo;
+      }
+      if (typeof req.body?.schatSeedance25 === 'boolean') {
+        patch.schatSeedance25 = req.body.schatSeedance25;
       }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });
@@ -8849,6 +8980,36 @@ async function start() {
       res.json({ providerRouting: next });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : '更新上游接口开关失败' });
+    }
+  });
+
+  app.get('/api/admin/automation/status', requireAuth, requireAdmin, (_req, res) => {
+    const latest = [...adminAutomationOperations.values()].at(-1);
+    let pendingFiles: string[] = [];
+    try {
+      pendingFiles = execFileSync('git', ['status', '--short'], { cwd: process.cwd(), encoding: 'utf8' })
+        .split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean).slice(0, 200);
+    } catch { /* status is best effort */ }
+    res.json({ operation: latest || null, running: Boolean(activeAdminAutomationId), pendingFiles });
+  });
+
+  app.post('/api/admin/automation/commit', requireAuth, requireAdmin, (req, res) => {
+    try {
+      const message = normalizeString(req.body?.message).slice(0, 200);
+      res.status(202).json({ operation: startAdminAutomation('commit', 'admin-commit.ps1', message ? ['-Message', message] : []) });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : '提交任务启动失败' });
+    }
+  });
+
+  app.post('/api/admin/automation/deploy', requireAuth, requireAdmin, (req, res) => {
+    try {
+      const message = normalizeString(req.body?.message).slice(0, 200);
+      const args = ['-RunLocalChecks'];
+      if (message) args.push('-Message', message);
+      res.status(202).json({ operation: startAdminAutomation('deploy', 'deploy-production.ps1', args) });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : '部署任务启动失败' });
     }
   });
 
