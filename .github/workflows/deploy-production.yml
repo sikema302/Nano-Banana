@@ -120,27 +120,20 @@ jobs:
           echo 'Uploading release archive'
           scp_retry release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
           echo 'Uploading provider credentials'
-          printf '%s' "$VISIONARY_NANO_LITE_API_KEY" | \
-            sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-              "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-nano-lite-key'"
-          printf '%s' "$FLUX_BANANA_API_KEY" | \
-            sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-              "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-flux-banana-key'"
-          if [ -n "$SCHAT_API_KEY" ]; then
-            echo 'Uploading Schat credential'
-            printf '%s' "$SCHAT_API_KEY" | \
-              sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-                "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-schat-key'"
-          fi
-          echo 'Uploading storage configuration'
+          secret_dir="$(mktemp -d)"
+          trap 'rm -rf "$secret_dir" "$APP_NAME-secrets.tar.gz"' EXIT
+          printf '%s' "$VISIONARY_NANO_LITE_API_KEY" > "$secret_dir/nano-lite-key"
+          printf '%s' "$FLUX_BANANA_API_KEY" > "$secret_dir/flux-banana-key"
+          printf '%s' "$SCHAT_API_KEY" > "$secret_dir/schat-key"
           {
             printf 'R2_ACCOUNT_ID="%s"\n' "$R2_ACCOUNT_ID"
             printf 'R2_ACCESS_KEY_ID="%s"\n' "$R2_ACCESS_KEY_ID"
             printf 'R2_SECRET_ACCESS_KEY="%s"\n' "$R2_SECRET_ACCESS_KEY"
             printf 'R2_BUCKET_NAME="%s"\n' "$R2_BUCKET_NAME"
             printf 'R2_PUBLIC_BASE_URL="%s"\n' "$R2_PUBLIC_BASE_URL"
-          } | sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-r2-env'"
+          } > "$secret_dir/r2-env"
+          tar -czf "$APP_NAME-secrets.tar.gz" -C "$secret_dir" .
+          scp_retry "$APP_NAME-secrets.tar.gz" "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-secrets.tar.gz"
 
       - name: Capture sanitized production diagnostics
         run: |
@@ -201,10 +194,8 @@ jobs:
           backups="$project/.deploy-backups"
           timestamp="$(date +%Y%m%d-%H%M%S)"
           migrate_to_sqlite="${MIGRATE_TO_SQLITE:-false}"
-          nano_lite_key_file='/tmp/nano-banana-nano-lite-key'
-          flux_banana_key_file='/tmp/nano-banana-flux-banana-key'
-          schat_key_file='/tmp/nano-banana-schat-key'
-          r2_env_file='/tmp/nano-banana-r2-env'
+          secrets_archive='/tmp/nano-banana-secrets.tar.gz'
+          secrets_dir='/tmp/nano-banana-secrets'
           ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
           if ! grep -qx 'Port 2223' "$ssh_ports" 2>/dev/null; then
             printf 'Port 2222\nPort 2223\n' > "$ssh_ports"
@@ -225,6 +216,15 @@ jobs:
           rm -rf dist server src scripts supabase api .github
           tar -xzf /tmp/nano-banana-release.tar.gz -C "$project"
           rm -f /tmp/nano-banana-release.tar.gz
+
+          rm -rf "$secrets_dir"
+          mkdir -m 700 "$secrets_dir"
+          tar -xzf "$secrets_archive" -C "$secrets_dir"
+          rm -f "$secrets_archive"
+          nano_lite_key_file="$secrets_dir/nano-lite-key"
+          flux_banana_key_file="$secrets_dir/flux-banana-key"
+          schat_key_file="$secrets_dir/schat-key"
+          r2_env_file="$secrets_dir/r2-env"
 
           if [ -s "$nano_lite_key_file" ]; then
             nano_lite_key="$(cat "$nano_lite_key_file")"
@@ -264,6 +264,7 @@ jobs:
             chmod 600 .env.local
           fi
           rm -f "$r2_env_file"
+          rmdir "$secrets_dir" 2>/dev/null || true
 
           # Keep the 2 GB production host from OOM-killing Node during image bursts.
           if ! swapon --show | grep -q '/swapfile'; then
