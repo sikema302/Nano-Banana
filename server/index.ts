@@ -9005,7 +9005,10 @@ async function start() {
   app.post('/api/admin/automation/deploy', requireAuth, requireAdmin, (req, res) => {
     try {
       const message = normalizeString(req.body?.message).slice(0, 200);
-      const args = ['-RunLocalChecks'];
+      // A redeploy must always create a fresh GitHub Actions run, even when
+      // the working tree is clean. Without -Force the deploy script only
+      // pushes when there is a new commit and can keep reporting an old run.
+      const args = ['-RunLocalChecks', '-Force'];
       if (message) args.push('-Message', message);
       res.status(202).json({ operation: startAdminAutomation('deploy', 'deploy-production.ps1', args) });
     } catch (error) {
