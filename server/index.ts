@@ -585,7 +585,7 @@ const FLUX_BANANA_TIMEOUT_MS = Math.max(
 const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
   normalizeEnvValue(process.env.JUNLIAI_PRIMARY_ENABLED || 'true').toLowerCase(),
 );
-const JUNLIAI_BASE_URL = normalizeEnvValue(process.env.JUNLIAI_BASE_URL || 'https://img.junliai.org');
+const JUNLIAI_BASE_URL = normalizeEnvValue(process.env.JUNLIAI_BASE_URL || 'https://img.junliai.org/v1');
 const JUNLIAI_API_KEY = normalizeEnvValue(process.env.JUNLIAI_API_KEY);
 const JUNLIAI_MODEL = normalizeEnvValue(process.env.JUNLIAI_MODEL || 'firefly-gpt-image-2');
 const JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL = 'gpt-image-2';

@@ -61,6 +61,59 @@ test('uses the primary Junliai image when it succeeds', async () => {
   });
 });
 
+test('uses the documented native sizes for every firefly-gpt-image-2 resolution and ratio', async () => {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org/v1',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'fallback',
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data: [{ url: 'https://images.example/firefly.png' }] }));
+    },
+  });
+  const expectedSizes = {
+    '1K': {
+      '1:1': '1024x1024', '5:4': '1120x896', '4:3': '1152x864', '3:2': '1248x832',
+      '16:9': '1280x720', '21:9': '1456x624', '4:5': '896x1120', '3:4': '864x1152',
+      '2:3': '832x1248', '9:16': '720x1280',
+    },
+    '2K': {
+      '1:1': '2048x2048', '5:4': '2240x1792', '4:3': '2304x1728', '3:2': '2496x1664',
+      '16:9': '2560x1440', '21:9': '3024x1296', '4:5': '1792x2240', '3:4': '1728x2304',
+      '2:3': '1664x2496', '9:16': '1440x2560',
+    },
+    '4K': {
+      '1:1': '2880x2880', '5:4': '3200x2560', '4:3': '3264x2448', '3:2': '3504x2336',
+      '16:9': '3840x2160', '21:9': '3696x1584', '4:5': '2560x3200', '3:4': '2448x3264',
+      '2:3': '2336x3504', '9:16': '2160x3840',
+    },
+  } as const;
+
+  for (const [imageSize, ratios] of Object.entries(expectedSizes)) {
+    for (const ratio of Object.keys(ratios)) {
+      await router.generate({ ...input, imageSize, ratio });
+    }
+  }
+
+  assert.equal(requests.length, 30);
+  for (const request of requests) {
+    assert.equal(request.url, 'https://img.junliai.org/v1/images/generations');
+    assert.equal('quality' in request.body, false);
+  }
+  assert.deepEqual(
+    requests.map(({ body }) => body.size),
+    Object.values(expectedSizes).flatMap((ratios) => Object.values(ratios)),
+  );
+});
+
 test('uses the cheaper Junliai gpt-image-2 first for STANDARD requests', async () => {
   const store = createStore();
   const requestedModels: string[] = [];
@@ -326,6 +379,42 @@ test('uses the Junliai edits endpoint when reference images are present', async 
   assert.equal(requestBody?.get('model'), 'firefly-gpt-image-2');
   assert.equal(requestBody?.get('size'), '2048x2048');
   assert.equal(requestBody?.getAll('image').length, 1);
+});
+
+test('uses repeated image[] fields for multiple Junliai reference images', async () => {
+  let requestBody: FormData | null = null;
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org/v1',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'fallback',
+    fetchImpl: async (_url, init) => {
+      requestBody = init?.body as FormData;
+      return new Response(JSON.stringify({ data: [{ url: 'https://images.example/edited.png' }] }));
+    },
+  });
+
+  await router.generate({
+    ...input,
+    imageSize: '4K',
+    ratio: '4:5',
+    images: [
+      'data:image/png;base64,aW1hZ2Ux',
+      'data:image/png;base64,aW1hZ2Uy',
+    ],
+  });
+
+  assert.equal(requestBody?.get('size'), '2560x3200');
+  assert.equal(requestBody?.getAll('image').length, 0);
+  assert.equal(requestBody?.getAll('image[]').length, 2);
+  assert.equal(requestBody?.get('response_format'), 'b64_json');
+  assert.equal(requestBody?.has('quality'), false);
 });
 
 test('opens the persistent circuit on quota errors and skips repeated primary calls', async () => {
