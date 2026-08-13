@@ -1,11 +1,11 @@
 param(
-  [string]$ServerHost = '154.9.24.91',
+  [string]$ServerHost = '64.90.1.229',
   [int]$SshPort = 22,
   [string]$User = 'root',
   [string]$ProjectPath = '/var/www/nano-banana',
   [string]$AppName = 'nano-banana',
   [string]$BackupsDir = '',
-  [string]$HealthUrl = 'http://154.9.24.91:3001/api/ready',
+  [string]$HealthUrl = 'http://64.90.1.229:3001/api/ready',
   [string]$Password = '',
   [string]$BackupName = 'latest',
   [switch]$ListBackups,

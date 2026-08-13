@@ -3874,7 +3874,7 @@ function AdminView({
                     提交代码
                   </button>
                   <button type="button" className="btn-primary min-h-9 px-3 text-xs font-black" disabled={automationRunning || automationBusy} onClick={() => void runAutomation('deploy')}>
-                    {automationRunning ? '部署中…' : '提交并部署'}
+                    {automationRunning && automation?.kind === 'deploy' ? '部署中…' : '提交并部署'}
                   </button>
                 </div>
               </div>
@@ -3884,6 +3884,19 @@ function AdminView({
                     <span>{automation.kind === 'deploy' ? '部署任务' : '提交任务'} · {automation.status}</span>
                     <span>{new Date(automation.startedAt).toLocaleString('zh-CN')}</span>
                   </div>
+                  {automation.status === 'succeeded' ? (
+                    <div className="mt-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
+                      {automation.kind === 'deploy' ? '部署成功：服务器已完成滚动更新，健康检查通过。' : '提交成功：代码已提交到当前分支。'}
+                    </div>
+                  ) : automation.status === 'failed' ? (
+                    <div className="mt-2 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-black text-rose-200">
+                      {automation.kind === 'deploy' ? '部署失败：服务器未完成更新，请查看下方错误日志。' : '提交失败：代码未完成提交，请查看下方错误日志。'}
+                    </div>
+                  ) : (
+                    <div className="mt-2 rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs font-black text-sky-200">
+                      {automation.kind === 'deploy' ? '部署进行中，请保持页面打开。' : '正在提交代码，请稍候。'}
+                    </div>
+                  )}
                   <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-zinc-500">{automation.error || automation.output || '等待输出…'}</pre>
                 </div>
               ) : null}

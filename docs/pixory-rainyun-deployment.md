@@ -12,7 +12,7 @@ This document records the current production setup for `pixory.top`.
 
 - Provider: Rainyun
 - OS: Debian 12
-- Public IP: `154.9.24.91`
+- Public IP: `64.90.1.229`
 - Project path: `/var/www/nano-banana`
 - PM2 app name: `nano-banana`
 
@@ -27,8 +27,8 @@ This document records the current production setup for `pixory.top`.
 
 Current DNS records:
 
-- `A @ -> 154.9.24.91`
-- `A www -> 154.9.24.91`
+- `A @ -> 64.90.1.229`
+- `A www -> 64.90.1.229`
 
 If the domain stops working, first verify:
 
@@ -87,7 +87,7 @@ Important production variables:
 ```env
 DATABASE_PROVIDER=sqlite
 SUPABASE_URL=https://cpjsjdvbkspkopakmlnv.supabase.co
-CORS_ORIGIN=http://154.9.24.91,http://154.9.24.91:3001,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
+CORS_ORIGIN=http://64.90.1.229,http://64.90.1.229:3001,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
 ```
 
 Server-only secrets should remain only on the server:
