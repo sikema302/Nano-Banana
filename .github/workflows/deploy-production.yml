@@ -89,12 +89,36 @@ jobs:
         run: |
           set -euo pipefail
           trap 'echo "Upload release failed at line $LINENO"' ERR
+          ssh_retry() {
+            local attempt
+            for attempt in 1 2 3 4; do
+              if sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+                -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+                -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" "$1"; then
+                return 0
+              fi
+              echo "SSH attempt $attempt/4 failed; waiting before retry"
+              sleep 8
+            done
+            return 1
+          }
+          scp_retry() {
+            local attempt
+            for attempt in 1 2 3 4; do
+              if sshpass -e scp -P "$SSH_PORT" -o StrictHostKeyChecking=no \
+                -o ConnectTimeout=20 -o ConnectionAttempts=1 "$1" "$2"; then
+                return 0
+              fi
+              echo "SCP attempt $attempt/4 failed; waiting before retry"
+              sleep 8
+            done
+            return 1
+          }
           echo "Opening SSH session to ${SERVER_USER}@${SERVER_HOST}:${SSH_PORT}"
-          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -p "$SSH_PORT" \
-            "$SERVER_USER@$SERVER_HOST" "mkdir -p '$PROJECT_PATH'"
+          sleep 5
+          ssh_retry "mkdir -p '$PROJECT_PATH'"
           echo 'Uploading release archive'
-          sshpass -e scp -P "$SSH_PORT" -o StrictHostKeyChecking=no \
-            release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
+          scp_retry release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
           echo 'Uploading provider credentials'
           printf '%s' "$VISIONARY_NANO_LITE_API_KEY" | \
             sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
