@@ -4,12 +4,15 @@ export function findCreationActivityStageIndex<T>(
     batchCount: number;
     loading: boolean;
     activeGenerationStageIndex: number;
+    activeGenerationStageIndexes?: number[];
   },
 ): number {
   if (options.batchCount > 1) return -1;
 
+  const activeIndexes = new Set(options.activeGenerationStageIndexes || [options.activeGenerationStageIndex]);
+
   return stageCards.findIndex((item, index) => (
     item === null
-    && !(options.loading && index === options.activeGenerationStageIndex)
+    && !(options.loading && activeIndexes.has(index))
   ));
 }

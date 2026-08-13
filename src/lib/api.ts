@@ -833,6 +833,7 @@ export async function generateImage(payload: {
 }
 
 export async function startGenerateImageJob(payload: {
+  submissionId?: string;
   prompt: string;
   model: string;
   dimensions: string;

@@ -174,6 +174,12 @@ interface GenerationProgress {
   startedAt: number;
 }
 
+interface ActiveImageGeneration {
+  id: string;
+  progress: GenerationProgress;
+  images: DisplayImage[];
+}
+
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
@@ -5016,6 +5022,8 @@ export default function App() {
   });
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [submittingGeneration, setSubmittingGeneration] = useState(false);
+  const [activeImageGenerations, setActiveImageGenerations] = useState<ActiveImageGeneration[]>([]);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [activityPreviewCount, setActivityPreviewCount] = useState(createActivityPreviewCount);
   const [pendingGenerationSlot, setPendingGenerationSlot] = useState(false);
@@ -5045,6 +5053,8 @@ export default function App() {
   const [creditDetailsOpen, setCreditDetailsOpen] = useState(false);
   const shownNotificationIdsRef = useRef(new Set<string>());
   const hasVisitedCreateRef = useRef(false);
+  const submittingGenerationRef = useRef(false);
+  const currentImageRef = useRef<DisplayImage | null>(null);
 
   const sideFavoriteItems = user ? favorites : [];
   const sideBackupItems = user ? backup : [];
@@ -5097,6 +5107,10 @@ export default function App() {
     const timer = window.setInterval(refreshCountdown, 1000);
     return () => window.clearInterval(timer);
   }, [promoCoupon?.active, promoCoupon?.couponId, promoCoupon?.expiresAt, promoCouponExpiresAtMs]);
+
+  useEffect(() => {
+    currentImageRef.current = currentImage;
+  }, [currentImage]);
 
   useEffect(() => {
     if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
@@ -5366,10 +5380,12 @@ export default function App() {
       const firstImage = nextImages[0];
       const followingImages = nextImages.slice(1);
       setHistoryQueue((current) => {
-        const candidates = [...followingImages, ...(currentImage ? [currentImage, ...current] : current)];
+        const latestCurrentImage = currentImageRef.current;
+        const candidates = [...followingImages, ...(latestCurrentImage ? [latestCurrentImage, ...current] : current)];
         return candidates.filter((item, index) => candidates.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index).slice(0, 7);
       });
       setCurrentImage(firstImage);
+      currentImageRef.current = firstImage;
       return;
     }
 
@@ -6031,7 +6047,13 @@ export default function App() {
     }
   }
 
-  async function waitForGenerationJob(jobId: string, batchIndex: number, total: number, fallbackStartedAt: number) {
+  async function waitForGenerationJob(
+    jobId: string,
+    batchIndex: number,
+    total: number,
+    fallbackStartedAt: number,
+    onProgress?: (completed: number, visual: number) => void,
+  ) {
     let pollingFailures = 0;
 
     while (true) {
@@ -6054,29 +6076,17 @@ export default function App() {
           },
           fallbackStartedAt,
         );
-        setGenerationProgress((current) =>
-          current
-            ? {
-                ...current,
-                completed: batchIndex,
-                visual: Math.max(current.visual, getBatchVisualProgress(batchIndex, total, fallbackPercent)),
-              }
-            : current,
-        );
+        const visual = getBatchVisualProgress(batchIndex, total, fallbackPercent);
+        if (onProgress) onProgress(batchIndex, visual);
+        else setGenerationProgress((current) => current ? { ...current, completed: batchIndex, visual: Math.max(current.visual, visual) } : current);
         await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
         continue;
       }
 
       const jobPercent = getFriendlyJobProgress(job, fallbackStartedAt);
-      setGenerationProgress((current) =>
-        current
-          ? {
-              ...current,
-              completed: batchIndex,
-              visual: Math.max(current.visual, getBatchVisualProgress(batchIndex, total, jobPercent)),
-            }
-          : current,
-      );
+      const visual = getBatchVisualProgress(batchIndex, total, jobPercent);
+      if (onProgress) onProgress(batchIndex, visual);
+      else setGenerationProgress((current) => current ? { ...current, completed: batchIndex, visual: Math.max(current.visual, visual) } : current);
 
       if (job.status === 'succeeded') {
         if (!job.image) throw new Error('生成完成但没有返回图片');
@@ -6092,6 +6102,8 @@ export default function App() {
 
   async function handleGenerate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (submittingGenerationRef.current) return;
 
     if (!user) {
       setNotice('\u8bf7\u5148\u767b\u5f55\u540e\u518d\u751f\u6210\u56fe\u7247');
@@ -6110,70 +6122,81 @@ export default function App() {
       return;
     }
 
-    setLoading(true);
-    setPendingGenerationSlot(true);
-    setInFlightGeneratedImages([]);
-    setGenerationProgress({
+    const generationId = globalThis.crypto?.randomUUID?.() || `generation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const generationPrompt = prompt;
+    const generationModel = selectedModel;
+    const generationDimensions = dimensions;
+    const generationImageSize = imageSize;
+    const generationQuality = gptQuality;
+    const generationOptimizeChineseText = optimizeChineseText;
+    const generationBatchCount = batchCount;
+    const generationIsNanoBananaPro = isNanoBananaPro;
+    const generationShowGptQuality = showGptQuality;
+    const generationReferences: ReferenceUploadInput[] = references.map((item) => ({
+      name: item.name,
+      mimeType: item.mimeType,
+      data: item.data,
+    }));
+    const initialProgress: GenerationProgress = {
       completed: 0,
-      total: batchCount,
+      total: generationBatchCount,
       visual: 6,
       startedAt: Date.now(),
-    });
+    };
+
+    submittingGenerationRef.current = true;
+    setSubmittingGeneration(true);
+    setActiveImageGenerations((current) => [...current, { id: generationId, progress: initialProgress, images: [] }]);
     setNotice('');
     setGenerationError('');
     setEditVersions([]);
     setEditInstruction('');
     const generatedImages: DisplayImage[] = [];
+    let submissionReleased = false;
+    const releaseSubmission = () => {
+      if (submissionReleased) return;
+      submissionReleased = true;
+      submittingGenerationRef.current = false;
+      setSubmittingGeneration(false);
+    };
+    const updateGeneration = (completed: number, visual: number, images = generatedImages) => {
+      setActiveImageGenerations((current) => current.map((item) => item.id === generationId
+        ? {
+            ...item,
+            images: [...images],
+            progress: { ...item.progress, completed, visual: Math.max(item.progress.visual, visual) },
+          }
+        : item));
+    };
 
     try {
-      const requestImageSize = imageSize;
-      if (isNanoBananaPro) {
+      if (generationIsNanoBananaPro) {
         const latestModels = await fetchModels();
         const latestRouting = latestModels.providerRouting || defaultProviderRouting;
         setProviderRouting(latestRouting);
       }
-      const referenceImages: ReferenceUploadInput[] = references.map((item) => ({
-        name: item.name,
-        mimeType: item.mimeType,
-        data: item.data,
-      }));
 
-      for (let index = 0; index < batchCount; index += 1) {
-        setGenerationProgress((current) =>
-          current
-            ? {
-                ...current,
-                completed: index,
-                visual: Math.max(current.visual, Math.min(88, (index / current.total) * 100 + 8)),
-              }
-            : current,
-        );
+      for (let index = 0; index < generationBatchCount; index += 1) {
+        updateGeneration(index, Math.min(88, (index / generationBatchCount) * 100 + 8));
 
         const jobStartedAt = Date.now();
         const { job } = await startGenerateImageJob({
-          prompt,
-          model: selectedModel,
-          dimensions,
-          imageSize: requestImageSize,
-          quality: showGptQuality ? gptQuality : undefined,
-          ...getAiEnhancementRequestFlags(isNanoBananaPro ? optimizeChineseText : false),
-          reference_images: referenceImages,
+          submissionId: `${generationId}:${index}`,
+          prompt: generationPrompt,
+          model: generationModel,
+          dimensions: generationDimensions,
+          imageSize: generationImageSize,
+          quality: generationShowGptQuality ? generationQuality : undefined,
+          ...getAiEnhancementRequestFlags(generationIsNanoBananaPro ? generationOptimizeChineseText : false),
+          reference_images: generationReferences,
         });
+        if (index === 0) releaseSubmission();
         const image = job.status === 'succeeded' && job.image
           ? job.image
-          : await waitForGenerationJob(job.id, index, batchCount, jobStartedAt);
+          : await waitForGenerationJob(job.id, index, generationBatchCount, jobStartedAt, updateGeneration);
 
         generatedImages.push(toDisplayImage(image));
-        setInFlightGeneratedImages([...generatedImages]);
-        setGenerationProgress((current) =>
-          current
-            ? {
-                ...current,
-                completed: index + 1,
-                visual: Math.max(current.visual, Math.min(96, ((index + 1) / current.total) * 100)),
-              }
-            : current,
-        );
+        updateGeneration(index + 1, Math.min(96, ((index + 1) / generationBatchCount) * 100));
       }
 
       commitGeneratedImages(generatedImages);
@@ -6181,7 +6204,7 @@ export default function App() {
         setEditVersions([generatedImages[0]]);
         setEditLocks(new Set(['person', 'composition']));
       }
-      if (batchCount > 1) {
+      if (generationBatchCount > 1) {
         setNotice(`\u5df2\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247`);
       }
 
@@ -6197,11 +6220,6 @@ export default function App() {
           ? `\u5df2\u6210\u529f\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247\uff0c\u540e\u7eed\u8bf7\u6c42\u5931\u8d25\uff1a${errorMessage}`
           : errorMessage;
 
-      setLoading(false);
-      setGenerationProgress(null);
-      setPendingGenerationSlot(false);
-      setInFlightGeneratedImages([]);
-
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
         setEditVersions([generatedImages[0]]);
@@ -6209,10 +6227,8 @@ export default function App() {
       setNotice('');
       setGenerationError(noticeMessage);
     } finally {
-      setLoading(false);
-      setGenerationProgress(null);
-      setPendingGenerationSlot(false);
-      setInFlightGeneratedImages([]);
+      releaseSubmission();
+      setActiveImageGenerations((current) => current.filter((item) => item.id !== generationId));
     }
   }
 
@@ -6616,15 +6632,23 @@ export default function App() {
   }
 
   const stageSourceCards = currentImage ? [currentImage, ...historyQueue] : historyQueue;
-  const activeGenerationStageIndex = pendingGenerationSlot ? inFlightGeneratedImages.length : -1;
-  const visibleStageCards = pendingGenerationSlot
-    ? [...inFlightGeneratedImages, null, ...stageSourceCards]
-    : stageSourceCards;
+  const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => [
+    ...generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null })),
+    { image: null, generation },
+  ]);
+  const activeGenerationStageIndexes = activeGenerationStageEntries.flatMap((entry, index) => entry.generation ? [index] : []);
+  const activeGenerationStageIndex = activeGenerationStageIndexes[0] ?? (pendingGenerationSlot ? inFlightGeneratedImages.length : -1);
+  const visibleStageCards = activeImageGenerations.length > 0
+    ? [...activeGenerationStageEntries.map((entry) => entry.image), ...stageSourceCards]
+    : pendingGenerationSlot
+      ? [...inFlightGeneratedImages, null, ...stageSourceCards]
+      : stageSourceCards;
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
   const activityStageIndex = findCreationActivityStageIndex(stageCards, {
     batchCount,
-    loading,
+    loading: activeImageGenerations.length > 0 || loading,
     activeGenerationStageIndex,
+    activeGenerationStageIndexes,
   });
 
   function handleTabChange(nextTab: AppTab) {
@@ -6834,11 +6858,11 @@ export default function App() {
 
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={loading || !!healthError || !user || !hasEnoughCredits}
+              disabled={submittingGeneration || activeImageGenerations.length >= MAX_BATCH_COUNT || !!healthError || !user || !hasEnoughCredits}
               type="submit"
             >
-              {loading ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              {loading ? '生成中...' : user ? '生成' : '登录后生成'}
+              {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
+              {submittingGeneration ? '正在提交...' : activeImageGenerations.length > 0 ? `继续下单 · ${activeImageGenerations.length} 个进行中` : user ? '生成' : '登录后生成'}
             </button>
           </div>
         </form>
@@ -6850,9 +6874,9 @@ export default function App() {
             <div key={index}>
               <StageCard
                 item={item}
-                loading={index === 0 && loading}
-                progress={index === 0 && loading ? generationProgress : null}
-                showActions={Boolean(item && !(index === 0 && loading) && user)}
+                loading={activeGenerationStageIndexes.includes(index) || (index === 0 && loading)}
+                progress={activeGenerationStageEntries[index]?.generation?.progress || (index === 0 && loading ? generationProgress : null)}
+                showActions={Boolean(item && !activeGenerationStageIndexes.includes(index) && !(index === 0 && loading) && user)}
                 onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                 onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                 onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}
@@ -7472,11 +7496,11 @@ export default function App() {
 
                 <button
                   className="btn-primary flex min-h-[56px] items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={loading || !!healthError || !user || !hasEnoughCredits}
+                  disabled={submittingGeneration || activeImageGenerations.length >= MAX_BATCH_COUNT || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
-                  {loading ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                  {loading ? '\u4e0b\u5355\u4e2d...' : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
+                  {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                  {submittingGeneration ? '\u6b63\u5728\u63d0\u4ea4...' : activeImageGenerations.length > 0 ? `\u7ee7\u7eed\u4e0b\u5355 \u00b7 ${activeImageGenerations.length} \u4e2a\u8fdb\u884c\u4e2d` : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
                 </button>
               </div>
             </form>
@@ -7506,9 +7530,9 @@ export default function App() {
                   <div key={index}>
                     <StageCard
                       item={item}
-                      loading={index === activeGenerationStageIndex && loading}
-                      progress={index === activeGenerationStageIndex && loading ? generationProgress : null}
-                      showActions={Boolean(item && !(index === activeGenerationStageIndex && loading) && user)}
+                      loading={activeGenerationStageIndexes.includes(index) || (index === activeGenerationStageIndex && loading)}
+                      progress={activeGenerationStageEntries[index]?.generation?.progress || (index === activeGenerationStageIndex && loading ? generationProgress : null)}
+                      showActions={Boolean(item && !activeGenerationStageIndexes.includes(index) && !(index === activeGenerationStageIndex && loading) && user)}
                       showActivity={SHOW_CREATION_ACTIVITY && index === activityStageIndex}
                       activityPreviewCount={activityPreviewCount}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}

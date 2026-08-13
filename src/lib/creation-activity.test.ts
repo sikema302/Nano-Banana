@@ -16,6 +16,13 @@ test('skips the stove currently generating an image', () => {
   ), 3);
 });
 
+test('skips every stove used by concurrent generations', () => {
+  assert.equal(findCreationActivityStageIndex(
+    [null, null, 'image-1', null, null],
+    { batchCount: 1, loading: true, activeGenerationStageIndex: 0, activeGenerationStageIndexes: [0, 1] },
+  ), 3);
+});
+
 test('hides creation activity when every stove is occupied', () => {
   assert.equal(findCreationActivityStageIndex(
     ['image-1', 'image-2', 'image-3', 'image-4', 'image-5'],

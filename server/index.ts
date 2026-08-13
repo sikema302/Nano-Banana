@@ -31,6 +31,7 @@ import {
 } from './generated-image-download.js';
 import { durablePublicImageResultSource, EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
+import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
 import {
@@ -7418,6 +7419,7 @@ async function start() {
 
   const generationJobs = new Map<string, AuthenticatedGenerationJob>();
   const generationJobTtlMs = 2 * 60 * 60 * 1000;
+  const generationSubmissionRegistry = new IdempotencyRegistry(generationJobTtlMs);
   const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
 
   function publicGenerationJob(job: AuthenticatedGenerationJob) {
@@ -7520,6 +7522,12 @@ async function start() {
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
+    const submissionId = normalizeString(req.body?.submissionId || req.headers['x-idempotency-key']);
+    if (submissionId && !/^[a-zA-Z0-9:_-]{8,160}$/.test(submissionId)) {
+      res.status(400).json({ error: 'Invalid submission ID' });
+      return;
+    }
+    const submissionKey = submissionId ? `${req.authUser!.userId}:${submissionId}` : '';
     try {
       const modelId = normalizeModelId(normalizeString(req.body?.model));
       const imageSize = await normalizeRoutedImageSize(normalizeString(req.body?.imageSize), modelId);
@@ -7566,6 +7574,17 @@ async function start() {
 
     cleanupGenerationJobs();
     const jobId = `gen_${Date.now()}_${randomHex(6)}`;
+    if (submissionKey) {
+      const reservation = generationSubmissionRegistry.reserve(submissionKey, jobId);
+      if (reservation.reused) {
+        const existingJob = generationJobs.get(reservation.jobId);
+        if (existingJob) {
+          res.json({ job: publicGenerationJob(existingJob), reused: true });
+          return;
+        }
+        generationSubmissionRegistry.release(submissionKey, reservation.jobId);
+      }
+    }
     const authHeader = normalizeString(req.headers.authorization);
     const job: AuthenticatedGenerationJob = {
       id: jobId,
@@ -7578,7 +7597,6 @@ async function start() {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-
     generationJobs.set(jobId, job);
     void generationWorkQueue.enqueue(jobId, 'image', () => runGenerationJob(jobId)).catch((error) => {
       const current = generationJobs.get(jobId);
