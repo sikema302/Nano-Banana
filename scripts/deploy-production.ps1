@@ -116,7 +116,22 @@ function Wait-ForDeployRun {
 
     if ($run.status -eq 'completed') {
       if ($run.conclusion -ne 'success') {
-        throw "Deploy failed: $($run.html_url)"
+        $failedSteps = @()
+        try {
+          $jobs = Invoke-GitHubApi "actions/runs/$($run.id)/jobs?per_page=100"
+          $failedSteps = @($jobs.jobs | ForEach-Object {
+            $jobName = $_.name
+            @($_.steps | Where-Object { $_.conclusion -eq 'failure' } | ForEach-Object {
+              if ($_.name) { "$jobName / $($_.name)" }
+            })
+          } | Where-Object { $_ })
+        } catch {
+          Write-Host "==> Unable to fetch failed job details: $($_.Exception.Message)"
+        }
+        if ($failedSteps.Count -gt 0) {
+          throw "Deploy failed: $($run.html_url). Failed step(s): $($failedSteps -join '; ')"
+        }
+        throw "Deploy failed: $($run.html_url). GitHub Actions did not report a failed step. Open the run link for the complete log."
       }
       return $run
     }

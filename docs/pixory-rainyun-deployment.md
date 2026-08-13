@@ -112,6 +112,11 @@ Visionary key routing:
 
 Recommended deploy path is GitHub Actions, not direct local SSH. This avoids local IP bans / SSH reset issues and gives one repeatable command.
 
+Before the first deployment to this host, set the GitHub Actions secrets
+`DEPLOY_SERVER_PASSWORD` (the current Rainyun root password) and `SCHAT_API_KEY`.
+The workflow performs an SSH preflight against `64.90.1.229:22`; the admin panel
+also reports the exact failed Actions step when a run cannot complete.
+
 One-click production deploy:
 
 ```bash
