@@ -1,6 +1,7 @@
 export type Image2ProviderId = 'junliai-economy' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary';
 export type BananaProviderId = 'flux' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type SeedreamProviderId = 'schat-seedream-4';
+export type GrokImageProviderId = 'junliai-grok';
 export type ProviderResolution = '1K' | '2K' | '4K';
 
 export type ProviderChannel<T extends string = string> = {
@@ -17,8 +18,9 @@ export type ProviderRoutingConfig = {
   image2Routes: ProviderResolutionRoutes<Image2ProviderId>;
   bananaRoutes: ProviderResolutionRoutes<BananaProviderId>;
   seedreamRoutes: ProviderResolutionRoutes<SeedreamProviderId>;
+  grokImageRoutes: ProviderResolutionRoutes<GrokImageProviderId>;
   junliaiGeminiVeo31: boolean;
-  junliaiFireflyVideo: boolean;
+  junliaiGrokVideo: boolean;
   schatSeedance25: boolean;
 };
 
@@ -32,6 +34,7 @@ type LegacyProviderRoutingConfig = {
   junliaiNanoBanana?: unknown;
   junliaiGeminiVeo31?: unknown;
   junliaiFireflyVideo?: unknown;
+  junliaiGrokVideo?: unknown;
   schatSeedance25?: unknown;
 };
 
@@ -61,8 +64,9 @@ function cloneConfig(config: ProviderRoutingConfig): ProviderRoutingConfig {
     image2Routes: cloneRoutes(config.image2Routes),
     bananaRoutes: cloneRoutes(config.bananaRoutes),
     seedreamRoutes: cloneRoutes(config.seedreamRoutes),
+    grokImageRoutes: cloneRoutes(config.grokImageRoutes),
     junliaiGeminiVeo31: config.junliaiGeminiVeo31,
-    junliaiFireflyVideo: config.junliaiFireflyVideo,
+    junliaiGrokVideo: config.junliaiGrokVideo,
     schatSeedance25: config.schatSeedance25,
   };
 }
@@ -159,12 +163,18 @@ function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): Provi
       defaults.seedreamRoutes,
       {},
     ),
+    grokImageRoutes: normalizeRoutes(
+      record.grokImageRoutes,
+      undefined,
+      defaults.grokImageRoutes,
+      {},
+    ),
     junliaiGeminiVeo31: typeof record.junliaiGeminiVeo31 === 'boolean'
       ? record.junliaiGeminiVeo31
       : defaults.junliaiGeminiVeo31,
-    junliaiFireflyVideo: typeof record.junliaiFireflyVideo === 'boolean'
-      ? record.junliaiFireflyVideo
-      : defaults.junliaiFireflyVideo,
+    junliaiGrokVideo: typeof record.junliaiGrokVideo === 'boolean'
+      ? record.junliaiGrokVideo
+      : defaults.junliaiGrokVideo,
     schatSeedance25: typeof record.schatSeedance25 === 'boolean'
       ? record.schatSeedance25
       : defaults.schatSeedance25,

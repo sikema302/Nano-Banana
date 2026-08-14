@@ -235,6 +235,7 @@ export type ProviderResolution = '1K' | '2K' | '4K';
 export type Image2ProviderId = 'junliai-economy' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary';
 export type BananaProviderId = 'flux' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type SeedreamProviderId = 'schat-seedream-4';
+export type GrokImageProviderId = 'junliai-grok';
 
 export interface ProviderChannel<T extends string = string> {
   id: T;
@@ -245,8 +246,9 @@ export interface ProviderRoutingConfig {
   image2Routes: Record<ProviderResolution, Array<ProviderChannel<Image2ProviderId>>>;
   bananaRoutes: Record<ProviderResolution, Array<ProviderChannel<BananaProviderId>>>;
   seedreamRoutes: Record<ProviderResolution, Array<ProviderChannel<SeedreamProviderId>>>;
+  grokImageRoutes: Record<ProviderResolution, Array<ProviderChannel<GrokImageProviderId>>>;
   junliaiGeminiVeo31: boolean;
-  junliaiFireflyVideo: boolean;
+  junliaiGrokVideo: boolean;
   schatSeedance25: boolean;
 }
 
@@ -913,7 +915,7 @@ export async function fetchGenerateImageJob(jobId: string) {
 }
 
 export async function startGenerateVideoJob(payload: {
-  modelId: 'gemini-veo31' | 'firefly-video' | 'seedance2.5';
+  modelId: 'gemini-veo31' | 'grok-video' | 'seedance2.5';
   prompt: string;
   ratio: '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
   resolution: '720p' | '1080p';

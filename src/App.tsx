@@ -300,8 +300,13 @@ const defaultProviderRouting: ProviderRoutingConfig = {
     '2K': [{ id: 'schat-seedream-4', enabled: false }],
     '4K': [{ id: 'schat-seedream-4', enabled: false }],
   },
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: true }],
+    '2K': [{ id: 'junliai-grok', enabled: true }],
+    '4K': [],
+  },
   junliaiGeminiVeo31: true,
-  junliaiFireflyVideo: true,
+  junliaiGrokVideo: true,
   schatSeedance25: false,
 };
 
@@ -1132,7 +1137,7 @@ function VideoCreateView({
     ? providerRouting.junliaiGeminiVeo31
     : candidate === 'seedance2.5'
       ? providerRouting.schatSeedance25
-      : providerRouting.junliaiFireflyVideo;
+      : providerRouting.junliaiGrokVideo;
 
   function selectVideoModel(nextModelId: VideoModelId) {
     const next = getVideoModelConfig(nextModelId);
@@ -1147,7 +1152,7 @@ function VideoCreateView({
     if (isVideoModelEnabled(modelId)) return;
     const next = VIDEO_GENERATION_MODELS.find((candidate) => isVideoModelEnabled(candidate.id));
     if (next) selectVideoModel(next.id);
-  }, [modelId, providerRouting.junliaiFireflyVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25]);
+  }, [modelId, providerRouting.junliaiGrokVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25]);
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const files: File[] = event.target.files ? Array.from(event.target.files) : [];
@@ -3020,6 +3025,9 @@ function AdminModelCreditPanel({
   const setSeedream = (key: keyof ModelCreditPricing['seedream'], value: number) => {
     setDraft((current) => ({ ...current, seedream: { ...current.seedream, [key]: value } }));
   };
+  const setGrokImage = (key: keyof ModelCreditPricing['grokImage'], value: number) => {
+    setDraft((current) => ({ ...current, grokImage: { ...current.grokImage, [key]: value } }));
+  };
   const setVideo = (modelId: VideoModelId, key: string, value: number) => {
     setDraft((current) => ({
       ...current,
@@ -3090,6 +3098,15 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-rose-100">Grok Image</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">使用通用积分，仅提供 1K 与 2K。</p>
+          <div className="mt-3">
+            {row('1K', '基础档位', creditInput(draft.grokImage.oneK, (value) => setGrokImage('oneK', value)))}
+            {row('2K', '标准档位', creditInput(draft.grokImage.twoK, (value) => setGrokImage('twoK', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
           <h3 className="font-black text-amber-100">Nano Banana Pro</h3>
           <p className="mt-1 text-[11px] text-zinc-500">扣 Banana 专用积分，不足部分自动扣通用积分。</p>
           <div className="mt-3">
@@ -3102,7 +3119,7 @@ function AdminModelCreditPanel({
 
         {([
           ['gemini-veo31', 'Gemini Veo 3.1', ['720p:4', '720p:6', '720p:8', '1080p:4', '1080p:6', '1080p:8']],
-          ['firefly-video', 'Firefly Video', ['720p:5', '1080p:5']],
+          ['grok-video', 'Grok Video', ['720p:6', '720p:10', '720p:15']],
           ['seedance2.5', 'Seedance 2.5', Array.from({ length: 26 }, (_, index) => `720p:${index + 4}`)],
         ] as const).map(([modelId, title, tiers]) => (
           <section key={modelId} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">

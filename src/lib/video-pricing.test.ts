@@ -8,16 +8,16 @@ test('charges Gemini Veo 3.1 at ten times its resolution and duration price', ()
   assert.equal(getVideoGenerationCredits('gemini-veo31', '1080p', 8), 300);
 });
 
-test('charges Firefly Video at ten times its resolution and duration price', () => {
-  assert.equal(getVideoGenerationCredits('firefly-video', '720p', 5), 300);
-  assert.equal(getVideoGenerationCredits('firefly-video', '1080p', 5), 350);
+test('charges Grok Video at ten times its resolution and duration price', () => {
+  assert.equal(getVideoGenerationCredits('grok-video', '720p', 6), 160);
+  assert.equal(getVideoGenerationCredits('grok-video', '720p', 10), 200);
 });
 
 test('keeps the two video model capability sets independent', () => {
   assert.equal(supportsVideoConfiguration('gemini-veo31', '720p', '16:9', 4), true);
   assert.equal(supportsVideoConfiguration('gemini-veo31', '720p', '1:1', 4), false);
-  assert.equal(supportsVideoConfiguration('firefly-video', '1080p', '1:1', 5), true);
-  assert.equal(supportsVideoConfiguration('firefly-video', '1080p', '16:9', 8), false);
+  assert.equal(supportsVideoConfiguration('grok-video', '720p', '16:9', 6), true);
+  assert.equal(supportsVideoConfiguration('grok-video', '1080p', '16:9', 6), false);
 });
 
 test('maps Seedance 2.5 document credits to Pixory credits', () => {

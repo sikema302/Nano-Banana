@@ -17,12 +17,18 @@ export type SeedreamCreditPricing = {
   fourK: number;
 };
 
+export type GrokImageCreditPricing = {
+  oneK: number;
+  twoK: number;
+};
+
 export type VideoCreditPricing = Record<VideoModelId, Partial<Record<`${VideoResolution}:${VideoDurationSeconds}`, number>>>;
 
 export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
   nanoBanana: NanoBananaCreditPricing;
   seedream: SeedreamCreditPricing;
+  grokImage: GrokImageCreditPricing;
   video: VideoCreditPricing;
   updatedAt: string;
 };
@@ -39,6 +45,10 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     twoK: 18,
     fourK: 20,
   },
+  grokImage: {
+    oneK: 20,
+    twoK: 22,
+  },
   video: {
     'gemini-veo31': {
       '720p:4': 150,
@@ -48,9 +58,10 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
       '1080p:6': 250,
       '1080p:8': 300,
     },
-    'firefly-video': {
-      '720p:5': 300,
-      '1080p:5': 350,
+    'grok-video': {
+      '720p:6': 60,
+      '720p:10': 100,
+      '720p:15': 150,
     },
     'seedance2.5': Object.fromEntries(
       Array.from({ length: 26 }, (_, index) => {
@@ -76,6 +87,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const seedream: Partial<SeedreamCreditPricing> = source.seedream && typeof source.seedream === 'object'
     ? source.seedream
     : {};
+  const grokImage: Partial<GrokImageCreditPricing> = source.grokImage && typeof source.grokImage === 'object'
+    ? source.grokImage
+    : {};
   const video = source.video && typeof source.video === 'object' ? source.video : {};
   const normalizeVideoModel = (modelId: VideoModelId) => {
     const defaults = DEFAULT_MODEL_CREDIT_PRICING.video[modelId];
@@ -97,9 +111,13 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       twoK: positiveCredit(seedream.twoK, DEFAULT_MODEL_CREDIT_PRICING.seedream.twoK),
       fourK: positiveCredit(seedream.fourK, DEFAULT_MODEL_CREDIT_PRICING.seedream.fourK),
     },
+    grokImage: {
+      oneK: positiveCredit(grokImage.oneK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.oneK),
+      twoK: positiveCredit(grokImage.twoK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.twoK),
+    },
     video: {
       'gemini-veo31': normalizeVideoModel('gemini-veo31'),
-      'firefly-video': normalizeVideoModel('firefly-video'),
+      'grok-video': normalizeVideoModel('grok-video'),
       'seedance2.5': normalizeVideoModel('seedance2.5'),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
@@ -125,6 +143,9 @@ export function getConfiguredImageCredits(
   }
   if (modelId === 'Seedream_4') {
     return imageSize === '4K' ? pricing.seedream.fourK : pricing.seedream.twoK;
+  }
+  if (modelId === 'Grok_Image') {
+    return imageSize === '1K' ? pricing.grokImage.oneK : pricing.grokImage.twoK;
   }
   return 1;
 }

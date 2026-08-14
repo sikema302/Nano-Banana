@@ -53,8 +53,13 @@ const defaults: ProviderRoutingConfig = {
     '2K': [{ id: 'schat-seedream-4', enabled: false }],
     '4K': [{ id: 'schat-seedream-4', enabled: false }],
   },
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: true }],
+    '2K': [{ id: 'junliai-grok', enabled: true }],
+    '4K': [],
+  },
   junliaiGeminiVeo31: true,
-  junliaiFireflyVideo: true,
+  junliaiGrokVideo: true,
   schatSeedance25: true,
 };
 

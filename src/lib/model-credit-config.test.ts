@@ -24,7 +24,7 @@ test('normalizes every configurable image and video tier', () => {
   assert.equal(getConfiguredImageCredits(pricing, 'Seedream_4', '2K'), 18);
   assert.equal(getConfiguredImageCredits(pricing, 'Seedream_4', '4K'), 20);
   assert.equal(getConfiguredVideoCredits(pricing, 'gemini-veo31', '720p', 4), 101);
-  assert.equal(getConfiguredVideoCredits(pricing, 'firefly-video', '1080p', 5), 202);
+  assert.equal(getConfiguredVideoCredits(pricing, 'grok-video', '720p', 6), 60);
   assert.equal(getConfiguredVideoCredits(pricing, 'seedance2.5', '720p', 5), 87);
 });
 

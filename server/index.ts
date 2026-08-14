@@ -637,6 +637,7 @@ const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
 const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
 const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || '香蕉nano banana-2');
 const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || '即梦seedream 4');
+const GROK_IMAGE_MODEL = 'grok-image';
 const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 // Previous Chat2API primary integration is intentionally disabled:
@@ -667,11 +668,11 @@ const IMAGE_CHANNEL_RETRY_COOLDOWN_MS = Math.max(
   Number(process.env.IMAGE_CHANNEL_RETRY_COOLDOWN_MS || 30_000),
 );
 const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
-const VIDEO_MODEL_FIREFLY_ID = 'firefly-video';
+const VIDEO_MODEL_GROK_ID = 'grok-video';
 const VIDEO_MODEL_SEEDANCE_25_ID = 'seedance2.5';
 const VIDEO_MODEL_LABELS: Record<string, string> = {
   [VIDEO_MODEL_GEMINI_ID]: 'Gemini Veo 3.1',
-  [VIDEO_MODEL_FIREFLY_ID]: 'Firefly Video',
+  [VIDEO_MODEL_GROK_ID]: 'Grok Video',
   [VIDEO_MODEL_SEEDANCE_25_ID]: 'Seedance 2.5',
 };
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
@@ -720,8 +721,13 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     '2K': [{ id: 'schat-seedream-4', enabled: false }],
     '4K': [{ id: 'schat-seedream-4', enabled: false }],
   },
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '2K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '4K': [],
+  },
   junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
-  junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
+  junliaiGrokVideo: JUNLIAI_PRIMARY_ENABLED,
   schatSeedance25: false,
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
@@ -903,6 +909,12 @@ const models = [
     name: 'Seedream 4',
     description: '即梦 Seedream 4 生图模型',
     creditsCost: 18,
+  },
+  {
+    id: 'Grok_Image',
+    name: 'Grok Image',
+    description: 'xAI Grok 图像生成',
+    creditsCost: 22,
   },
 ] as const;
 
@@ -1916,6 +1928,7 @@ function normalizeImageSize(value: string, modelId: string) {
     return 'STANDARD';
   }
   if (modelId === 'Seedream_4') return value === '4K' ? '4K' : '2K';
+  if (modelId === 'Grok_Image') return value === '1K' ? '1K' : '2K';
   if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
   if (value === '1K') return '1K';
   if (value === '4K') return '4K';
@@ -2013,6 +2026,7 @@ function modelNameFromId(modelId: string) {
 function normalizeModelId(modelId: string) {
   const normalized = normalizeString(modelId).toLowerCase();
   if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
+  if (['grok-image', 'grok_image'].includes(normalized)) return 'Grok_Image';
   const bananaAliases = [
     'nano-banana-pro',
     'nano_banana_pro',
@@ -2038,6 +2052,7 @@ function normalizePublicModelId(modelId: string) {
     return 'gpt-image-2';
   }
   if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
+  if (['grok-image', 'grok_image'].includes(normalized)) return 'Grok_Image';
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
@@ -4759,6 +4774,15 @@ async function callConfiguredImageChannel(
     );
   }
 
+  if (input.modelId === 'Grok_Image' && channelId === 'junliai-grok' && imageProviderRouter) {
+    return imageProviderRouter.generate({
+      ...input,
+      providerRouting: 'junliai_only',
+      upstreamModelOverride: GROK_IMAGE_MODEL,
+      traceId,
+    });
+  }
+
   const error = new Error(`Image channel ${channelId} is unavailable`) as Error & { safeToFallback: boolean };
   error.safeToFallback = true;
   throw error;
@@ -4786,7 +4810,9 @@ async function callImageGeneration(input: ImageGenerationInput) {
     ? enabledProviderIds(routing.bananaRoutes[resolution])
     : effectiveInput.modelId === 'Seedream_4'
       ? enabledProviderIds(routing.seedreamRoutes[resolution])
-      : enabledProviderIds(routing.image2Routes[resolution]);
+      : effectiveInput.modelId === 'Grok_Image'
+        ? enabledProviderIds(routing.grokImageRoutes[resolution])
+        : enabledProviderIds(routing.image2Routes[resolution]);
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -8033,7 +8059,7 @@ async function start() {
       ? routing.junliaiGeminiVeo31
       : modelId === VIDEO_MODEL_SEEDANCE_25_ID
         ? routing.schatSeedance25
-        : routing.junliaiFireflyVideo;
+        : routing.junliaiGrokVideo;
     if (!routeEnabled) {
       res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
       return;
@@ -9033,11 +9059,14 @@ async function start() {
       if (req.body?.seedreamRoutes && typeof req.body.seedreamRoutes === 'object') {
         patch.seedreamRoutes = req.body.seedreamRoutes;
       }
+      if (req.body?.grokImageRoutes && typeof req.body.grokImageRoutes === 'object') {
+        patch.grokImageRoutes = req.body.grokImageRoutes;
+      }
       if (typeof req.body?.junliaiGeminiVeo31 === 'boolean') {
         patch.junliaiGeminiVeo31 = req.body.junliaiGeminiVeo31;
       }
-      if (typeof req.body?.junliaiFireflyVideo === 'boolean') {
-        patch.junliaiFireflyVideo = req.body.junliaiFireflyVideo;
+      if (typeof req.body?.junliaiGrokVideo === 'boolean') {
+        patch.junliaiGrokVideo = req.body.junliaiGrokVideo;
       }
       if (typeof req.body?.schatSeedance25 === 'boolean') {
         patch.schatSeedance25 = req.body.schatSeedance25;
