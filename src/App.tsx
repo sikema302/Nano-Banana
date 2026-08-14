@@ -5521,9 +5521,9 @@ export default function App() {
     if (autoPlace) {
       const firstImage = nextImages[0];
       const followingImages = nextImages.slice(1);
+      const previousCurrentImage = currentImageRef.current;
       setHistoryQueue((current) => {
-        const latestCurrentImage = currentImageRef.current;
-        const candidates = [...followingImages, ...(latestCurrentImage ? [latestCurrentImage, ...current] : current)];
+        const candidates = [...followingImages, ...(previousCurrentImage ? [previousCurrentImage, ...current] : current)];
         return candidates.filter((item, index) => candidates.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index).slice(0, 7);
       });
       setCurrentImage(firstImage);
@@ -6777,7 +6777,8 @@ export default function App() {
     setNotice('');
   }
 
-  const stageSourceCards = currentImage ? [currentImage, ...historyQueue] : historyQueue;
+  const stageSourceCards = (currentImage ? [currentImage, ...historyQueue] : historyQueue)
+    .filter((item, index, array) => index === 0 || array.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index);
   const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => [
     ...generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null })),
     { image: null, generation },
