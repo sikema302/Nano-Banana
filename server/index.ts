@@ -5963,6 +5963,73 @@ async function start() {
     }
   });
 
+  // ─── Webhook 部署端点 ───────────────────────────────────────────────
+  // 接收 GitHub Actions 发送的发布包，自动执行零停机部署。
+  // 不再依赖 SSH，彻底解决部署时的网络连接问题。
+  const DEPLOY_SECRET = process.env.DEPLOY_SECRET;
+  if (DEPLOY_SECRET) {
+    app.post(
+      '/api/deploy',
+      express.raw({ type: 'application/octet-stream', limit: '100mb' }),
+      async (req, res) => {
+        const providedSecret = req.headers['x-deploy-secret'];
+        if (!providedSecret || providedSecret !== DEPLOY_SECRET) {
+          console.warn('[deploy] 未授权的部署请求');
+          res.status(401).json({ error: 'Unauthorized' });
+          return;
+        }
+
+        const archivePath = '/tmp/nano-banana-release.tar.gz';
+        try {
+          await fs.writeFile(archivePath, req.body);
+          console.log('[deploy] 发布包已保存:', archivePath, '大小:', req.body.length);
+        } catch (err) {
+          console.error('[deploy] 保存发布包失败:', err);
+          res.status(500).json({ error: 'Failed to save release archive' });
+          return;
+        }
+
+        // 异步执行部署脚本，不阻塞 webhook 响应
+        const deployScript = path.join(ROOT_DIR, 'deploy.sh');
+        const statusFile = '/tmp/nano-banana-deploy.status';
+
+        // 清理旧的状态文件
+        try {
+          await fs.unlink(statusFile);
+        } catch {
+          /* 文件不存在，忽略 */
+        }
+
+        const child = spawn('bash', [deployScript, archivePath], {
+          detached: true,
+          stdio: 'ignore',
+          cwd: ROOT_DIR,
+          env: {
+            ...process.env,
+            DEPLOY_STATUS_FILE: statusFile,
+          },
+        });
+        child.unref();
+
+        console.log('[deploy] 部署脚本已启动, PID:', child.pid);
+        res.json({ ok: true, message: 'Deployment started' });
+      },
+    );
+
+    // 部署状态查询端点（供 GitHub Actions 轮询）
+    app.get('/api/deploy/status', (_req, res) => {
+      const statusFile = '/tmp/nano-banana-deploy.status';
+      fs.readFile(statusFile, 'utf-8')
+        .then((content) => {
+          const code = Number.parseInt(content.trim(), 10);
+          res.json({ status: 'completed', exitCode: code, ok: code === 0 });
+        })
+        .catch(() => {
+          res.json({ status: 'running' });
+        });
+    });
+  }
+
   app.get('/api/notifications', requireAuth, async (req, res) => {
     try {
       res.json(await notificationService.listForUser(req.authUser!.userId));

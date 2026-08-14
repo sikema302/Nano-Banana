@@ -15,13 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      SERVER_HOST: 64.90.1.229
-      SSH_PORT: "22"
-      SERVER_USER: root
-      PROJECT_PATH: /var/www/nano-banana
-      APP_NAME: nano-banana
-      MIGRATE_TO_SQLITE: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[migrate-sqlite]') }}
-      SSHPASS: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+      WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+      DEPLOY_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
       VISIONARY_NANO_LITE_API_KEY: ${{ secrets.VISIONARY_NANO_LITE_API_KEY }}
       FLUX_BANANA_API_KEY: ${{ secrets.FLUX_BANANA_API_KEY }}
       SCHAT_API_KEY: ${{ secrets.SCHAT_API_KEY }}
@@ -36,23 +31,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Detect runtime changes
-        id: changes
-        shell: bash
-        run: |
-          server_changed=false
-          before_sha='${{ github.event.before }}'
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$before_sha" ] || [ "$before_sha" = '0000000000000000000000000000000000000000' ]; then
-            server_changed=true
-          else
-            changed_files="$(git diff --name-only "$before_sha" "$GITHUB_SHA")"
-            if printf '%s\n' "$changed_files" | grep -Eq '^(server/|api/|package(-lock)?\.json$|src/lib/model-pricing\.ts$)'; then
-              server_changed=true
-            fi
-          fi
-          echo "server_changed=$server_changed" >> "$GITHUB_OUTPUT"
-          echo "Server restart required: $server_changed"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -69,380 +47,92 @@ jobs:
           npm run test:server
           npm run build
 
-      - name: Package release
+      - name: Package release with secrets
         run: |
           mkdir -p .deploy-package
           git archive HEAD | tar -x -C .deploy-package
           cp -a dist .deploy-package/dist
-          tar -czf release.tar.gz -C .deploy-package .
 
-      - name: Install SSH client
-        run: sudo apt-get update && sudo apt-get install -y sshpass
-
-      - name: Verify target SSH access
-        run: |
-          echo "Checking deployment target ${SERVER_HOST}:${SSH_PORT}"
-          for attempt in 1 2 3 4 5; do
-            if sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o BatchMode=no \
-              -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-              -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" "printf 'target-ready\\n'"; then
-              exit 0
-            fi
-            echo "SSH preflight attempt $attempt/5 failed; waiting before retry"
-            sleep 10
-          done
-          echo 'SSH preflight failed after 5 attempts'
-          exit 1
-
-      - name: Upload release
-        run: |
-          set -euo pipefail
-          trap 'echo "Upload release failed at line $LINENO"' ERR
-          ssh_retry() {
-            local attempt
-            for attempt in 1 2 3 4; do
-              if sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
-                -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-                -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" "$1"; then
-                return 0
-              fi
-              echo "SSH attempt $attempt/4 failed; waiting before retry"
-              sleep 8
-            done
-            return 1
-          }
-          scp_retry() {
-            local attempt
-            for attempt in 1 2 3 4; do
-              if sshpass -e scp -P "$SSH_PORT" -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=20 -o ConnectionAttempts=1 "$1" "$2"; then
-                return 0
-              fi
-              echo "SCP attempt $attempt/4 failed; waiting before retry"
-              sleep 8
-            done
-            return 1
-          }
-          echo "Opening SSH session to ${SERVER_USER}@${SERVER_HOST}:${SSH_PORT}"
-          sleep 5
-          ssh_retry "mkdir -p '$PROJECT_PATH'"
-          echo 'Uploading release archive'
-          scp_retry release.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-release.tar.gz"
-          echo 'Uploading provider credentials'
-          secret_dir="$(mktemp -d)"
-          trap 'rm -rf "$secret_dir" "$APP_NAME-secrets.tar.gz"' EXIT
-          printf '%s' "$VISIONARY_NANO_LITE_API_KEY" > "$secret_dir/nano-lite-key"
-          printf '%s' "$FLUX_BANANA_API_KEY" > "$secret_dir/flux-banana-key"
-          printf '%s' "$SCHAT_API_KEY" > "$secret_dir/schat-key"
+          # 将密钥文件打包进 .secrets 目录
+          mkdir -p .deploy-package/.secrets
+          printf '%s' "$VISIONARY_NANO_LITE_API_KEY" > .deploy-package/.secrets/nano-lite-key
+          printf '%s' "$FLUX_BANANA_API_KEY" > .deploy-package/.secrets/flux-banana-key
+          printf '%s' "$SCHAT_API_KEY" > .deploy-package/.secrets/schat-key
           {
             printf 'R2_ACCOUNT_ID="%s"\n' "$R2_ACCOUNT_ID"
             printf 'R2_ACCESS_KEY_ID="%s"\n' "$R2_ACCESS_KEY_ID"
             printf 'R2_SECRET_ACCESS_KEY="%s"\n' "$R2_SECRET_ACCESS_KEY"
             printf 'R2_BUCKET_NAME="%s"\n' "$R2_BUCKET_NAME"
             printf 'R2_PUBLIC_BASE_URL="%s"\n' "$R2_PUBLIC_BASE_URL"
-          } > "$secret_dir/r2-env"
-          tar -czf "$APP_NAME-secrets.tar.gz" -C "$secret_dir" .
-          scp_retry "$APP_NAME-secrets.tar.gz" "$SERVER_USER@$SERVER_HOST:/tmp/$APP_NAME-secrets.tar.gz"
+          } > .deploy-package/.secrets/r2-env
 
-      - name: Capture sanitized production diagnostics
-        run: |
-          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "PROJECT_PATH='$PROJECT_PATH' APP_NAME='$APP_NAME' bash -s" <<'REMOTE'
-          set +e
-          cd "$PROJECT_PATH"
-          echo '=== resources ==='
-          uptime
-          free -m
-          swapon --show --noheadings --bytes | awk '{print "swap_bytes=" $3 " used_bytes=" $4}'
-          df -h /
-          for item in data uploads node_modules .deploy-backups; do
-            if [ -e "$PROJECT_PATH/$item" ]; then
-              du -xsh "$PROJECT_PATH/$item"
-            fi
-          done
-          du -xsh /root/.pm2/logs 2>/dev/null || true
-          echo '=== pm2 ==='
-          pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { for (const item of JSON.parse(raw).filter(entry => entry.name === process.env.APP_NAME)) { const env=item.pm2_env || {}; console.log(JSON.stringify({name:item.name,pid:item.pid,status:env.status,restarts:env.restart_time,unstableRestarts:env.unstable_restarts,exitCode:env.exit_code,uptime:env.pm_uptime,memory:item.monit?.memory,cpu:item.monit?.cpu})); } });"
-          error_log="/root/.pm2/logs/$APP_NAME-error.log"
-          for diagnostic in \
-            'schema_init:Supabase schema initialization failed' \
-            'user_query:Query user failed' \
-            'out_of_memory:ENOMEM|heap out of memory' \
-            'forced_exit:SIGKILL|exited with code'; do
-            category="${diagnostic%%:*}"
-            pattern="${diagnostic#*:}"
-            count="$(tail -n 2000 "$error_log" 2>/dev/null | grep -Ec "$pattern" || true)"
-            echo "$category=$count"
-          done
-          echo '=== supabase routes ==='
-          supabase_host="$(node -e "const fs=require('fs'); const line=fs.readFileSync('.env.local','utf8').split(/\\r?\\n/).find(item=>item.startsWith('SUPABASE_URL=')); if(line) console.log(new URL(line.slice(line.indexOf('=')+1).replace(/^['\\\"]|['\\\"]$/g,'')).hostname)")"
-          supabase_key="$(node -e "const fs=require('fs'); const line=fs.readFileSync('.env.local','utf8').split(/\\r?\\n/).find(item=>item.startsWith('SUPABASE_SERVICE_ROLE_KEY=')); if(line) process.stdout.write(line.slice(line.indexOf('=')+1).replace(/^['\\\"]|['\\\"]$/g,''))")"
-          route_number=0
-          while read -r supabase_ip; do
-            [ -n "$supabase_ip" ] || continue
-            route_number=$((route_number + 1))
-            curl --connect-timeout 5 --max-time 12 --resolve "$supabase_host:443:$supabase_ip" \
-              -s -o /dev/null -w "route=$route_number http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" \
-              "https://$supabase_host/rest/v1/" || echo "route=$route_number result=unreachable"
-            curl --connect-timeout 5 --max-time 12 --resolve "$supabase_host:443:$supabase_ip" \
-              -s -o /dev/null -H "apikey: $supabase_key" -H "Authorization: Bearer $supabase_key" \
-              -w "db_route=$route_number http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" \
-              "https://$supabase_host/rest/v1/users?select=id&limit=1" \
-              || echo "db_route=$route_number result=unreachable"
-          done < <(getent ahostsv4 "$supabase_host" | awk '{print $1}' | sort -u)
-          curl --connect-timeout 2 --max-time 5 -sS -o /dev/null \
-            -w 'local_health=%{http_code} total=%{time_total}s\n' http://127.0.0.1:3001/api/health || true
-          REMOTE
+          tar -czf release.tar.gz -C .deploy-package .
+          echo "Release package: $(du -sh release.tar.gz | cut -f1)"
 
-      - name: Upload deployment script
+      - name: Deploy via webhook
         run: |
-          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "umask 077; cat > '/tmp/$APP_NAME-deploy.sh'" <<'REMOTE'
           set -euo pipefail
-          project='/var/www/nano-banana'
-          backups="$project/.deploy-backups"
-          timestamp="$(date +%Y%m%d-%H%M%S)"
-          migrate_to_sqlite="${MIGRATE_TO_SQLITE:-false}"
-          secrets_archive='/tmp/nano-banana-secrets.tar.gz'
-          secrets_dir='/tmp/nano-banana-secrets'
-          ssh_ports='/etc/ssh/sshd_config.d/99-port.conf'
-          if ! grep -qx 'Port 2223' "$ssh_ports" 2>/dev/null; then
-            printf 'Port 2222\nPort 2223\n' > "$ssh_ports"
-            sshd -t
-            systemctl reload ssh
-          fi
-          mkdir -p "$backups"
-          tar -czf "$backups/$timestamp-pre-deploy.tar.gz" \
-            --exclude='./node_modules' \
-            --exclude='./.git' \
-            --exclude='./.runtime' \
-            --exclude='./.deploy-backups' \
-            --exclude='./uploads' \
-            --exclude='./.uploads' \
-            -C "$project" .
-          ls -1t "$backups"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
-          cd "$project"
-          rm -rf dist server src scripts supabase api .github
-          tar -xzf /tmp/nano-banana-release.tar.gz -C "$project"
-          rm -f /tmp/nano-banana-release.tar.gz
 
-          rm -rf "$secrets_dir"
-          mkdir -m 700 "$secrets_dir"
-          tar -xzf "$secrets_archive" -C "$secrets_dir"
-          rm -f "$secrets_archive"
-          nano_lite_key_file="$secrets_dir/nano-lite-key"
-          flux_banana_key_file="$secrets_dir/flux-banana-key"
-          schat_key_file="$secrets_dir/schat-key"
-          r2_env_file="$secrets_dir/r2-env"
-
-          if [ -s "$nano_lite_key_file" ]; then
-            nano_lite_key="$(cat "$nano_lite_key_file")"
-            touch .env.local
-            (grep -v '^VISIONARY_NANO_LITE_API_KEY=' .env.local || true) > .env.local.next
-            printf 'VISIONARY_NANO_LITE_API_KEY="%s"\n' "$nano_lite_key" >> .env.local.next
-            mv .env.local.next .env.local
-            chmod 600 .env.local
-          fi
-          rm -f "$nano_lite_key_file"
-
-          if [ -s "$flux_banana_key_file" ]; then
-            flux_banana_key="$(cat "$flux_banana_key_file")"
-            touch .env.local
-            (grep -v '^FLUX_BANANA_API_KEY=' .env.local || true) > .env.local.next
-            printf 'FLUX_BANANA_API_KEY="%s"\n' "$flux_banana_key" >> .env.local.next
-            mv .env.local.next .env.local
-            chmod 600 .env.local
-          fi
-          rm -f "$flux_banana_key_file"
-
-          if [ -s "$schat_key_file" ]; then
-            schat_key="$(cat "$schat_key_file")"
-            touch .env.local
-            (grep -v '^SCHAT_API_KEY=' .env.local || true) > .env.local.next
-            printf 'SCHAT_API_KEY="%s"\n' "$schat_key" >> .env.local.next
-            mv .env.local.next .env.local
-            chmod 600 .env.local
-          fi
-          rm -f "$schat_key_file"
-
-          if [ -s "$r2_env_file" ]; then
-            touch .env.local
-            (grep -v -E '^R2_(ACCOUNT_ID|ACCESS_KEY_ID|SECRET_ACCESS_KEY|BUCKET_NAME|PUBLIC_BASE_URL)=' .env.local || true) > .env.local.next
-            cat "$r2_env_file" >> .env.local.next
-            mv .env.local.next .env.local
-            chmod 600 .env.local
-          fi
-          rm -f "$r2_env_file"
-          rmdir "$secrets_dir" 2>/dev/null || true
-
-          # Keep the 2 GB production host from OOM-killing Node during image bursts.
-          if ! swapon --show | grep -q '/swapfile'; then
-            if [ ! -f /swapfile ]; then
-              fallocate -l 2G /swapfile
-              chmod 600 /swapfile
-              mkswap /swapfile
-            fi
-            swapon /swapfile
-          fi
-          grep -q '^/swapfile none swap' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-          touch .env.local
-          sed -i '/^PUBLIC_ASYNC_CONCURRENCY=/d' .env.local
-          printf 'PUBLIC_ASYNC_CONCURRENCY="2"\n' >> .env.local
-          sed -i '/^GENERATION_MAX_CONCURRENCY=/d' .env.local
-          printf 'GENERATION_MAX_CONCURRENCY="3"\n' >> .env.local
-          sed -i '/^VIDEO_MAX_CONCURRENCY=/d' .env.local
-          printf 'VIDEO_MAX_CONCURRENCY="1"\n' >> .env.local
-          chmod 600 .env.local
-
-          dependency_stamp='node_modules/.pixory-package-lock.sha256'
-          current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
-          installed_lock_hash="$(cat "$dependency_stamp" 2>/dev/null || true)"
-          dependencies_changed=false
-          if [ ! -x node_modules/.bin/tsx ] || [ "$current_lock_hash" != "$installed_lock_hash" ]; then
-            npm ci
-            printf '%s' "$current_lock_hash" > "$dependency_stamp"
-            dependencies_changed=true
-          else
-            echo 'Dependencies unchanged; skipping npm ci.'
-          fi
-
-          # R2 upload failures already fall back to local storage at runtime. A
-          # transient Cloudflare route outage must not leave new files on disk
-          # while preventing PM2 from activating the same release.
-          timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify -- --allow-unavailable
-
-          migration_lock="$project/.runtime/database-migration.lock"
-          migration_env_backup="$backups/$timestamp-pre-sqlite.env"
-          migration_switched=false
-          deploy_complete=false
-          cleanup_migration() {
-            set +e
-            if [ "$migration_switched" = true ] && [ "$deploy_complete" != true ] && [ -f "$migration_env_backup" ]; then
-              cp "$migration_env_backup" .env.local
-              chmod 600 .env.local
-              pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000 >/dev/null 2>&1 || true
-            fi
-            rm -f "$migration_lock" data/app.sqlite.next
+          echo "Sending release to webhook..."
+          http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST \
+            -H "X-Deploy-Secret: $DEPLOY_SECRET" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @release.tar.gz \
+            "$WEBHOOK_URL" 2>&1) || {
+            echo "Webhook request failed"
+            exit 1
           }
-          trap cleanup_migration EXIT
 
-          if [ "$migrate_to_sqlite" = true ]; then
-            current_provider="$(grep -E '^DATABASE_PROVIDER=' .env.local | tail -n 1 | cut -d= -f2- | tr -d '\"' | tr -d "'" | tr '[:upper:]' '[:lower:]' || true)"
-            if [ "$current_provider" = sqlite ]; then
-              echo 'Production already uses SQLite; migration is not repeated.'
-            else
-              echo 'Starting protected Supabase to SQLite migration.'
-              mkdir -p .runtime data/business-backups data/migration-backups
-              cp .env.local "$migration_env_backup"
-              chmod 600 "$migration_env_backup"
-              touch "$migration_lock"
-              # Allow in-flight writes to finish before taking the final snapshot.
-              sleep 15
-              timeout --signal=TERM --kill-after=10s 8m npm run backup:data
-              rm -f data/app.sqlite.next
-              timeout --signal=TERM --kill-after=10s 10m npm run db:migrate:sqlite -- --output data/app.sqlite.next --backup-dir data/migration-backups
-              test -s data/app.sqlite.next
-              if [ -f data/app.sqlite ]; then
-                cp data/app.sqlite "$backups/$timestamp-pre-sqlite.sqlite"
-                chmod 600 "$backups/$timestamp-pre-sqlite.sqlite"
-              fi
-              mv data/app.sqlite.next data/app.sqlite
-              chmod 600 data/app.sqlite
-              sed -i '/^DATABASE_PROVIDER=/d' .env.local
-              printf 'DATABASE_PROVIDER="sqlite"\n' >> .env.local
-              chmod 600 .env.local
-              migration_switched=true
-            fi
+          echo "Webhook response HTTP $http_code"
+          cat /tmp/webhook-response.json
+
+          if [ "$http_code" != "200" ]; then
+            echo "Webhook returned non-200 status"
+            exit 1
           fi
 
-          if ! pm2 describe nano-banana >/dev/null 2>&1; then
-            pm2 start server/index.ts --name nano-banana --interpreter ./node_modules/.bin/tsx --exec-mode cluster -i 1 --wait-ready --listen-timeout 60000
-          else
-            # One cluster instance keeps background schedulers singleton while
-            # PM2 reload still starts the replacement before stopping the old one.
-            pm2_instance_count="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
-            if [ "$pm2_instance_count" -gt 1 ]; then
-              pm2 scale nano-banana 1
-            fi
-            # Always reload after replacing the release files. This also
-            # recovers cleanly when a previous deploy unpacked files but failed
-            # before PM2 could activate them.
-            if ! pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000; then
-              echo 'Rolling reload did not report ready; falling back to a single-process restart.'
-              pm2 restart nano-banana --update-env
-            fi
-          fi
-          pm2 save >/dev/null
-          # Startup includes database initialization and retention checks; allow
-          # up to four minutes before treating a healthy PM2 restart as failed.
-          consecutive_ready=0
-          for attempt in $(seq 1 120); do
-            if curl -fsS http://127.0.0.1:3001/api/ready; then
-              echo
-              consecutive_ready=$((consecutive_ready + 1))
-              if [ "$consecutive_ready" -ge 3 ]; then
-                deploy_complete=true
-                echo "Deploy finished. Backup: $backups/$timestamp-pre-deploy.tar.gz"
-                exit 0
-              fi
-            else
-              consecutive_ready=0
-            fi
-            sleep 2
-          done
-          echo 'Readiness check did not become stable before the deployment deadline.'
-          exit 1
-          REMOTE
-
-      - name: Back up and deploy
+      - name: Poll deployment status
         run: |
-          deploy_script="/tmp/$APP_NAME-deploy.sh"
-          deploy_log="/tmp/$APP_NAME-deploy.log"
-          deploy_status_file="/tmp/$APP_NAME-deploy.status"
-          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "APP_NAME='$APP_NAME' SERVER_CHANGED='${{ steps.changes.outputs.server_changed }}' MIGRATE_TO_SQLITE='$MIGRATE_TO_SQLITE' bash -s" <<'REMOTE'
-          set -eu
-          deploy_script="/tmp/$APP_NAME-deploy.sh"
-          deploy_log="/tmp/$APP_NAME-deploy.log"
-          deploy_status_file="/tmp/$APP_NAME-deploy.status"
-          rm -f "$deploy_log" "$deploy_status_file" "$deploy_status_file.next"
-          nohup sh -c '
-            set +e
-            SERVER_CHANGED="$1" MIGRATE_TO_SQLITE="$4" timeout --signal=TERM --kill-after=10s 20m bash "$2"
-            exit_code=$?
-            printf "%s\n" "$exit_code" > "$3.next"
-            mv "$3.next" "$3"
-          ' sh "$SERVER_CHANGED" "$deploy_script" "$deploy_status_file" "$MIGRATE_TO_SQLITE" \
-            </dev/null >"$deploy_log" 2>&1 &
-          REMOTE
+          set -euo pipefail
+          STATUS_URL="${WEBHOOK_URL%/api/deploy}/api/deploy/status"
 
-          deploy_status='running'
-          for attempt in $(seq 1 360); do
-            deploy_status="$(sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-              "$SERVER_USER@$SERVER_HOST" "if [ -f '$deploy_status_file' ]; then cat '$deploy_status_file'; else printf running; fi")" \
-              || deploy_status='running'
-            if [[ "$deploy_status" =~ ^[0-9]+$ ]]; then
-              break
+          echo "Polling deployment status..."
+          for attempt in $(seq 1 240); do
+            status_json=$(curl -sS --max-time 10 -H "X-Deploy-Secret: $DEPLOY_SECRET" "$STATUS_URL" 2>/dev/null || true)
+            if [ -z "$status_json" ]; then
+              echo "Attempt $attempt: server not reachable (may be restarting)"
+              sleep 5
+              continue
             fi
+
+            deploy_status=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).status || 'unknown'); } catch { console.log('unknown'); } });")
+            echo "Attempt $attempt: status=$deploy_status"
+
+            if [ "$deploy_status" = "completed" ]; then
+              exit_code=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).exitCode || 1); } catch { console.log(1); } });")
+              echo "Deployment completed with exit code: $exit_code"
+              exit "$exit_code"
+            fi
+
             sleep 5
           done
 
-          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no \
-            "$SERVER_USER@$SERVER_HOST" "cat '$deploy_log' 2>/dev/null || true; echo '--- deploy status ---'; cat '$deploy_status_file' 2>/dev/null || true; rm -f '$deploy_log' '$deploy_status_file' '$deploy_script'"
-          if ! [[ "$deploy_status" =~ ^[0-9]+$ ]]; then
-            echo 'Deployment status was not reported before the polling deadline.'
-            exit 1
-          fi
-          exit "$deploy_status"
+          echo "Deployment status polling timed out"
+          exit 1
 
       - name: Verify public health
         run: |
+          PUBLIC_URL="${WEBHOOK_URL%/api/deploy}/api/ready"
+          echo "Verifying public health at $PUBLIC_URL"
           consecutive_ready=0
           for attempt in $(seq 1 15); do
-            if curl -fsS --connect-timeout 5 --max-time 15 https://pixory.top/api/ready; then
+            if curl -fsS --connect-timeout 5 --max-time 15 "$PUBLIC_URL"; then
               echo
               consecutive_ready=$((consecutive_ready + 1))
               if [ "$consecutive_ready" -ge 3 ]; then
+                echo "Public health check passed"
                 exit 0
               fi
             else
@@ -450,4 +140,5 @@ jobs:
             fi
             sleep 3
           done
+          echo "Public health check failed"
           exit 1
