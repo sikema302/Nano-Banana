@@ -587,11 +587,17 @@ function startAdminAutomation(kind: AdminAutomationOperation['kind'], scriptName
   adminAutomationOperations.set(id, operation);
   activeAdminAutomationId = id;
   const script = path.join(process.cwd(), 'scripts', scriptName);
-  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], {
-    cwd: process.cwd(),
-    env: process.env,
-    windowsHide: true,
-  });
+  const isWindows = process.platform === 'win32';
+  const child = isWindows
+    ? spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], {
+        cwd: process.cwd(),
+        env: process.env,
+        windowsHide: true,
+      })
+    : spawn('bash', [script, ...args], {
+        cwd: process.cwd(),
+        env: process.env,
+      });
   const append = (chunk: Buffer) => {
     operation.output = `${operation.output}${chunk.toString('utf8')}`.slice(-20_000);
   };
@@ -9063,7 +9069,10 @@ async function start() {
   app.post('/api/admin/automation/commit', requireAuth, requireAdmin, (req, res) => {
     try {
       const message = normalizeString(req.body?.message).slice(0, 200);
-      res.status(202).json({ operation: startAdminAutomation('commit', 'admin-commit.ps1', message ? ['-Message', message] : []) });
+      const isWin = process.platform === 'win32';
+      const scriptName = isWin ? 'admin-commit.ps1' : 'admin-commit.sh';
+      const args = isWin ? (message ? ['-Message', message] : []) : (message ? [message] : []);
+      res.status(202).json({ operation: startAdminAutomation('commit', scriptName, args) });
     } catch (error) {
       res.status(409).json({ error: error instanceof Error ? error.message : '提交任务启动失败' });
     }
@@ -9072,12 +9081,17 @@ async function start() {
   app.post('/api/admin/automation/deploy', requireAuth, requireAdmin, (req, res) => {
     try {
       const message = normalizeString(req.body?.message).slice(0, 200);
-      // A redeploy must always create a fresh GitHub Actions run, even when
-      // the working tree is clean. Without -Force the deploy script only
-      // pushes when there is a new commit and can keep reporting an old run.
-      const args = ['-RunLocalChecks', '-Force'];
-      if (message) args.push('-Message', message);
-      res.status(202).json({ operation: startAdminAutomation('deploy', 'deploy-production.ps1', args) });
+      const isWin = process.platform === 'win32';
+      const scriptName = isWin ? 'deploy-production.ps1' : 'admin-deploy.sh';
+      let args: string[];
+      if (isWin) {
+        args = ['-RunLocalChecks', '-Force'];
+        if (message) args.push('-Message', message);
+      } else {
+        args = [];
+        if (message) args.push(message);
+      }
+      res.status(202).json({ operation: startAdminAutomation('deploy', scriptName, args) });
     } catch (error) {
       res.status(409).json({ error: error instanceof Error ? error.message : '部署任务启动失败' });
     }
