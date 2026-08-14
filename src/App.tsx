@@ -6574,7 +6574,7 @@ export default function App() {
       console.log('[downloadCurrentImage] 下载完成');
     } catch (downloadError) {
       console.error('[downloadCurrentImage] 下载失败:', downloadError);
-      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+      setNotice(downloadError instanceof Error ? downloadError.message : '下载失败');
     }
   }
 
@@ -6585,7 +6585,7 @@ export default function App() {
       console.log('[downloadDisplayImage] 下载完成');
     } catch (downloadError) {
       console.error('[downloadDisplayImage] 下载失败:', downloadError);
-      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+      setNotice(downloadError instanceof Error ? downloadError.message : '下载失败');
     }
   }
 
@@ -6989,7 +6989,7 @@ export default function App() {
                 {generationError}
               </div>
             ) : null}
-            {notice && user?.isAdmin ? (
+            {notice ? (
               <div className="app-alert">
                 {notice}
               </div>
@@ -7610,7 +7610,7 @@ export default function App() {
                 <div className="app-alert app-alert-error">{generationError}</div>
               ) : null}
 
-              {notice && user?.isAdmin ? (
+              {notice ? (
                 <div className="app-alert">{notice}</div>
               ) : null}
 
