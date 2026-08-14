@@ -141,6 +141,24 @@ npm run build
 log "验证 R2 存储连接..."
 timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify -- --allow-unavailable || true
 
+# ─── 同步 Nginx 配置 ───────────────────────────────────────────────────
+NGINX_CONF="$PROJECT/deploy/nginx-schat.conf"
+NGINX_TARGET="/www/server/panel/vhost/nginx/schat.top.conf"
+if [ -f "$NGINX_CONF" ]; then
+  if ! cmp -s "$NGINX_CONF" "$NGINX_TARGET" 2>/dev/null; then
+    log "更新 Nginx 配置..."
+    cp "$NGINX_CONF" "$NGINX_TARGET"
+    if nginx -t 2>/dev/null; then
+      nginx -s reload 2>/dev/null || service nginx reload 2>/dev/null || true
+      log "Nginx 配置已更新并重载"
+    else
+      log "警告: Nginx 配置语法错误，跳过重载"
+    fi
+  else
+    log "Nginx 配置未变化，跳过"
+  fi
+fi
+
 # ─── 零停机重启 ───────────────────────────────────────────────────────
 log "重启服务..."
 
