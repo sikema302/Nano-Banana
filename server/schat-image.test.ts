@@ -32,18 +32,18 @@ test('calls Schat GPT Image 2 generations and parses b64_json', async () => {
   });
 });
 
-test('uses the configured nano-banana-2 model as a compatible 1K channel', async () => {
+test('uses the configured banana model as a compatible 1K channel', async () => {
   let body: Record<string, unknown> = {};
   await generateSchatImage({ ...baseInput, ratio: '16:9' }, {
     baseUrl: 'https://www.schat.top',
     apiKey: 'secret',
-    model: 'nano-banana-2',
+    model: '香蕉nano banana-2',
     fetchImpl: async (_url, init) => {
       body = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({ data: [{ b64_json: 'cmVzdWx0' }] }));
     },
   });
-  assert.equal(body.model, 'nano-banana-2');
+  assert.equal(body.model, '香蕉nano banana-2');
   assert.equal(body.size, '1280x720');
 });
 
@@ -63,7 +63,7 @@ test('sends multiple reference images through repeated image[] fields', async ()
   }, {
     baseUrl: 'https://www.schat.top/v1',
     apiKey: 'secret',
-    model: 'seedream-4',
+    model: '即梦seedream 4',
     fetchImpl: async (url, init) => {
       assert.equal(String(url), 'https://www.schat.top/v1/images/edits');
       requestBody = init?.body as FormData;
@@ -71,7 +71,7 @@ test('sends multiple reference images through repeated image[] fields', async ()
     },
   });
 
-  assert.equal(requestBody?.get('model'), 'seedream-4');
+  assert.equal(requestBody?.get('model'), '即梦seedream 4');
   assert.equal(requestBody?.get('size'), '2048x2048');
   assert.equal(requestBody?.getAll('image[]').length, 2);
   assert.equal(requestBody?.getAll('image').length, 0);

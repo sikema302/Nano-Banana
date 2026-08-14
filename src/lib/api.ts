@@ -404,30 +404,69 @@ function fileExtensionForDownload(source: string, mimeType: string) {
   return 'png';
 }
 
-export async function downloadAsset(source: string, suggestedName = 'pixory-image') {
-  if (!source) throw new Error('下载地址无效');
-
-  let response: Response;
-  if (source.startsWith('data:')) {
-    response = await fetch(source);
-  } else {
-    const headers = new Headers({ 'Content-Type': 'application/json' });
-    const token = getToken();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
-    response = await fetch(toApiUrl('/api/user/assets/download'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ source }),
-    });
+function dataURLToBlob(dataURL: string): Blob {
+  const commaIndex = dataURL.indexOf(',');
+  if (commaIndex < 0) throw new Error('Invalid data URL');
+  const header = dataURL.slice(0, commaIndex);
+  const mimeMatch = header.match(/:(.+?)(;|$)/);
+  const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+  const base64 = dataURL.slice(commaIndex + 1);
+  const binary = atob(base64.replace(/\s+/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function downloadViaServer(source: string): Promise<Blob> {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(toApiUrl('/api/user/assets/download'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ source }),
+  });
 
   if (!response.ok) {
     const responseText = await response.text().catch(() => '');
-    console.error('[downloadAsset] 请求失败 status:', response.status, 'response:', responseText);
+    console.error('[downloadAsset] 服务端下载失败 status:', response.status, 'response:', responseText);
     throw new Error(getApiErrorMessage(parseJsonPayload(responseText), responseText) || '下载失败');
   }
 
-  const blob = await response.blob();
+  return response.blob();
+}
+
+export async function downloadAsset(source: string, suggestedName = 'pixory-image') {
+  if (!source) throw new Error('下载地址无效');
+
+  let blob: Blob;
+  if (source.startsWith('data:')) {
+    // 同步转换 data URL 为 Blob，避免 fetch 的 async 导致浏览器拦截下载
+    blob = dataURLToBlob(source);
+  } else {
+    // 先尝试通过服务端下载（验证用户拥有该资源）
+    try {
+      blob = await downloadViaServer(source);
+    } catch (serverError) {
+      console.warn('[downloadAsset] 服务端下载失败，尝试直接 fetch 图片:', serverError);
+      // 回退：直接 fetch 图片 URL（同源或支持 CORS 的图片）
+      try {
+        const directResponse = await fetch(source);
+        if (!directResponse.ok) {
+          throw new Error(`直接下载失败 (${directResponse.status})`);
+        }
+        blob = await directResponse.blob();
+      } catch (directError) {
+        console.error('[downloadAsset] 直接 fetch 也失败:', directError);
+        // 最后尝试：用 window.open 打开图片
+        window.open(source, '_blank');
+        return;
+      }
+    }
+  }
+
   console.log('[downloadAsset] blob 大小:', blob.size, '类型:', blob.type);
   const extension = fileExtensionForDownload(source, blob.type);
   const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');

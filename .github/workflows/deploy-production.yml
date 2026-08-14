@@ -82,8 +82,17 @@ jobs:
       - name: Verify target SSH access
         run: |
           echo "Checking deployment target ${SERVER_HOST}:${SSH_PORT}"
-          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o BatchMode=no \
-            -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" "printf 'target-ready\\n'"
+          for attempt in 1 2 3 4 5; do
+            if sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o BatchMode=no \
+              -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+              -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" "printf 'target-ready\\n'"; then
+              exit 0
+            fi
+            echo "SSH preflight attempt $attempt/5 failed; waiting before retry"
+            sleep 10
+          done
+          echo 'SSH preflight failed after 5 attempts'
+          exit 1
 
       - name: Upload release
         run: |

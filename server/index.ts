@@ -629,8 +629,8 @@ const FLUX_BANANA_TIMEOUT_MS = Math.max(
 const SCHAT_BASE_URL = normalizeEnvValue(process.env.SCHAT_BASE_URL || 'https://www.schat.top/v1');
 const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
 const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
-const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || 'nano-banana-2');
-const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || 'seedream-4');
+const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || '香蕉nano banana-2');
+const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || '即梦seedream 4');
 const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 // Previous Chat2API primary integration is intentionally disabled:
@@ -716,7 +716,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   },
   junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
   junliaiFireflyVideo: JUNLIAI_PRIMARY_ENABLED,
-  schatSeedance25: Boolean(SCHAT_API_KEY),
+  schatSeedance25: false,
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';

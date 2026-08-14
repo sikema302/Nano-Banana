@@ -302,7 +302,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   },
   junliaiGeminiVeo31: true,
   junliaiFireflyVideo: true,
-  schatSeedance25: true,
+  schatSeedance25: false,
 };
 
 const providerChannelDetails: Record<string, { title: string; description: string }> = {
@@ -1277,7 +1277,7 @@ function VideoCreateView({
               value={modelId}
               onChange={(event) => selectVideoModel(event.target.value as VideoModelId)}
             >
-              {VIDEO_GENERATION_MODELS.map((model) => (
+              {VIDEO_GENERATION_MODELS.filter(m => m.id !== 'seedance2.5').map((model) => (
                 <option className="bg-[#111111]" disabled={!isVideoModelEnabled(model.id)} key={model.id} value={model.id}>
                   {model.name}
                 </option>
@@ -6572,9 +6572,9 @@ export default function App() {
       console.log('[downloadCurrentImage] 开始下载，imageUrl:', currentImage.imageUrl);
       await downloadAsset(currentImage.imageUrl, `pixory-${Date.now()}`);
       console.log('[downloadCurrentImage] 下载完成');
-    } catch (error) {
-      console.error('[downloadCurrentImage] 下载失败:', error);
-      setNotice(error instanceof Error ? error.message : '下载失败');
+    } catch (downloadError) {
+      console.error('[downloadCurrentImage] 下载失败:', downloadError);
+      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
     }
   }
 
@@ -6583,9 +6583,9 @@ export default function App() {
       console.log('[downloadDisplayImage] 开始下载，imageUrl:', item.imageUrl);
       await downloadAsset(item.imageUrl, `pixory-${Date.now()}`);
       console.log('[downloadDisplayImage] 下载完成');
-    } catch (error) {
-      console.error('[downloadDisplayImage] 下载失败:', error);
-      setNotice(error instanceof Error ? error.message : '下载失败');
+    } catch (downloadError) {
+      console.error('[downloadDisplayImage] 下载失败:', downloadError);
+      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
     }
   }
 
