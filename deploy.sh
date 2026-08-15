@@ -195,7 +195,7 @@ if ! pm2 describe nano-banana >/dev/null 2>&1; then
   pm2 start server/index.ts \
     --name nano-banana \
     --interpreter ./node_modules/.bin/tsx \
-    --exec-mode cluster -i 1
+    -i 1
 else
   # 确保单实例（集群模式下后台调度器保持单例）
   PM2_INSTANCE_COUNT="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
@@ -222,7 +222,7 @@ else
     pm2 start server/index.ts \
       --name nano-banana \
       --interpreter ./node_modules/.bin/tsx \
-      --exec-mode cluster -i 1
+      -i 1
   fi
 fi
 
