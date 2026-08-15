@@ -91,6 +91,15 @@ if [ -d "$SECRETS_DIR" ]; then
     chmod 600 .env.local
   fi
 
+  if [ -s "$SECRETS_DIR/deploy-secret" ]; then
+    deploy_secret="$(cat "$SECRETS_DIR/deploy-secret")"
+    touch .env.local
+    (grep -v '^DEPLOY_SECRET=' .env.local 2>/dev/null || true) > .env.local.next
+    printf 'DEPLOY_SECRET="%s"\n' "$deploy_secret" >> .env.local.next
+    mv .env.local.next .env.local
+    chmod 600 .env.local
+  fi
+
   if [ -s "$SECRETS_DIR/r2-env" ]; then
     touch .env.local
     (grep -v -E '^R2_(ACCOUNT_ID|ACCESS_KEY_ID|SECRET_ACCESS_KEY|BUCKET_NAME|PUBLIC_BASE_URL)=' .env.local 2>/dev/null || true) > .env.local.next

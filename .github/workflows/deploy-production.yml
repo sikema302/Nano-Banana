@@ -58,6 +58,7 @@ jobs:
           printf '%s' "$VISIONARY_NANO_LITE_API_KEY" > .deploy-package/.secrets/nano-lite-key
           printf '%s' "$FLUX_BANANA_API_KEY" > .deploy-package/.secrets/flux-banana-key
           printf '%s' "$SCHAT_API_KEY" > .deploy-package/.secrets/schat-key
+          printf '%s' "$DEPLOY_SECRET" > .deploy-package/.secrets/deploy-secret
           {
             printf 'R2_ACCOUNT_ID="%s"\n' "$R2_ACCOUNT_ID"
             printf 'R2_ACCESS_KEY_ID="%s"\n' "$R2_ACCESS_KEY_ID"

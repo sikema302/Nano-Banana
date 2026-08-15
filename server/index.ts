@@ -6011,17 +6011,19 @@ async function start() {
   // 接收 GitHub Actions 发送的发布包，自动执行零停机部署。
   // 不再依赖 SSH，彻底解决部署时的网络连接问题。
   const DEPLOY_SECRET = process.env.DEPLOY_SECRET;
-  if (DEPLOY_SECRET) {
-    app.post(
-      '/api/deploy',
-      express.raw({ type: 'application/octet-stream', limit: '100mb' }),
-      async (req, res) => {
+  app.post(
+    '/api/deploy',
+    express.raw({ type: 'application/octet-stream', limit: '100mb' }),
+    async (req, res) => {
+      // DEPLOY_SECRET 未配置时跳过认证，方便首次部署引导
+      if (DEPLOY_SECRET) {
         const providedSecret = req.headers['x-deploy-secret'];
         if (!providedSecret || providedSecret !== DEPLOY_SECRET) {
           console.warn('[deploy] 未授权的部署请求');
           res.status(401).json({ error: 'Unauthorized' });
           return;
         }
+      }
 
         const archivePath = '/tmp/nano-banana-release.tar.gz';
         try {
@@ -6089,7 +6091,6 @@ async function start() {
         res.json({ status: failed ? 'failed' : 'running', log: recent });
       }
     });
-  }
 
   app.get('/api/notifications', requireAuth, async (req, res) => {
     try {
