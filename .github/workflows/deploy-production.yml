@@ -25,6 +25,10 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
       R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+      DEPLOY_SERVER_PASSWORD: ${{ secrets.DEPLOY_SERVER_PASSWORD }}
+      SERVER_HOST: 64.90.1.229
+      SERVER_USER: root
+      SSH_PORT: "22"
 
     steps:
       - name: Check out source
@@ -70,38 +74,49 @@ jobs:
           tar -czf release.tar.gz -C .deploy-package .
           echo "Release package: $(du -sh release.tar.gz | cut -f1)"
 
-      - name: Deploy via webhook
+      - name: Install deployment transport
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Deploy with automatic fallback
         run: |
           set -euo pipefail
 
-          # 使用 pixory.top 进行部署（schat.top 的 Nginx 存在 POST 405 问题）
           WEBHOOK_URL="https://pixory.top/api/deploy"
-          STATUS_URL="https://pixory.top/api/deploy/status"
-          PUBLIC_URL="https://pixory.top/api/ready"
-
-          echo "Sending release to webhook: $WEBHOOK_URL"
-          # 临时密钥：服务器 DEPLOY_SECRET 丢失，首次部署后 deploy.sh 会自动写入正确密钥
           DEPLOY_KEY="${DEPLOY_SECRET:-temp-deploy-2026}"
+          echo "Trying fast webhook deployment..."
+
           http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
-            --max-time 120 \
+            --connect-timeout 10 --max-time 45 \
             -X POST \
             -H "X-Deploy-Secret: $DEPLOY_KEY" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @release.tar.gz \
-            "$WEBHOOK_URL") || {
-            echo "Webhook request failed"
-            exit 1
-          }
+            "$WEBHOOK_URL" 2>/dev/null || printf '000')
 
-          echo "Webhook response HTTP $http_code"
-          cat /tmp/webhook-response.json
-
-          if [ "$http_code" != "200" ]; then
-            echo "Webhook returned non-200 status"
-            exit 1
+          if [ "$http_code" = "200" ]; then
+            echo "Webhook accepted release"
+            echo "DEPLOY_METHOD=webhook" >> "$GITHUB_ENV"
+            exit 0
           fi
 
+          echo "Webhook unavailable (HTTP $http_code), switching to SSH fallback..."
+          test -n "$DEPLOY_SERVER_PASSWORD" || { echo "DEPLOY_SERVER_PASSWORD is missing"; exit 1; }
+          export SSHPASS="$DEPLOY_SERVER_PASSWORD"
+          remote_archive="/tmp/nano-banana-release-${GITHUB_SHA}.tar.gz"
+
+          sshpass -e scp -P "$SSH_PORT" \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            release.tar.gz "$SERVER_USER@$SERVER_HOST:$remote_archive"
+
+          sshpass -e ssh -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            "$SERVER_USER@$SERVER_HOST" \
+            "rm -f /tmp/nano-banana-deploy.sh; tar -xzf '$remote_archive' -O deploy.sh > /tmp/nano-banana-deploy.sh; chmod 700 /tmp/nano-banana-deploy.sh; DEPLOY_STATUS_FILE=/tmp/nano-banana-deploy.status DEPLOY_LOG_FILE=/tmp/nano-banana-deploy.log bash /tmp/nano-banana-deploy.sh '$remote_archive'"
+
+          echo "DEPLOY_METHOD=ssh" >> "$GITHUB_ENV"
+
       - name: Poll deployment status
+        if: env.DEPLOY_METHOD == 'webhook'
         run: |
           set -euo pipefail
           STATUS_URL="https://pixory.top/api/deploy/status"
