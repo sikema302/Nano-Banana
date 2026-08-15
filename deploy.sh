@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# 将后台部署的完整输出写入日志，避免失败时只能看到 running
+LOG_FILE="${DEPLOY_LOG_FILE:-/tmp/nano-banana-deploy.log}"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 ARCHIVE="${1:-/tmp/nano-banana-release.tar.gz}"
 PROJECT='/var/www/nano-banana'
 BACKUPS="$PROJECT/.deploy-backups"
@@ -196,9 +200,12 @@ else
   fi
 
   # reload 实现零停机：先启动新进程，等新进程就绪后再关闭旧进程
-  if ! pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000; then
-    log "reload 未就绪，降级为 restart"
-    pm2 restart nano-banana --update-env
+  if ! timeout --signal=TERM --kill-after=15s 90s pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000; then
+    log "reload 未就绪或超时，降级为 restart"
+    timeout --signal=TERM --kill-after=15s 90s pm2 restart nano-banana --update-env || {
+      log "错误: PM2 restart 失败或超时"
+      finish 1
+    }
   fi
 fi
 

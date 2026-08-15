@@ -6036,41 +6036,44 @@ async function start() {
         // 异步执行部署脚本，不阻塞 webhook 响应
         const deployScript = path.join(ROOT_DIR, 'deploy.sh');
         const statusFile = '/tmp/nano-banana-deploy.status';
+        const deployLog = '/tmp/nano-banana-deploy.log';
 
-        // 清理旧的状态文件
-        try {
-          await fs.unlink(statusFile);
-        } catch {
-          /* 文件不存在，忽略 */
-        }
+        // 清理旧状态，并保留本次部署日志供状态接口诊断
+        await Promise.all([
+          fs.unlink(statusFile).catch(() => undefined),
+          fs.unlink(deployLog).catch(() => undefined),
+        ]);
 
         const child = spawn('bash', [deployScript, archivePath], {
           detached: true,
-          stdio: 'ignore',
+          stdio: ['ignore', 'ignore', 'ignore'],
           cwd: ROOT_DIR,
           env: {
             ...process.env,
             DEPLOY_STATUS_FILE: statusFile,
+            DEPLOY_LOG_FILE: deployLog,
           },
         });
         child.unref();
 
         console.log('[deploy] 部署脚本已启动, PID:', child.pid);
-        res.json({ ok: true, message: 'Deployment started' });
+        res.json({ ok: true, message: 'Deployment started', pid: child.pid });
       },
     );
 
     // 部署状态查询端点（供 GitHub Actions 轮询）
-    app.get('/api/deploy/status', (_req, res) => {
+    app.get('/api/deploy/status', async (_req, res) => {
       const statusFile = '/tmp/nano-banana-deploy.status';
-      fs.readFile(statusFile, 'utf-8')
-        .then((content) => {
-          const code = Number.parseInt(content.trim(), 10);
-          res.json({ status: 'completed', exitCode: code, ok: code === 0 });
-        })
-        .catch(() => {
-          res.json({ status: 'running' });
-        });
+      const deployLog = '/tmp/nano-banana-deploy.log';
+      try {
+        const content = await fs.readFile(statusFile, 'utf-8');
+        const code = Number.parseInt(content.trim(), 10);
+        const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
+        res.json({ status: 'completed', exitCode: code, ok: code === 0, log: log.slice(-4000) });
+      } catch {
+        const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
+        res.json({ status: 'running', log: log.slice(-4000) });
+      }
     });
   }
 
