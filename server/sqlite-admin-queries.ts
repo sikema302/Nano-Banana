@@ -85,7 +85,6 @@ export const ADMIN_USER_USAGE_TRENDS_SQL = `
   SELECT user_id, credits_used, created_at
   FROM generations
   WHERE username != 'demo'
-    AND datetime(created_at) >= datetime('now', '-7 days')
 `;
 
 export type SqliteInviteCodeListOptions = {
