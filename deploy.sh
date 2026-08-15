@@ -195,8 +195,7 @@ if ! pm2 describe nano-banana >/dev/null 2>&1; then
   pm2 start server/index.ts \
     --name nano-banana \
     --interpreter ./node_modules/.bin/tsx \
-    --exec-mode cluster -i 1 \
-    --wait-ready --listen-timeout 60000
+    --exec-mode cluster -i 1
 else
   # 确保单实例（集群模式下后台调度器保持单例）
   PM2_INSTANCE_COUNT="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
@@ -205,7 +204,8 @@ else
   fi
 
   # reload 实现零停机：先启动新进程，等新进程就绪后再关闭旧进程
-  if ! timeout --signal=TERM --kill-after=15s 90s pm2 reload nano-banana --update-env --wait-ready --listen-timeout 60000; then
+  # 不使用 --wait-ready，因为服务端没有 process.send('ready')，会导致 PM2 永久挂起
+  if ! timeout --signal=TERM --kill-after=15s 90s pm2 reload nano-banana --update-env; then
     log "reload 未就绪或超时，降级为 restart"
     timeout --signal=TERM --kill-after=15s 90s pm2 restart nano-banana --update-env || {
       log "错误: PM2 restart 失败或超时"
