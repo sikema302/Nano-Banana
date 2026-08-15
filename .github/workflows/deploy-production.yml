@@ -80,10 +80,12 @@ jobs:
           PUBLIC_URL="https://pixory.top/api/ready"
 
           echo "Sending release to webhook: $WEBHOOK_URL"
+          # 临时密钥：服务器 DEPLOY_SECRET 丢失，首次部署后 deploy.sh 会自动写入正确密钥
+          DEPLOY_KEY="${DEPLOY_SECRET:-temp-deploy-2026}"
           http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
             --max-time 120 \
             -X POST \
-            -H "X-Deploy-Secret: $DEPLOY_SECRET" \
+            -H "X-Deploy-Secret: $DEPLOY_KEY" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @release.tar.gz \
             "$WEBHOOK_URL") || {
