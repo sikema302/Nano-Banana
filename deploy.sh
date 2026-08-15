@@ -187,7 +187,7 @@ if [ -f "$NGINX_CONF" ]; then
   fi
 fi
 
-# ─── 零停机重启 ───────────────────────────────────────────────────────
+# ─── 重启服务 ───────────────────────────────────────────────────────
 log "重启服务..."
 
 if ! pm2 describe nano-banana >/dev/null 2>&1; then
@@ -203,43 +203,26 @@ else
     pm2 scale nano-banana 1
   fi
 
-  # reload 实现零停机：先启动新进程，等新进程就绪后再关闭旧进程
-  # 不使用 --wait-ready，因为服务端没有 process.send('ready')，会导致 PM2 永久挂起
-  # 不使用 timeout 命令，因为某些环境下 timeout 无法可靠杀死 PM2 进程树
-  pm2 reload nano-banana --update-env &
-  RELOAD_PID=$!
-  RELOAD_OK=0
+  # 使用 restart 而非 reload，因为 pm2 reload 在部分环境下会永久挂起
+  pm2 restart nano-banana --update-env &
+  RESTART_PID=$!
+  RESTART_OK=0
   for i in $(seq 1 90); do
-    if ! kill -0 $RELOAD_PID 2>/dev/null; then
-      wait $RELOAD_PID && RELOAD_OK=1
+    if ! kill -0 $RESTART_PID 2>/dev/null; then
+      wait $RESTART_PID && RESTART_OK=1
       break
     fi
     sleep 1
   done
-  if [ "$RELOAD_OK" -eq 0 ]; then
-    kill -TERM $RELOAD_PID 2>/dev/null || true
-    sleep 5
-    kill -KILL $RELOAD_PID 2>/dev/null || true
-    wait $RELOAD_PID 2>/dev/null || true
-    log "reload 未就绪或超时，降级为 restart"
-    pm2 restart nano-banana --update-env &
-    RESTART_PID=$!
-    RESTART_OK=0
-    for i in $(seq 1 90); do
-      if ! kill -0 $RESTART_PID 2>/dev/null; then
-        wait $RESTART_PID && RESTART_OK=1
-        break
-      fi
-      sleep 1
-    done
-    if [ "$RESTART_OK" -eq 0 ]; then
-      kill -TERM $RESTART_PID 2>/dev/null || true
-      sleep 5
-      kill -KILL $RESTART_PID 2>/dev/null || true
-      wait $RESTART_PID 2>/dev/null || true
-      log "错误: PM2 restart 失败或超时"
-      finish 1
-    fi
+  if [ "$RESTART_OK" -eq 0 ]; then
+    kill -KILL $RESTART_PID 2>/dev/null || true
+    wait $RESTART_PID 2>/dev/null || true
+    log "restart 超时，尝试强制恢复..."
+    pm2 delete nano-banana 2>/dev/null || true
+    pm2 start server/index.ts \
+      --name nano-banana \
+      --interpreter ./node_modules/.bin/tsx \
+      --exec-mode cluster -i 1
   fi
 fi
 
