@@ -332,7 +332,9 @@ function isImageResolutionEnabled(
     ? routing.bananaRoutes[resolution]
     : modelId === 'Seedream_4'
       ? routing.seedreamRoutes[resolution]
-      : routing.image2Routes[resolution];
+      : modelId === 'Grok_Image'
+        ? routing.grokImageRoutes[resolution]
+        : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -5439,7 +5441,9 @@ export default function App() {
         ? ['1K', '2K', '4K']
         : selectedModel === 'Seedream_4'
           ? ['2K', '4K']
-          : ['STANDARD', '2K', '4K'];
+          : selectedModel === 'Grok_Image'
+            ? ['1K', '2K']
+            : ['STANDARD', '2K', '4K'];
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }

@@ -714,6 +714,8 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'flux', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'schat-nano-banana-2', enabled: false },
     ],
   },
   seedreamRoutes: {
@@ -5801,6 +5803,11 @@ async function start() {
         ratios: ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'],
         maxImages: 6,
       },
+      'grok-image': {
+        imageSizes: ['1K', '2K'],
+        ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
+        maxImages: 0,
+      },
     },
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
@@ -5808,8 +5815,10 @@ async function start() {
       return input.modelId === 'Nano_Banana_Pro'
         ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
           || isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
-        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
-          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
+        : input.modelId === 'Grok_Image'
+          ? isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok')
+          : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
@@ -5818,6 +5827,9 @@ async function start() {
         return upstreamModel === 'nano-banana-2'
           ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
           : isProviderEnabled(routing.bananaRoutes[resolution], 'junliai');
+      }
+      if (input.modelId === 'Grok_Image') {
+        return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
       return upstreamModel === JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
         ? isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')

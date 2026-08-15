@@ -368,7 +368,7 @@ export function createImageProviderRouter(options: RouterOptions) {
     const primaryEligible =
       primaryConfigured &&
       primaryEnabled &&
-      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro') &&
+      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro' || input.modelId === 'Grok_Image') &&
       candidates.length > 0;
     if (!primaryEligible) {
       if (junliaiOnly) {
