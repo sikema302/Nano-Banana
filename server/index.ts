@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, execSync, spawn } from 'node:child_process';
 
 import bcrypt from 'bcryptjs';
 import compression from 'compression';
@@ -6033,10 +6033,22 @@ async function start() {
           return;
         }
 
-        // 异步执行部署脚本，不阻塞 webhook 响应
-        const deployScript = path.join(ROOT_DIR, 'deploy.sh');
+        // 从发布包中提取 deploy.sh，确保使用最新版本而非磁盘旧版
+        // 避免旧版 deploy.sh 的鸡生蛋问题：旧脚本卡死导致新版永远无法生效
+        const tempDeployScript = '/tmp/nano-banana-deploy.sh';
         const statusFile = '/tmp/nano-banana-deploy.status';
         const deployLog = '/tmp/nano-banana-deploy.log';
+
+        try {
+          execSync(
+            `tar -xzf "${archivePath}" -C /tmp --transform 's,.*/,,g' deploy.sh 2>/dev/null || tar -xzf "${archivePath}" -C /tmp deploy.sh`,
+            { timeout: 10000 },
+          );
+          await fs.rename('/tmp/deploy.sh', tempDeployScript);
+        } catch {
+          // 回退：如果提取失败，使用磁盘上的 deploy.sh
+          await fs.copyFile(path.join(ROOT_DIR, 'deploy.sh'), tempDeployScript);
+        }
 
         // 清理旧状态，并保留本次部署日志供状态接口诊断
         await Promise.all([
@@ -6044,7 +6056,7 @@ async function start() {
           fs.unlink(deployLog).catch(() => undefined),
         ]);
 
-        const child = spawn('bash', [deployScript, archivePath], {
+        const child = spawn('bash', [tempDeployScript, archivePath], {
           detached: true,
           stdio: ['ignore', 'ignore', 'ignore'],
           cwd: ROOT_DIR,
