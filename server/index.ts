@@ -6072,7 +6072,9 @@ async function start() {
         res.json({ status: 'completed', exitCode: code, ok: code === 0, log: log.slice(-4000) });
       } catch {
         const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
-        res.json({ status: 'running', log: log.slice(-4000) });
+        const recent = log.slice(-4000);
+        const failed = /错误:|失败|超时|exit=1|部署结束, exit=[1-9]/.test(recent);
+        res.json({ status: failed ? 'failed' : 'running', log: recent });
       }
     });
   }

@@ -116,9 +116,15 @@ jobs:
             echo "Attempt $attempt: status=$deploy_status"
 
             if [ "$deploy_status" = "completed" ]; then
-              exit_code=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).exitCode || 1); } catch { console.log(1); } });")
+              exit_code=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).exitCode ?? 1); } catch { console.log(1); } });")
               echo "Deployment completed with exit code: $exit_code"
               exit "$exit_code"
+            fi
+
+            if [ "$deploy_status" = "failed" ]; then
+              echo "Deployment failed; server diagnostics:"
+              echo "$status_json"
+              exit 1
             fi
 
             sleep 5
