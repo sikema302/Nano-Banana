@@ -197,63 +197,68 @@ if [ -f "$NGINX_CONF" ]; then
 fi
 
 # ─── 重启服务 ───────────────────────────────────────────────────────
-log "重启服务..."
+	# 先写成功状态，防止 PM2 重启时误杀 deploy.sh 导致状态丢失
+	# 所有部署实质性工作（解压/密钥/依赖/Nginx）已在此前完成
+	printf '0\n' > "$STATUS_FILE"
+	log "部署文件阶段完成，开始重启服务..."
 
-if ! pm2 describe nano-banana >/dev/null 2>&1; then
-  # 首次启动
-  pm2 start server/index.ts \
-    --name nano-banana \
-    --interpreter ./node_modules/.bin/tsx \
-    -i 1
-else
-  # 确保单实例（集群模式下后台调度器保持单例）
-  PM2_INSTANCE_COUNT="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
-  if [ "$PM2_INSTANCE_COUNT" -gt 1 ]; then
-    pm2 scale nano-banana 1
-  fi
+	if ! pm2 describe nano-banana >/dev/null 2>&1; then
+	  # 首次启动
+	  pm2 start server/index.ts \
+	    --name nano-banana \
+	    --interpreter ./node_modules/.bin/tsx \
+	    -i 1
+	else
+	  # 确保单实例（集群模式下后台调度器保持单例）
+	  PM2_INSTANCE_COUNT="$(pm2 jlist | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => console.log(JSON.parse(raw).filter(item => item.name === 'nano-banana').length));")"
+	  if [ "$PM2_INSTANCE_COUNT" -gt 1 ]; then
+	    pm2 scale nano-banana 1
+	  fi
 
-  # 使用 restart 而非 reload，因为 pm2 reload 在部分环境下会永久挂起
-  pm2 restart nano-banana --update-env &
-  RESTART_PID=$!
-  RESTART_OK=0
-  for i in $(seq 1 90); do
-    if ! kill -0 $RESTART_PID 2>/dev/null; then
-      wait $RESTART_PID && RESTART_OK=1
-      break
-    fi
-    sleep 1
-  done
-  if [ "$RESTART_OK" -eq 0 ]; then
-    kill -KILL $RESTART_PID 2>/dev/null || true
-    wait $RESTART_PID 2>/dev/null || true
-    log "restart 超时，尝试强制恢复..."
-    pm2 delete nano-banana 2>/dev/null || true
-    pm2 start server/index.ts \
-      --name nano-banana \
-      --interpreter ./node_modules/.bin/tsx \
-      -i 1
-  fi
-fi
+	  # 使用 setsid 在新会话中运行 restart，完全脱离当前进程组
+	  # 避免 PM2 杀掉旧进程时波及 deploy.sh
+	  setsid bash -c 'pm2 restart nano-banana --update-env' &
+	  RESTART_PID=$!
+	  RESTART_OK=0
+	  for i in $(seq 1 90); do
+	    if ! kill -0 $RESTART_PID 2>/dev/null; then
+	      wait $RESTART_PID && RESTART_OK=1
+	      break
+	    fi
+	    sleep 1
+	  done
+	  if [ "$RESTART_OK" -eq 0 ]; then
+	    kill -KILL $RESTART_PID 2>/dev/null || true
+	    wait $RESTART_PID 2>/dev/null || true
+	    log "restart 超时，尝试强制恢复..."
+	    pm2 delete nano-banana 2>/dev/null || true
+	    pm2 start server/index.ts \
+	      --name nano-banana \
+	      --interpreter ./node_modules/.bin/tsx \
+	      -i 1
+	  fi
+	fi
 
-pm2 save >/dev/null
+	pm2 save >/dev/null
 
-# ─── 等待服务就绪 ─────────────────────────────────────────────────────
-log "等待服务就绪..."
-CONSECUTIVE_READY=0
-for attempt in $(seq 1 120); do
-  if curl -fsS http://127.0.0.1:3001/api/ready 2>/dev/null; then
-    echo
-    CONSECUTIVE_READY=$((CONSECUTIVE_READY + 1))
-    if [ "$CONSECUTIVE_READY" -ge 3 ]; then
-      log "===== 部署成功 ====="
-      log "备份: $BACKUPS/$TIMESTAMP-pre-deploy.tar.gz"
-      finish 0
-    fi
-  else
-    CONSECUTIVE_READY=0
-  fi
-  sleep 2
-done
+	# ─── 等待服务就绪 ─────────────────────────────────────────────────────
+	log "等待服务就绪..."
+	CONSECUTIVE_READY=0
+	for attempt in $(seq 1 120); do
+	  if curl -fsS http://127.0.0.1:3001/api/ready 2>/dev/null; then
+	    echo
+	    CONSECUTIVE_READY=$((CONSECUTIVE_READY + 1))
+	    if [ "$CONSECUTIVE_READY" -ge 3 ]; then
+	      log "===== 部署成功 ====="
+	      log "备份: $BACKUPS/$TIMESTAMP-pre-deploy.tar.gz"
+	      exit 0
+	    fi
+	  else
+	    CONSECUTIVE_READY=0
+	  fi
+	  sleep 2
+	done
 
-log "错误: 就绪检查超时"
-finish 1
+	log "错误: 就绪检查超时，但文件部署已完成"
+	printf '1\n' > "$STATUS_FILE"
+	exit 1

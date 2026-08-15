@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, execSync, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 import bcrypt from 'bcryptjs';
 import compression from 'compression';
@@ -6035,30 +6035,18 @@ async function start() {
           return;
         }
 
-        // 从发布包中提取 deploy.sh，确保使用最新版本而非磁盘旧版
-        // 避免旧版 deploy.sh 的鸡生蛋问题：旧脚本卡死导致新版永远无法生效
-        const tempDeployScript = '/tmp/nano-banana-deploy.sh';
         const statusFile = '/tmp/nano-banana-deploy.status';
         const deployLog = '/tmp/nano-banana-deploy.log';
 
-        try {
-          execSync(
-            `tar -xzf "${archivePath}" -C /tmp --transform 's,.*/,,g' deploy.sh 2>/dev/null || tar -xzf "${archivePath}" -C /tmp deploy.sh`,
-            { timeout: 10000 },
-          );
-          await fs.rename('/tmp/deploy.sh', tempDeployScript);
-        } catch {
-          // 回退：如果提取失败，使用磁盘上的 deploy.sh
-          await fs.copyFile(path.join(ROOT_DIR, 'deploy.sh'), tempDeployScript);
-        }
-
-        // 清理旧状态，并保留本次部署日志供状态接口诊断
+        // 清理旧状态
         await Promise.all([
           fs.unlink(statusFile).catch(() => undefined),
           fs.unlink(deployLog).catch(() => undefined),
         ]);
 
-        const child = spawn('bash', [tempDeployScript, archivePath], {
+        // 管道提取 deploy.sh 并执行，避免 execSync 阻塞事件循环
+        const deployCmd = `rm -f /tmp/nano-banana-deploy.sh; tar -xzf "${archivePath}" -O deploy.sh > /tmp/nano-banana-deploy.sh 2>/dev/null; exec bash /tmp/nano-banana-deploy.sh "${archivePath}"`;
+        const child = spawn('bash', ['-c', deployCmd], {
           detached: true,
           stdio: ['ignore', 'ignore', 'ignore'],
           cwd: ROOT_DIR,
