@@ -73,17 +73,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Sending release to webhook..."
+          # 尝试主 URL，如果返回 405 则回退到备用 URL（Nginx 配置问题）
+          FALLBACK_URL="https://pixory.top/api/deploy"
+          EFFECTIVE_URL="$WEBHOOK_URL"
+
+          echo "Sending release to webhook: $EFFECTIVE_URL"
           http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
             --max-time 120 \
             -X POST \
             -H "X-Deploy-Secret: $DEPLOY_SECRET" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @release.tar.gz \
-            "$WEBHOOK_URL" 2>&1) || {
+            "$EFFECTIVE_URL" 2>&1) || {
             echo "Webhook request failed"
             exit 1
           }
+
+          if [ "$http_code" = "405" ] && [ "$EFFECTIVE_URL" != "$FALLBACK_URL" ]; then
+            echo "Primary URL returned 405, trying fallback: $FALLBACK_URL"
+            http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
+              --max-time 120 \
+              -X POST \
+              -H "X-Deploy-Secret: $DEPLOY_SECRET" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @release.tar.gz \
+              "$FALLBACK_URL" 2>&1) || {
+              echo "Fallback webhook request failed"
+              exit 1
+            }
+            EFFECTIVE_URL="$FALLBACK_URL"
+          fi
 
           echo "Webhook response HTTP $http_code"
           cat /tmp/webhook-response.json
@@ -93,10 +112,14 @@ jobs:
             exit 1
           fi
 
+          # 将实际使用的 URL 保存到文件，供后续步骤使用
+          echo "$EFFECTIVE_URL" > /tmp/effective-webhook-url.txt
+
       - name: Poll deployment status
         run: |
           set -euo pipefail
-          STATUS_URL="${WEBHOOK_URL%/api/deploy}/api/deploy/status"
+          EFFECTIVE_URL="$(cat /tmp/effective-webhook-url.txt)"
+          STATUS_URL="${EFFECTIVE_URL%/api/deploy}/api/deploy/status"
 
           echo "Polling deployment status..."
           for attempt in $(seq 1 240); do
@@ -124,7 +147,8 @@ jobs:
 
       - name: Verify public health
         run: |
-          PUBLIC_URL="${WEBHOOK_URL%/api/deploy}/api/ready"
+          EFFECTIVE_URL="$(cat /tmp/effective-webhook-url.txt)"
+          PUBLIC_URL="${EFFECTIVE_URL%/api/deploy}/api/ready"
           echo "Verifying public health at $PUBLIC_URL"
           consecutive_ready=0
           for attempt in $(seq 1 15); do
