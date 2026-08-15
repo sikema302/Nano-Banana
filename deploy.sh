@@ -121,13 +121,32 @@ printf 'VIDEO_MAX_CONCURRENCY="1"\n' >> .env.local
 chmod 600 .env.local
 
 # ─── 安装依赖 ─────────────────────────────────────────────────────────
+# 杀掉可能残留的 npm 进程（上次部署失败可能留下的）
+pkill -f 'npm ci' 2>/dev/null || true
+pkill -f 'npm install' 2>/dev/null || true
+
 DEPENDENCY_STAMP='node_modules/.pixory-package-lock.sha256'
 CURRENT_LOCK_HASH="$(sha256sum package-lock.json | awk '{print $1}')"
 INSTALLED_LOCK_HASH="$(cat "$DEPENDENCY_STAMP" 2>/dev/null || true)"
 
 if [ ! -x node_modules/.bin/tsx ] || [ "$CURRENT_LOCK_HASH" != "$INSTALLED_LOCK_HASH" ]; then
   log "安装依赖..."
-  npm ci
+
+  # 优先使用淘宝镜像，超时 10 分钟
+  if timeout --signal=TERM --kill-after=30s 600 npm ci --registry=https://registry.npmmirror.com 2>/dev/null; then
+    log "npm ci 成功 (npmmirror)"
+  elif timeout --signal=TERM --kill-after=30s 600 npm ci 2>/dev/null; then
+    log "npm ci 成功 (官方源)"
+  else
+    log "npm ci 失败，尝试 cnpm..."
+    if command -v cnpm >/dev/null 2>&1; then
+      cnpm install --production=false 2>/dev/null || { log "cnpm 也失败了"; finish 1; }
+    else
+      log "npm ci 超时或失败"
+      finish 1
+    fi
+  fi
+
   printf '%s' "$CURRENT_LOCK_HASH" > "$DEPENDENCY_STAMP"
 else
   log "依赖未变化，跳过 npm ci"
@@ -135,7 +154,7 @@ fi
 
 # ─── 构建前端 ─────────────────────────────────────────────────────────
 log "构建前端..."
-npm run build
+timeout --signal=TERM --kill-after=30s 600 npm run build || { log "前端构建超时或失败"; finish 1; }
 
 # ─── 验证 R2 存储 ─────────────────────────────────────────────────────
 log "验证 R2 存储连接..."
