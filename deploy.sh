@@ -8,8 +8,10 @@ set -euo pipefail
 LOG_FILE="${DEPLOY_LOG_FILE:-/tmp/nano-banana-deploy.log}"
 STATUS_FILE="${DEPLOY_STATUS_FILE:-/tmp/nano-banana-deploy.status}"
 
-# ⚠️ 必须在任何重定向之前写入初始状态，防止 exec 失败导致静默崩溃
+# ⚠️ 必须在任何重定向之前写入初始状态，防止脚本静默崩溃
 printf 'running\n' > "$STATUS_FILE" 2>/dev/null || true
+# 直接写日志确认脚本启动（exec 重定向在某些环境下不可靠）
+printf '[deploy] 脚本启动 PID=%s\n' "$$" >> "$LOG_FILE" 2>/dev/null || true
 
 # 确保任何错误都会写入状态文件
 _write_status() {
@@ -19,15 +21,15 @@ _write_status() {
 trap '_write_status 1' ERR
 trap '_write_status $?' EXIT
 
-# 重定向所有输出到日志文件（> 截断模式，因为服务器已清理旧文件）
-exec 1>"$LOG_FILE" 2>&1
+# 只重定向 stderr 到日志文件，stdout 通过 log() 函数直接写文件
+exec 2>>"$LOG_FILE"
 
 ARCHIVE="${1:-/tmp/nano-banana-release.tar.gz}"
 PROJECT='/var/www/nano-banana'
 BACKUPS="$PROJECT/.deploy-backups"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
-log() { printf '[deploy %s] %s\n' "$TIMESTAMP" "$*"; }
+log() { printf '[deploy %s] %s\n' "$TIMESTAMP" "$*" >> "$LOG_FILE"; }
 
 finish() {
   local exit_code="${1:-1}"
