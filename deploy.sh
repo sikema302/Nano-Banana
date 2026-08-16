@@ -7,16 +7,24 @@ set -euo pipefail
 
 # 将后台部署的完整输出写入日志，避免失败时只能看到 running
 LOG_FILE="${DEPLOY_LOG_FILE:-/tmp/nano-banana-deploy.log}"
-# 使用命名管道替代进程替换，兼容性更好
+STATUS_FILE="${DEPLOY_STATUS_FILE:-/tmp/nano-banana-deploy.status}"
+
+# 确保任何错误都会写入状态文件，避免静默失败
+_write_status() {
+  local code="${1:-1}"
+  printf '%s\n' "$code" > "$STATUS_FILE" 2>/dev/null || true
+}
+trap '_write_status 1' ERR
+trap '_write_status $?' EXIT
+
+# 使用简单重定向替代进程替换，兼容性更好
 rm -f "$LOG_FILE"
 touch "$LOG_FILE"
-exec 3>&1 4>&2
 exec 1>>"$LOG_FILE" 2>&1
 
 ARCHIVE="${1:-/tmp/nano-banana-release.tar.gz}"
 PROJECT='/var/www/nano-banana'
 BACKUPS="$PROJECT/.deploy-backups"
-STATUS_FILE="${DEPLOY_STATUS_FILE:-/tmp/nano-banana-deploy.status}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 log() { printf '[deploy %s] %s\n' "$TIMESTAMP" "$*"; }
