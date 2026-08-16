@@ -7,7 +7,11 @@ set -euo pipefail
 
 # 将后台部署的完整输出写入日志，避免失败时只能看到 running
 LOG_FILE="${DEPLOY_LOG_FILE:-/tmp/nano-banana-deploy.log}"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# 使用命名管道替代进程替换，兼容性更好
+rm -f "$LOG_FILE"
+touch "$LOG_FILE"
+exec 3>&1 4>&2
+exec 1>>"$LOG_FILE" 2>&1
 
 ARCHIVE="${1:-/tmp/nano-banana-release.tar.gz}"
 PROJECT='/var/www/nano-banana'
