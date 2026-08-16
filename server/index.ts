@@ -6044,7 +6044,7 @@ async function start() {
         ]);
 
         // 管道提取 deploy.sh 并执行，避免 execSync 阻塞事件循环
-        const deployCmd = `rm -f /tmp/nano-banana-deploy.sh; tar -xzf "${archivePath}" -O deploy.sh > /tmp/nano-banana-deploy.sh 2>/dev/null; exec bash /tmp/nano-banana-deploy.sh "${archivePath}"`;
+        const deployCmd = `rm -f /tmp/nano-banana-deploy.sh; (tar -xzf "${archivePath}" -O ./deploy.sh || tar -xzf "${archivePath}" -O deploy.sh) > /tmp/nano-banana-deploy.sh 2>/dev/null; [ -s /tmp/nano-banana-deploy.sh ] || { printf '1\n' > /tmp/nano-banana-deploy.status; printf '错误: 无法从发布包提取 deploy.sh\n' > /tmp/nano-banana-deploy.log; exit 1; }; exec bash /tmp/nano-banana-deploy.sh "${archivePath}"`;
         const child = spawn('bash', ['-c', deployCmd], {
           detached: true,
           stdio: ['ignore', 'ignore', 'ignore'],
