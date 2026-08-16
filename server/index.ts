@@ -6067,10 +6067,15 @@ async function start() {
       const statusFile = '/tmp/nano-banana-deploy.status';
       const deployLog = '/tmp/nano-banana-deploy.log';
       try {
-        const content = await fs.readFile(statusFile, 'utf-8');
-        const code = Number.parseInt(content.trim(), 10);
-        const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
-        res.json({ status: 'completed', exitCode: code, ok: code === 0, log: log.slice(-4000) });
+        const content = (await fs.readFile(statusFile, 'utf-8')).trim();
+	        const code = Number.parseInt(content, 10);
+	        const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
+	        // 非数字内容（如 "running"）表示部署仍在进行中
+	        if (Number.isNaN(code)) {
+	          res.json({ status: content === 'running' ? 'running' : 'failed', log: log.slice(-4000) });
+	        } else {
+	          res.json({ status: 'completed', exitCode: code, ok: code === 0, log: log.slice(-4000) });
+	        }
       } catch {
         const log = await fs.readFile(deployLog, 'utf-8').catch(() => '');
         const recent = log.slice(-4000);

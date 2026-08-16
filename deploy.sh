@@ -5,11 +5,13 @@
 
 set -euo pipefail
 
-# 将后台部署的完整输出写入日志，避免失败时只能看到 running
 LOG_FILE="${DEPLOY_LOG_FILE:-/tmp/nano-banana-deploy.log}"
 STATUS_FILE="${DEPLOY_STATUS_FILE:-/tmp/nano-banana-deploy.status}"
 
-# 确保任何错误都会写入状态文件，避免静默失败
+# ⚠️ 必须在任何重定向之前写入初始状态，防止 exec 失败导致静默崩溃
+printf 'running\n' > "$STATUS_FILE" 2>/dev/null || true
+
+# 确保任何错误都会写入状态文件
 _write_status() {
   local code="${1:-1}"
   printf '%s\n' "$code" > "$STATUS_FILE" 2>/dev/null || true
@@ -17,10 +19,8 @@ _write_status() {
 trap '_write_status 1' ERR
 trap '_write_status $?' EXIT
 
-# 使用简单重定向替代进程替换，兼容性更好
-rm -f "$LOG_FILE"
-touch "$LOG_FILE"
-exec 1>>"$LOG_FILE" 2>&1
+# 重定向所有输出到日志文件（> 截断模式，因为服务器已清理旧文件）
+exec 1>"$LOG_FILE" 2>&1
 
 ARCHIVE="${1:-/tmp/nano-banana-release.tar.gz}"
 PROJECT='/var/www/nano-banana'
