@@ -434,9 +434,10 @@ function fileToBase64(file: File) {
 }
 
 async function imageToReferenceInput(image: DisplayImage): Promise<ReferenceUploadInput> {
-  const response = await fetch(image.imageUrl);
-  if (!response.ok) throw new Error('读取当前图片失败，请稍后重试');
-  const blob = await response.blob();
+  const blob = await downloadAsset(image.imageUrl, 'edit-source', { save: false });
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new Error('读取当前图片失败，请稍后重试');
+  }
   if (!blob.type.startsWith('image/')) throw new Error('当前结果不是可编辑的图片格式');
   if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
     throw new Error(`当前图片超过 ${MAX_REFERENCE_IMAGE_MB}MB，暂时无法连续编辑`);
@@ -3016,8 +3017,6 @@ function AdminModelCreditPanel({
   const [draft, setDraft] = useState<ModelCreditPricing>(pricing);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => setDraft(pricing), [pricing]);
-
   const setGpt = (key: keyof ModelCreditPricing['gptImage2'], value: number) => {
     setDraft((current) => ({ ...current, gptImage2: { ...current.gptImage2, [key]: value } }));
   };
@@ -3812,8 +3811,8 @@ function AdminView({
   }
 
   const menuItems: Array<{ id: AdminSection; label: string }> = [
-    { id: 'modelCredits', label: '模型积分管理' },
     { id: 'dashboard', label: '看板' },
+    { id: 'modelCredits', label: '模型积分管理' },
     { id: 'notifications', label: '通知管理' },
     { id: 'invites', label: '邀请码' },
     { id: 'apiKeys', label: 'API Key' },
@@ -5222,7 +5221,12 @@ export default function App() {
   const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
   const visibleResolutionOptions = selectedModel === 'Seedream_4'
     ? gptImageSizeOptions.filter((item) => item.value === '2K' || item.value === '4K')
-    : selectedResolutionOptions;
+    : selectedModel === 'Grok_Image'
+      ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
+      : selectedResolutionOptions;
+  const visibleDimensionOptions = selectedModel === 'Grok_Image'
+    ? dimensionOptions.filter((item) => item.value !== '21:9')
+    : dimensionOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const selectedCreditBucket = selectedModel === 'gpt-image-2' ? 'gpt' : selectedModel === 'Nano_Banana_Pro' ? 'banana' : 'general';
   const selectedAvailableCredits = getAvailableUserCredits(user, selectedCreditBucket);
@@ -5310,7 +5314,7 @@ export default function App() {
       .then(({ shouldShow }) => {
         if (cancelled || !shouldShow) return;
         setAuthError('');
-        setAuthMode('invite');
+        setAuthMode('register');
         setAuthOpen(true);
       })
       .catch(() => undefined);
@@ -5515,6 +5519,13 @@ export default function App() {
       setImageSize('2K');
       setGptQuality('auto');
       setOptimizeChineseText(false);
+      return;
+    }
+    if (modelId === 'Grok_Image') {
+      setImageSize('1K');
+      setGptQuality('auto');
+      setOptimizeChineseText(false);
+      setDimensions((current) => current === '21:9' ? '1:1' : current);
       return;
     }
     setImageSize((current) => {
@@ -6021,9 +6032,16 @@ export default function App() {
     patch: Partial<ProviderRoutingConfig>,
     notice: string,
   ) {
-    const payload = await updateAdminProviderRouting(patch);
-    setProviderRouting(payload.providerRouting);
-    void notice;
+    const previous = providerRouting;
+    setProviderRouting((current) => ({ ...current, ...patch }));
+    try {
+      const payload = await updateAdminProviderRouting(patch);
+      setProviderRouting(payload.providerRouting);
+      setNotice(notice);
+    } catch (error) {
+      setProviderRouting(previous);
+      throw error;
+    }
   }
 
   async function handleUpdateModelCreditPricing(pricing: ModelCreditPricing) {
@@ -7569,7 +7587,7 @@ export default function App() {
               <section className="space-y-1.5">
                 <div className="text-[11px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
                 <div className="grid grid-cols-4 gap-1.5 md:grid-cols-8">
-                  {dimensionOptions.map(({ value, label }) => {
+                  {visibleDimensionOptions.map(({ value, label }) => {
                     const active = value === dimensions;
 
                     return (

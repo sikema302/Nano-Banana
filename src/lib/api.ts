@@ -440,9 +440,14 @@ async function downloadViaServer(source: string): Promise<Blob> {
   return response.blob();
 }
 
-export async function downloadAsset(source: string, suggestedName = 'pixory-image') {
+export async function downloadAsset(
+  source: string,
+  suggestedName = 'pixory-image',
+  options: { save?: boolean } = {},
+): Promise<Blob> {
   if (!source) throw new Error('下载地址无效');
 
+  const { save = true } = options;
   let blob: Blob;
   if (source.startsWith('data:')) {
     // 同步转换 data URL 为 Blob，避免 fetch 的 async 导致浏览器拦截下载
@@ -462,14 +467,17 @@ export async function downloadAsset(source: string, suggestedName = 'pixory-imag
         blob = await directResponse.blob();
       } catch (directError) {
         console.error('[downloadAsset] 直接 fetch 也失败:', directError);
+        if (!save) throw directError;
         // 最后尝试：用 window.open 打开图片
         window.open(source, '_blank');
-        return;
+        return new Blob();
       }
     }
   }
 
   console.log('[downloadAsset] blob 大小:', blob.size, '类型:', blob.type);
+  if (!save) return blob;
+
   const extension = fileExtensionForDownload(source, blob.type);
   const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
   const objectUrl = URL.createObjectURL(blob);
@@ -485,6 +493,7 @@ export async function downloadAsset(source: string, suggestedName = 'pixory-imag
     link.remove();
     URL.revokeObjectURL(objectUrl);
   }, 100);
+  return blob;
 }
 
 function setSession(token: string, user: UserInfo) {

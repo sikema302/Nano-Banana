@@ -715,7 +715,6 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
-      { id: 'schat-nano-banana-2', enabled: false },
     ],
   },
   seedreamRoutes: {
