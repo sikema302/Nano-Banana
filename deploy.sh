@@ -123,14 +123,29 @@ if ! swapon --show 2>/dev/null | grep -q '/swapfile'; then
 fi
 grep -q '^/swapfile none swap' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-# 并发限制
+# 并发限制 & 资源阈值
 touch .env.local
-sed -i '/^PUBLIC_ASYNC_CONCURRENCY=/d' .env.local
-printf 'PUBLIC_ASYNC_CONCURRENCY="2"\n' >> .env.local
-sed -i '/^GENERATION_MAX_CONCURRENCY=/d' .env.local
-printf 'GENERATION_MAX_CONCURRENCY="3"\n' >> .env.local
-sed -i '/^VIDEO_MAX_CONCURRENCY=/d' .env.local
-printf 'VIDEO_MAX_CONCURRENCY="1"\n' >> .env.local
+# 清理旧值
+for var in PUBLIC_ASYNC_CONCURRENCY PUBLIC_ASYNC_MAX_PENDING \
+           GENERATION_MAX_CONCURRENCY GENERATION_MAX_PENDING \
+           VIDEO_MAX_CONCURRENCY \
+           RESOURCE_CPU_PAUSE_PERCENT RESOURCE_CPU_RESUME_PERCENT \
+           RESOURCE_MEMORY_PAUSE_PERCENT RESOURCE_EVENT_LOOP_PAUSE_MS; do
+  sed -i "/^${var}=/d" .env.local
+done
+# 异步 API 并发
+printf 'PUBLIC_ASYNC_CONCURRENCY="6"\n'    >> .env.local
+printf 'PUBLIC_ASYNC_MAX_PENDING="200"\n'  >> .env.local
+# 生图并发
+printf 'GENERATION_MAX_CONCURRENCY="16"\n'  >> .env.local
+printf 'GENERATION_MAX_PENDING="200"\n'     >> .env.local
+# 生视频并发
+printf 'VIDEO_MAX_CONCURRENCY="3"\n'        >> .env.local
+# 资源压力阈值（取消 CPU 暂停，保留内存和 EventLoop 保护）
+printf 'RESOURCE_CPU_PAUSE_PERCENT="100"\n'   >> .env.local
+printf 'RESOURCE_CPU_RESUME_PERCENT="95"\n'   >> .env.local
+printf 'RESOURCE_MEMORY_PAUSE_PERCENT="88"\n' >> .env.local
+printf 'RESOURCE_EVENT_LOOP_PAUSE_MS="500"\n' >> .env.local
 chmod 600 .env.local
 
 # ─── 安装依赖 ─────────────────────────────────────────────────────────
