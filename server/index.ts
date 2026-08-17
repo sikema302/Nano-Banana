@@ -6064,6 +6064,13 @@ async function start() {
 
     // 部署状态查询端点（供 GitHub Actions 轮询）
     app.get('/api/deploy/status', async (_req, res) => {
+      // 部署状态必须每次直读服务器文件，禁止 CDN、代理或浏览器缓存旧的 running 响应。
+      res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+        Pragma: 'no-cache',
+        Expires: '0',
+        'Surrogate-Control': 'no-store',
+      });
       const statusFile = '/tmp/nano-banana-deploy.status';
       const deployLog = '/tmp/nano-banana-deploy.log';
       try {

@@ -244,31 +244,20 @@ fi
 	    pm2 scale nano-banana 1
 	  fi
 
-	  # 使用 setsid 在新会话中运行 restart，完全脱离当前进程组
-	  # 避免 PM2 杀掉旧进程时波及 deploy.sh
-	  setsid bash -c 'pm2 restart nano-banana --update-env' &
-	  RESTART_PID=$!
-	  RESTART_OK=0
-	  for i in $(seq 1 90); do
-	    if ! kill -0 $RESTART_PID 2>/dev/null; then
-	      wait $RESTART_PID && RESTART_OK=1
-	      break
-	    fi
-	    sleep 1
-	  done
-	  if [ "$RESTART_OK" -eq 0 ]; then
-	    kill -KILL $RESTART_PID 2>/dev/null || true
-	    wait $RESTART_PID 2>/dev/null || true
-	    log "restart 超时，尝试强制恢复..."
-	    pm2 delete nano-banana 2>/dev/null || true
-	    pm2 start server/index.ts \
+	  # PM2 CLI 偶发挂起，所有控制命令必须有硬超时。
+	  if timeout --signal=TERM --kill-after=5s 30s pm2 restart nano-banana --update-env; then
+	    log "PM2 restart 完成"
+	  else
+	    log "PM2 restart 超时或失败，强制重建进程..."
+	    timeout --signal=KILL 15s pm2 delete nano-banana 2>/dev/null || true
+	    timeout --signal=TERM --kill-after=5s 30s pm2 start server/index.ts \
 	      --name nano-banana \
 	      --interpreter ./node_modules/.bin/tsx \
-	      -i 1
+	      -i 1 || { log "PM2 强制重建失败"; finish 1; }
 	  fi
 	fi
 
-	pm2 save >/dev/null
+	timeout --signal=TERM --kill-after=5s 20s pm2 save >/dev/null || log "警告: pm2 save 超时，继续健康检查"
 
 	# ─── 等待服务就绪 ─────────────────────────────────────────────────────
 	log "等待服务就绪..."

@@ -123,7 +123,10 @@ jobs:
 
           echo "Polling deployment status..."
           for attempt in $(seq 1 240); do
-            status_json=$(curl -sS --max-time 10 -H "X-Deploy-Secret: $DEPLOY_SECRET" "$STATUS_URL" 2>/dev/null || true)
+            status_json=$(curl -sS --max-time 10 \
+              -H "X-Deploy-Secret: $DEPLOY_SECRET" \
+              -H "Cache-Control: no-cache, no-store" \
+              "$STATUS_URL?attempt=$attempt&ts=$(date +%s)" 2>/dev/null || true)
             if [ -z "$status_json" ]; then
               echo "Attempt $attempt: server not reachable (may be restarting)"
               sleep 5
