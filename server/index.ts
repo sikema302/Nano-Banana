@@ -5277,6 +5277,8 @@ async function backfillGeneratedThumbnails() {
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (ext === '.mp4' || ext === '.webm' || ext === '.mov' || ext === '.avi') continue;
     const thumbnailFile = path.join(THUMBNAILS_DIR, `${entry.name.replace(/\.[^.]+$/, '')}.webp`);
     if (await pathExists(thumbnailFile)) continue;
     try {
@@ -6006,63 +6008,66 @@ async function start() {
     }
   });
 
-  // ─── Webhook 部署端点 ───────────────────────────────────────────────
-  // 接收 GitHub Actions 发送的发布包，自动执行零停机部署。
-  // 不再依赖 SSH，彻底解决部署时的网络连接问题。
+  // ─── 部署文件上传端点 ─────────────────────────────────────────────────
+  // 只负责接收发布包并存入 .deploy-incoming 目录，
+  // 由 auto-deploy-watcher.sh (cron) 独立处理部署，与业务进程解耦。
   const DEPLOY_SECRET = process.env.DEPLOY_SECRET;
   app.post(
-    '/api/deploy',
+    '/api/upload-release',
     express.raw({ type: 'application/octet-stream', limit: '100mb' }),
     async (req, res) => {
-      // DEPLOY_SECRET 未配置时跳过认证，方便首次部署引导
       if (DEPLOY_SECRET) {
-        const providedSecret = req.headers['x-deploy-secret'];
-        if (!providedSecret || providedSecret !== DEPLOY_SECRET) {
-          console.warn('[deploy] 未授权的部署请求');
+        const provided = req.headers['x-deploy-secret'];
+        if (!provided || provided !== DEPLOY_SECRET) {
+          console.warn('[upload-release] 未授权的上传请求');
           res.status(401).json({ error: 'Unauthorized' });
           return;
         }
       }
 
-        const archivePath = '/tmp/nano-banana-release.tar.gz';
-        try {
-          await fs.writeFile(archivePath, req.body);
-          console.log('[deploy] 发布包已保存:', archivePath, '大小:', req.body.length);
-        } catch (err) {
-          console.error('[deploy] 保存发布包失败:', err);
-          res.status(500).json({ error: 'Failed to save release archive' });
+      const incomingDir = path.join(ROOT_DIR, '.deploy-incoming');
+      try {
+        await fs.mkdir(incomingDir, { recursive: true });
+        const archiveName = `release-${Date.now()}.tar.gz`;
+        const archivePath = path.join(incomingDir, archiveName);
+        await fs.writeFile(archivePath, req.body);
+        console.log('[upload-release] 发布包已保存:', archivePath, '大小:', req.body.length);
+        res.json({ ok: true, file: archiveName });
+      } catch (err) {
+        console.error('[upload-release] 保存发布包失败:', err);
+        res.status(500).json({ error: 'Failed to save release archive' });
+      }
+    },
+  );
+
+  // 过渡期：旧端点 /api/deploy 转发到 upload-release，首次部署后即可移除
+  app.post(
+    '/api/deploy',
+    express.raw({ type: 'application/octet-stream', limit: '100mb' }),
+    async (req, res) => {
+      if (DEPLOY_SECRET) {
+        const provided = req.headers['x-deploy-secret'];
+        if (!provided || provided !== DEPLOY_SECRET) {
+          res.status(401).json({ error: 'Unauthorized' });
           return;
         }
+      }
+      const incomingDir = path.join(ROOT_DIR, '.deploy-incoming');
+      try {
+        await fs.mkdir(incomingDir, { recursive: true });
+        const archiveName = `release-${Date.now()}.tar.gz`;
+        const archivePath = path.join(incomingDir, archiveName);
+        await fs.writeFile(archivePath, req.body);
+        console.log('[deploy-legacy] 发布包已保存:', archivePath, '大小:', req.body.length);
+        res.json({ ok: true, file: archiveName });
+      } catch (err) {
+        console.error('[deploy-legacy] 保存发布包失败:', err);
+        res.status(500).json({ error: 'Failed to save release archive' });
+      }
+    },
+  );
 
-        const statusFile = '/tmp/nano-banana-deploy.status';
-        const deployLog = '/tmp/nano-banana-deploy.log';
-
-        // 清理旧状态
-        await Promise.all([
-          fs.unlink(statusFile).catch(() => undefined),
-          fs.unlink(deployLog).catch(() => undefined),
-        ]);
-
-        // 管道提取 deploy.sh 并执行，避免 execSync 阻塞事件循环
-        const deployCmd = `rm -f /tmp/nano-banana-deploy.sh; (tar -xzf "${archivePath}" -O ./deploy.sh || tar -xzf "${archivePath}" -O deploy.sh) > /tmp/nano-banana-deploy.sh 2>/dev/null; [ -s /tmp/nano-banana-deploy.sh ] || { printf '1\n' > /tmp/nano-banana-deploy.status; printf '错误: 无法从发布包提取 deploy.sh\n' > /tmp/nano-banana-deploy.log; exit 1; }; exec bash /tmp/nano-banana-deploy.sh "${archivePath}"`;
-        const child = spawn('bash', ['-c', deployCmd], {
-          detached: true,
-          stdio: ['ignore', 'ignore', 'ignore'],
-          cwd: ROOT_DIR,
-          env: {
-            ...process.env,
-            DEPLOY_STATUS_FILE: statusFile,
-            DEPLOY_LOG_FILE: deployLog,
-          },
-        });
-        child.unref();
-
-        console.log('[deploy] 部署脚本已启动, PID:', child.pid);
-        res.json({ ok: true, message: 'Deployment started', pid: child.pid });
-      },
-    );
-
-    // 部署状态查询端点（供 GitHub Actions 轮询）
+  // 部署状态查询端点（供 GitHub Actions 确认，数据由 cron 守护脚本写入）
     app.get('/api/deploy/status', async (_req, res) => {
       // 部署状态必须每次直读服务器文件，禁止 CDN、代理或浏览器缓存旧的 running 响应。
       res.set({

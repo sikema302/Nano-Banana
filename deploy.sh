@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─── Nano Banana 零停机部署脚本 ───────────────────────────────────────
-# 由 webhook 端点 /api/deploy 触发，不依赖 SSH。
+# 由 auto-deploy-watcher.sh (cron) 或手动触发，不依赖业务进程。
 # 用法: bash deploy.sh <release.tar.gz>
 
 # 使用硬编码路径，避免环境变量为空导致静默失败

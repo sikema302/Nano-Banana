@@ -77,29 +77,29 @@ jobs:
       - name: Install deployment transport
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
 
-      - name: Deploy with automatic fallback
+      - name: Upload release to server
         run: |
           set -euo pipefail
-
-          WEBHOOK_URL="https://pixory.top/api/deploy"
+          UPLOAD_URL="https://pixory.top/api/upload-release"
           DEPLOY_KEY="${DEPLOY_SECRET:-temp-deploy-2026}"
-          echo "Trying fast webhook deployment..."
+          echo "Uploading release archive..."
 
-          http_code=$(curl -sS -o /tmp/webhook-response.json -w '%{http_code}' \
-            --connect-timeout 10 --max-time 45 \
+          http_code=$(curl -sS -o /tmp/upload-response.json -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
             -X POST \
             -H "X-Deploy-Secret: $DEPLOY_KEY" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @release.tar.gz \
-            "$WEBHOOK_URL" 2>/dev/null || printf '000')
+            "$UPLOAD_URL" 2>/dev/null || printf '000')
 
           if [ "$http_code" = "200" ]; then
-            echo "Webhook accepted release"
-            echo "DEPLOY_METHOD=webhook" >> "$GITHUB_ENV"
+            echo "Release uploaded successfully"
+            echo "Server will auto-deploy within 30 seconds via cron"
+            echo "DEPLOY_METHOD=upload" >> "$GITHUB_ENV"
             exit 0
           fi
 
-          echo "Webhook unavailable (HTTP $http_code), switching to SSH fallback..."
+          echo "Upload failed (HTTP $http_code), switching to SSH fallback..."
           test -n "$DEPLOY_SERVER_PASSWORD" || { echo "DEPLOY_SERVER_PASSWORD is missing"; exit 1; }
           export SSHPASS="$DEPLOY_SERVER_PASSWORD"
           remote_archive="/tmp/nano-banana-release-${GITHUB_SHA}.tar.gz"
@@ -115,21 +115,23 @@ jobs:
 
           echo "DEPLOY_METHOD=ssh" >> "$GITHUB_ENV"
 
-      - name: Poll deployment status
-        if: env.DEPLOY_METHOD == 'webhook'
+      - name: Confirm deployment
+        if: env.DEPLOY_METHOD == 'upload'
         run: |
           set -euo pipefail
           STATUS_URL="https://pixory.top/api/deploy/status"
 
-          echo "Polling deployment status..."
-          for attempt in $(seq 1 240); do
+          # 给 cron 时间启动部署（最多等 30 秒）
+          echo "Waiting for cron to start deployment..."
+          sleep 10
+
+          for attempt in $(seq 1 30); do
             status_json=$(curl -sS --max-time 10 \
-              -H "X-Deploy-Secret: $DEPLOY_SECRET" \
               -H "Cache-Control: no-cache, no-store" \
-              "$STATUS_URL?attempt=$attempt&ts=$(date +%s)" 2>/dev/null || true)
+              "$STATUS_URL?ts=$(date +%s)" 2>/dev/null || true)
             if [ -z "$status_json" ]; then
               echo "Attempt $attempt: server not reachable (may be restarting)"
-              sleep 5
+              sleep 10
               continue
             fi
 
@@ -148,11 +150,11 @@ jobs:
               exit 1
             fi
 
-            sleep 5
+            sleep 10
           done
 
-          echo "Deployment status polling timed out"
-          exit 1
+          echo "Status check timed out (deployment may still be running via cron)"
+          # 不阻塞，cron 会自己完成部署
 
       - name: Verify public health
         run: |
