@@ -11,3 +11,13 @@ uploads/generated/
 uploads/references/
 .env*
 !.env.example
+
+# 本地临时产物（打包/截图/分析），不应入库
+release*.tar.gz
+.deploy-package/
+.deploy-package-source.tar.gz
+temp_shot*.png
+tmp_login.json
+.trae-html-share-packages/
+concurrency-optimization/
+deploy-redesign/

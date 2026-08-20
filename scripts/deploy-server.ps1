@@ -1,11 +1,11 @@
 param(
-  [string]$ServerHost = '64.90.1.229',
+  [string]$ServerHost = '23.141.172.73',
   [int]$SshPort = 22,
   [string]$User = 'root',
   [string]$ProjectPath = '/var/www/nano-banana',
   [string]$AppName = 'nano-banana',
   [string]$BackupsDir = '',
-  [string]$HealthUrl = 'http://64.90.1.229:3001/api/ready',
+  [string]$HealthUrl = 'https://pixory.top/api/ready',
   [string]$Password = '',
   [int]$KeepBackups = 2,
   [switch]$DeployChat2Api,

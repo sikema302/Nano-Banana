@@ -12,7 +12,8 @@ This document records the current production setup for `pixory.top`.
 
 - Provider: Rainyun
 - OS: Debian 12
-- Public IP: `64.90.1.229`
+- Public IP: `23.141.172.73`
+- SSH port: `22`
 - Project path: `/var/www/nano-banana`
 - PM2 app name: `nano-banana`
 
@@ -27,8 +28,8 @@ This document records the current production setup for `pixory.top`.
 
 Current DNS records:
 
-- `A @ -> 64.90.1.229`
-- `A www -> 64.90.1.229`
+- `A @ -> 23.141.172.73`
+- `A www -> 23.141.172.73`
 
 If the domain stops working, first verify:
 
@@ -87,7 +88,7 @@ Important production variables:
 ```env
 DATABASE_PROVIDER=sqlite
 SUPABASE_URL=https://cpjsjdvbkspkopakmlnv.supabase.co
-CORS_ORIGIN=http://64.90.1.229,http://64.90.1.229:3001,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
+CORS_ORIGIN=http://23.141.172.73,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
 ```
 
 Server-only secrets should remain only on the server:
@@ -114,7 +115,7 @@ Recommended deploy path is GitHub Actions, not direct local SSH. This avoids loc
 
 Before the first deployment to this host, set the GitHub Actions secrets
 `DEPLOY_SERVER_PASSWORD` (the current Rainyun root password) and `SCHAT_API_KEY`.
-The workflow performs an SSH preflight against `64.90.1.229:22`; the admin panel
+The workflow performs an SSH preflight against `23.141.172.73:22`; the admin panel
 also reports the exact failed Actions step when a run cannot complete.
 
 One-click production deploy:

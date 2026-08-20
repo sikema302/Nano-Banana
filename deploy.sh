@@ -151,7 +151,7 @@ done
 printf 'PUBLIC_ASYNC_CONCURRENCY="6"\n'    >> .env.local
 printf 'PUBLIC_ASYNC_MAX_PENDING="200"\n'  >> .env.local
 # 生图并发
-printf 'GENERATION_MAX_CONCURRENCY="16"\n'  >> .env.local
+printf 'GENERATION_MAX_CONCURRENCY="10"\n'  >> .env.local
 printf 'GENERATION_MAX_PENDING="200"\n'     >> .env.local
 # 生视频并发
 printf 'VIDEO_MAX_CONCURRENCY="3"\n'        >> .env.local
@@ -208,8 +208,8 @@ log "验证 R2 存储连接..."
 timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify -- --allow-unavailable || true
 
 # ─── 同步 Nginx 配置 ───────────────────────────────────────────────────
-NGINX_CONF="$PROJECT/deploy/nginx-schat.conf"
-NGINX_TARGET="/www/server/panel/vhost/nginx/schat.top.conf"
+NGINX_CONF="$PROJECT/deploy/nginx-photo-app.conf"
+NGINX_TARGET="/www/server/panel/vhost/nginx/photo-app.conf"
 if [ -f "$NGINX_CONF" ]; then
   if ! cmp -s "$NGINX_CONF" "$NGINX_TARGET" 2>/dev/null; then
     log "更新 Nginx 配置..."

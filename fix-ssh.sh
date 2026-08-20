@@ -166,8 +166,8 @@ if command -v fail2ban-client &>/dev/null; then
 fi
 echo ""
 echo "  现在可以尝试用以下命令从本地连接:"
-echo "    ssh -p $SSH_PORT root@64.90.1.229"
+echo "    ssh -p $SSH_PORT root@23.141.172.73"
 echo ""
 echo "  如果端口是 22，直接:"
-echo "    ssh root@64.90.1.229"
+echo "    ssh root@23.141.172.73"
 echo "========================================"

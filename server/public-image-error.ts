@@ -32,12 +32,29 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
   if (containsAny(lower, [
     /content.?policy/,
     /moderation/,
-    /safety|unsafe|nsfw/,
+    /safe.*policy|unsafe|nsfw/,
     /sensitive|prohibited|inappropriate/,
     /prompt.*(?:blocked|rejected|violation)/,
+    /adobe\s+content\s+rejected/,
+    /image_unsafe/,
     /敏感|违规|违禁|不合规|色情|涉黄|暴力|审核未通过/,
   ])) {
-    return { category: 'sensitive_prompt', message: '提示词包含敏感信息，请修改后重试' };
+    return { category: 'sensitive_prompt', message: '注意提示词或图片敏感信息，请修改重试哦～' };
+  }
+
+  if (containsAny(lower, [
+    /unsupported\s+or\s+unpriced/,
+    /unpriced/,
+    /unsupported\s+(?:parameter|value|size|model|image.?size)/,
+  ])) {
+    return { category: 'request', message: '当前使用的参数或模型不支持，请调整后重试' };
+  }
+
+  if (containsAny(lower, [
+    /image\s+generation\s+failed/,
+    /image\s+generation\s+(?:failed|error)/,
+  ])) {
+    return { category: 'service_unavailable', message: '图像生成失败，请稍后重试或修改提示词' };
   }
 
   if (containsAny(lower, [

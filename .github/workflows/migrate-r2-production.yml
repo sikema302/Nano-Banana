@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      SERVER_HOST: 64.90.1.229
+      SERVER_HOST: 23.141.172.73
       SSH_PORT: "22"
       SERVER_USER: root
       PROJECT_PATH: /var/www/nano-banana

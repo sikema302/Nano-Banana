@@ -6,8 +6,28 @@ import { classifyPublicImageError, publicImageErrorMessage } from './public-imag
 test('classifies sensitive prompts without exposing provider details', () => {
   assert.deepEqual(classifyPublicImageError('nano-banana content_policy violation from upstream'), {
     category: 'sensitive_prompt',
-    message: '提示词包含敏感信息，请修改后重试',
+    message: '注意提示词或图片敏感信息，请修改重试哦～',
   });
+  assert.deepEqual(classifyPublicImageError('provider request failed: adobe content rejected: {"error_code":"image_unsafe"}'), {
+    category: 'sensitive_prompt',
+    message: '注意提示词或图片敏感信息，请修改重试哦～',
+  });
+  assert.equal(publicImageErrorMessage('image_unsafe detected'), '注意提示词或图片敏感信息，请修改重试哦～');
+});
+
+test('keeps unsupported / unpriced parameters specific instead of hiding as sensitive', () => {
+  assert.equal(
+    publicImageErrorMessage('unsupported or unpriced parameters for this model'),
+    '当前使用的参数或模型不支持，请调整后重试',
+  );
+  assert.equal(publicImageErrorMessage('unsupported size value 9999x9999'), '当前使用的参数或模型不支持，请调整后重试');
+});
+
+test('gives generic image generation failures a neutral, non-sensitive message', () => {
+  assert.equal(
+    publicImageErrorMessage('Image generation failed; please check the request or try again later'),
+    '图像生成失败，请稍后重试或修改提示词',
+  );
 });
 
 test('keeps reference image errors useful and specific', () => {
