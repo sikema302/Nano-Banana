@@ -77,84 +77,51 @@ jobs:
       - name: Install deployment transport
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
 
-      - name: Upload release to server
+      - name: Deploy to server (SSH direct)
         run: |
           set -euo pipefail
-          UPLOAD_URL="https://pixory.top/api/upload-release"
-          DEPLOY_KEY="${DEPLOY_SECRET:-temp-deploy-2026}"
-          echo "Uploading release archive..."
-
-          http_code=$(curl -sS -o /tmp/upload-response.json -w '%{http_code}' \
-            --connect-timeout 10 --max-time 60 \
-            -X POST \
-            -H "X-Deploy-Secret: $DEPLOY_KEY" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @release.tar.gz \
-            "$UPLOAD_URL" 2>/dev/null || printf '000')
-
-          if [ "$http_code" = "200" ]; then
-            echo "Release uploaded successfully"
-            echo "Server will auto-deploy within 30 seconds via cron"
-            echo "DEPLOY_METHOD=upload" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo "Upload failed (HTTP $http_code), switching to SSH fallback..."
           test -n "$DEPLOY_SERVER_PASSWORD" || { echo "DEPLOY_SERVER_PASSWORD is missing"; exit 1; }
           export SSHPASS="$DEPLOY_SERVER_PASSWORD"
           remote_archive="/tmp/nano-banana-release-${GITHUB_SHA}.tar.gz"
+          expected_status="/tmp/nano-banana-deploy.status"
 
+          echo "Transferring release archive via scp..."
           sshpass -e scp -P "$SSH_PORT" \
-            -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
             release.tar.gz "$SERVER_USER@$SERVER_HOST:$remote_archive"
 
+          echo "Running deploy.sh directly on server (no cron dependency)..."
           sshpass -e ssh -p "$SSH_PORT" \
-            -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
             "$SERVER_USER@$SERVER_HOST" \
-            "rm -f /tmp/nano-banana-deploy.sh; tar -xzf '$remote_archive' -O deploy.sh > /tmp/nano-banana-deploy.sh; chmod 700 /tmp/nano-banana-deploy.sh; DEPLOY_STATUS_FILE=/tmp/nano-banana-deploy.status DEPLOY_LOG_FILE=/tmp/nano-banana-deploy.log bash /tmp/nano-banana-deploy.sh '$remote_archive'"
+            "rm -f '$expected_status' /tmp/nano-banana-deploy.sh; tar -xzf '$remote_archive' -O deploy.sh > /tmp/nano-banana-deploy.sh; chmod 700 /tmp/nano-banana-deploy.sh; bash /tmp/nano-banana-deploy.sh '$remote_archive'"
 
-          echo "DEPLOY_METHOD=ssh" >> "$GITHUB_ENV"
+          echo "=== deploy.sh exit code: $? ==="
 
-      - name: Confirm deployment
-        if: env.DEPLOY_METHOD == 'upload'
+      - name: Verify upload-release endpoint live
         run: |
           set -euo pipefail
-          STATUS_URL="https://pixory.top/api/deploy/status"
-
-          # 给 cron 时间启动部署（最多等 30 秒）
-          echo "Waiting for cron to start deployment..."
-          sleep 10
-
-          for attempt in $(seq 1 30); do
-            status_json=$(curl -sS --max-time 10 \
-              -H "Cache-Control: no-cache, no-store" \
-              "$STATUS_URL?ts=$(date +%s)" 2>/dev/null || true)
-            if [ -z "$status_json" ]; then
-              echo "Attempt $attempt: server not reachable (may be restarting)"
-              sleep 10
-              continue
+          # 部署成功后，新代码里的 POST /api/upload-release 端点必须存在。
+          # 无密钥请求会返回 401（路由存在），404 说明仍是旧代码。
+          endpoint_found=0
+          for attempt in $(seq 1 20); do
+            http_code=$(curl -sS -o /tmp/up-response.txt -w '%{http_code}' \
+              --connect-timeout 5 --max-time 20 \
+              -X POST -H "Content-Type: application/octet-stream" \
+              --data-binary @/dev/null \
+              "https://pixory.top/api/upload-release" 2>/dev/null || true)
+            echo "Attempt $attempt: upload-release HTTP $http_code"
+            if [ "$http_code" = "401" ] || [ "$http_code" = "200" ] || [ "$http_code" = "403" ]; then
+              echo "upload-release endpoint is live. Deployment of new code confirmed."
+              endpoint_found=1
+              break
             fi
-
-            deploy_status=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).status || 'unknown'); } catch { console.log('unknown'); } });")
-            echo "Attempt $attempt: status=$deploy_status"
-
-            if [ "$deploy_status" = "completed" ]; then
-              exit_code=$(echo "$status_json" | node -e "let raw=''; process.stdin.on('data', chunk => raw += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(raw).exitCode ?? 1); } catch { console.log(1); } });")
-              echo "Deployment completed with exit code: $exit_code"
-              exit "$exit_code"
-            fi
-
-            if [ "$deploy_status" = "failed" ]; then
-              echo "Deployment failed; server diagnostics:"
-              echo "$status_json"
-              exit 1
-            fi
-
-            sleep 10
+            sleep 5
           done
-
-          echo "Status check timed out (deployment may still be running via cron)"
-          # 不阻塞，cron 会自己完成部署
+          if [ "$endpoint_found" -ne 1 ]; then
+            echo "ERROR: upload-release endpoint still not present after deployment. Server still running old code."
+            exit 1
+          fi
 
       - name: Verify public health
         run: |
