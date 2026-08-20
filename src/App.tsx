@@ -363,7 +363,9 @@ const emptyRecordsStats: AdminRecordsStats = {
   mostActiveHour: '',
 };
 
-const MAX_REFERENCES = MAX_REFERENCE_IMAGES;
+function getMaxReferences(modelId: string) {
+  return modelId === 'Grok_Image' ? 3 : MAX_REFERENCE_IMAGES;
+}
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 5;
 const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
@@ -5537,14 +5539,14 @@ export default function App() {
   async function appendReferenceFiles(files: File[]) {
     if (files.length === 0) return;
 
-    const remaining = Math.max(0, MAX_REFERENCES - references.length);
+    const remaining = Math.max(0, getMaxReferences(selectedModel) - references.length);
     if (remaining === 0) {
-      setNotice(`最多只能上传 ${MAX_REFERENCES} 张参考图`);
+      setNotice(`最多只能上传 ${getMaxReferences(selectedModel)} 张参考图`);
       return;
     }
 
     const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file)));
-    setReferences((current) => [...current, ...next].slice(0, MAX_REFERENCES));
+    setReferences((current) => [...current, ...next].slice(0, getMaxReferences(selectedModel)));
   }
 
   function commitGeneratedImages(nextImages: DisplayImage[]) {
@@ -7401,7 +7403,7 @@ export default function App() {
               <section className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {MAX_REFERENCES} · 单张 ≤{MAX_REFERENCE_IMAGE_MB}MB</span>
+                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {getMaxReferences(selectedModel)} · 单张 ≤{MAX_REFERENCE_IMAGE_MB}MB</span>
                 </div>
                 <div
                   className={

@@ -5425,9 +5425,10 @@ function isReferenceImageInput(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
 }
 
-function validateReferenceImageSources(referenceImages: string[]) {
-  if (referenceImages.length > MAX_REFERENCE_IMAGE_COUNT) {
-    throw new Error(`A maximum of ${MAX_REFERENCE_IMAGE_COUNT} reference images is supported`);
+function validateReferenceImageSources(referenceImages: string[], modelId?: string) {
+  const maxCount = modelId === 'Grok_Image' ? 3 : MAX_REFERENCE_IMAGE_COUNT;
+  if (referenceImages.length > maxCount) {
+    throw new Error(`A maximum of ${maxCount} reference images is supported`);
   }
 
   for (const source of referenceImages) {
@@ -6844,7 +6845,7 @@ async function start() {
 
     try {
       await generationWorkQueue.enqueue(`public-sync:${Date.now()}:${randomHex(4)}`, 'image', async () => {
-        validateReferenceImageSources(referenceImages);
+        validateReferenceImageSources(referenceImages, modelId);
         const ratio = normalizeRatio(dimensions, modelId);
         const modelName = modelNameFromId(modelId);
         const imageSize = dedicatedPolicy
@@ -7446,7 +7447,7 @@ async function start() {
       if (unfinishedSnapshotCount >= PUBLIC_ASYNC_MAX_PENDING) {
         throw new Error(`Async generation queue is full (capacity ${PUBLIC_ASYNC_MAX_PENDING})`);
       }
-      validateReferenceImageSources(suppliedReferenceImages);
+      validateReferenceImageSources(suppliedReferenceImages, modelId);
       const remoteReferenceImages = suppliedReferenceImages.filter((item: string) => /^https:\/\//i.test(item));
       const dataReferenceImages = suppliedReferenceImages.filter((item: string) => item.startsWith('data:image/'));
       const unsupportedReferenceImages = suppliedReferenceImages.filter(
@@ -8222,8 +8223,8 @@ async function start() {
 
     let reservedUserDebit: CreditDebit | null = null;
     try {
-      validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)));
       let modelId = normalizeModelId(model);
+      validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
       let imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
