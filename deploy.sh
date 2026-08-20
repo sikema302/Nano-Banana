@@ -148,7 +148,7 @@ for var in PUBLIC_ASYNC_CONCURRENCY PUBLIC_ASYNC_MAX_PENDING \
   sed -i "/^${var}=/d" .env.local
 done
 # 异步 API 并发
-printf 'PUBLIC_ASYNC_CONCURRENCY="6"\n'    >> .env.local
+printf 'PUBLIC_ASYNC_CONCURRENCY="10"\n'   >> .env.local
 printf 'PUBLIC_ASYNC_MAX_PENDING="200"\n'  >> .env.local
 # 生图并发
 printf 'GENERATION_MAX_CONCURRENCY="10"\n'  >> .env.local
