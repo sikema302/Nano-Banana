@@ -94,7 +94,7 @@ jobs:
           sshpass -e ssh -p "$SSH_PORT" \
             -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
             "$SERVER_USER@$SERVER_HOST" \
-            "rm -f '$expected_status' /tmp/nano-banana-deploy.sh; tar -xzf '$remote_archive' -O deploy.sh > /tmp/nano-banana-deploy.sh; chmod 700 /tmp/nano-banana-deploy.sh; bash /tmp/nano-banana-deploy.sh '$remote_archive'"
+            "rm -f '$expected_status' /tmp/nano-banana-deploy.sh; tar -xzf '$remote_archive' -O ./deploy.sh > /tmp/nano-banana-deploy.sh; chmod 700 /tmp/nano-banana-deploy.sh; test -s /tmp/nano-banana-deploy.sh || { echo 'ERROR: deploy.sh extraction produced empty file'; exit 1; }; bash /tmp/nano-banana-deploy.sh '$remote_archive'"
 
           echo "=== deploy.sh exit code: $? ==="
 
