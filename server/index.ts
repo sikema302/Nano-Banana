@@ -5838,7 +5838,7 @@ async function start() {
       'grok-image': {
         imageSizes: ['1K', '2K'],
         ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
-        maxImages: 0,
+        maxImages: 3,
       },
     },
     isPrimaryEnabled: async (input) => {
