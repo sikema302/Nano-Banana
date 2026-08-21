@@ -22,6 +22,7 @@ export type ProviderRoutingConfig = {
   junliaiGeminiVeo31: boolean;
   junliaiGrokVideo: boolean;
   schatSeedance25: boolean;
+  junliaiSd2Fast: boolean;
 };
 
 export type ProviderRoutingPatch = Partial<ProviderRoutingConfig>;
@@ -36,6 +37,7 @@ type LegacyProviderRoutingConfig = {
   junliaiFireflyVideo?: unknown;
   junliaiGrokVideo?: unknown;
   schatSeedance25?: unknown;
+  junliaiSd2Fast?: unknown;
 };
 
 type RoutingStore = {
@@ -68,6 +70,7 @@ function cloneConfig(config: ProviderRoutingConfig): ProviderRoutingConfig {
     junliaiGeminiVeo31: config.junliaiGeminiVeo31,
     junliaiGrokVideo: config.junliaiGrokVideo,
     schatSeedance25: config.schatSeedance25,
+    junliaiSd2Fast: config.junliaiSd2Fast,
   };
 }
 
@@ -178,6 +181,9 @@ function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): Provi
     schatSeedance25: typeof record.schatSeedance25 === 'boolean'
       ? record.schatSeedance25
       : defaults.schatSeedance25,
+    junliaiSd2Fast: typeof record.junliaiSd2Fast === 'boolean'
+      ? record.junliaiSd2Fast
+      : defaults.junliaiSd2Fast,
   };
 }
 

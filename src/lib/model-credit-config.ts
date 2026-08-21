@@ -70,6 +70,19 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
         return [`720p:${seconds}`, Math.ceil((documentCredits / 3) * 20)];
       }),
     ),
+    'sd2.0fast': Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => {
+        const seconds = index + 4;
+        const credits = seconds * 50;
+        return [`480p:${seconds}`, credits];
+      }).concat(
+        Array.from({ length: 12 }, (_, index) => {
+          const seconds = index + 4;
+          const credits = seconds * 50;
+          return [`720p:${seconds}`, credits];
+        }),
+      ),
+    ),
   },
   updatedAt: '',
 };
@@ -119,6 +132,7 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       'gemini-veo31': normalizeVideoModel('gemini-veo31'),
       'grok-video': normalizeVideoModel('grok-video'),
       'seedance2.5': normalizeVideoModel('seedance2.5'),
+      'sd2.0fast': normalizeVideoModel('sd2.0fast'),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };

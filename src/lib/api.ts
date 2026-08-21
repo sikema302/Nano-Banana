@@ -250,6 +250,7 @@ export interface ProviderRoutingConfig {
   junliaiGeminiVeo31: boolean;
   junliaiGrokVideo: boolean;
   schatSeedance25: boolean;
+  junliaiSd2Fast: boolean;
 }
 
 export interface VisionaryDocSyncStatus {
@@ -924,12 +925,14 @@ export async function fetchGenerateImageJob(jobId: string) {
 }
 
 export async function startGenerateVideoJob(payload: {
-  modelId: 'gemini-veo31' | 'grok-video' | 'seedance2.5';
+  modelId: 'gemini-veo31' | 'grok-video' | 'seedance2.5' | 'sd2.0fast';
   prompt: string;
   ratio: '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
-  resolution: '720p' | '1080p';
+  resolution: '480p' | '720p' | '1080p';
   seconds: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29;
   referenceImages: Array<{ name: string; mimeType: string; data: string }>;
+  audioReferences?: Array<{ name: string; mimeType: string; data: string }>;
+  realPerson?: boolean;
 }) {
   return request<{ job: VideoGenerationJobInfo }>(
     '/api/generate/video/jobs',

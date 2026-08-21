@@ -1,5 +1,5 @@
-export type VideoModelId = 'gemini-veo31' | 'grok-video' | 'seedance2.5';
-export type VideoResolution = '720p' | '1080p';
+export type VideoModelId = 'gemini-veo31' | 'grok-video' | 'seedance2.5' | 'sd2.0fast';
+export type VideoResolution = '480p' | '720p' | '1080p';
 export type VideoRatio = '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
 export type VideoDurationSeconds = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29;
 
@@ -13,6 +13,14 @@ export type VideoModelConfig = {
 };
 
 export const VIDEO_GENERATION_MODELS: VideoModelConfig[] = [
+  {
+    id: 'sd2.0fast',
+    name: 'seedance 2.0 fast',
+    description: 'Seedance 2.0 Fast 视频生成，支持音频与真人效果',
+    resolutions: ['480p', '720p'],
+    ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  },
   {
     id: 'gemini-veo31',
     name: 'Gemini Veo 3.1',
@@ -42,9 +50,10 @@ export const VIDEO_GENERATION_MODELS: VideoModelConfig[] = [
 const VIDEO_CREDIT_MULTIPLIER = 10;
 
 const VIDEO_UPSTREAM_RESOLUTION_PRICES: Record<VideoModelId, Record<VideoResolution, number>> = {
-  'gemini-veo31': { '720p': 10, '1080p': 15 },
-  'grok-video': { '720p': 10, '1080p': Number.NaN },
-  'seedance2.5': { '720p': 5, '1080p': Number.NaN },
+  'gemini-veo31': { '480p': Number.NaN, '720p': 10, '1080p': 15 },
+  'grok-video': { '480p': Number.NaN, '720p': 10, '1080p': Number.NaN },
+  'seedance2.5': { '480p': Number.NaN, '720p': 5, '1080p': Number.NaN },
+  'sd2.0fast': { '480p': 0, '720p': 0, '1080p': Number.NaN },
 };
 
 const VIDEO_UPSTREAM_DURATION_PRICES: Record<VideoModelId, Partial<Record<VideoDurationSeconds, number>>> = {
@@ -54,6 +63,10 @@ const VIDEO_UPSTREAM_DURATION_PRICES: Record<VideoModelId, Partial<Record<VideoD
     4: 4, 5: 8, 6: 12, 7: 16, 8: 20, 9: 24, 10: 28, 11: 32, 12: 36,
     13: 40, 14: 44, 15: 48, 16: 52, 17: 56, 18: 60, 19: 64, 20: 68,
     21: 72, 22: 76, 23: 80, 24: 84, 25: 88, 26: 92, 27: 96, 28: 100, 29: 104,
+  },
+  'sd2.0fast': {
+    4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12,
+    13: 13, 14: 14, 15: 15,
   },
 };
 
@@ -66,6 +79,9 @@ export function getVideoGenerationCredits(
   resolution: VideoResolution,
   seconds: VideoDurationSeconds,
 ) {
+  if (modelId === 'sd2.0fast') {
+    return seconds * 50;
+  }
   const resolutionPrice = VIDEO_UPSTREAM_RESOLUTION_PRICES[modelId]?.[resolution];
   const durationPrice = VIDEO_UPSTREAM_DURATION_PRICES[modelId]?.[seconds];
   if (!Number.isFinite(resolutionPrice) || !Number.isFinite(durationPrice)) return 0;

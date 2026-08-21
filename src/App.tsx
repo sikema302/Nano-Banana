@@ -16,8 +16,9 @@ import {
   Home,
   KeyRound,
   Layers3,
-  LoaderCircle,
-  LogIn,
+	  LoaderCircle,
+	  LogIn,
+	  Music,
   LogOut,
   MessageCircle,
   Minus,
@@ -308,6 +309,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   junliaiGeminiVeo31: true,
   junliaiGrokVideo: true,
   schatSeedance25: false,
+  junliaiSd2Fast: false,
 };
 
 const providerChannelDetails: Record<string, { title: string; description: string }> = {
@@ -366,6 +368,9 @@ const emptyRecordsStats: AdminRecordsStats = {
 function getMaxReferences(modelId: string) {
   return modelId === 'Grok_Image' ? 3 : MAX_REFERENCE_IMAGES;
 }
+function getMaxReferenceMB(modelId: string) {
+  return modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+}
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 5;
 const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
@@ -406,10 +411,10 @@ const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: str
   { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
 ];
 
-function fileToBase64(file: File) {
+function fileToBase64(file: File, maxBytes = 25 * 1024 * 1024, maxMB = 25) {
 
-  if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
-    throw new Error(`“${file.name}”超过 ${MAX_REFERENCE_IMAGE_MB}MB，请压缩后再上传`);
+  if (file.size > maxBytes) {
+    throw new Error(`"${file.name}"超过 ${maxMB}MB，请压缩后再上传`);
   }
 
   return new Promise<UploadPreview>((resolve, reject) => {
@@ -441,8 +446,8 @@ async function imageToReferenceInput(image: DisplayImage): Promise<ReferenceUplo
     throw new Error('读取当前图片失败，请稍后重试');
   }
   if (!blob.type.startsWith('image/')) throw new Error('当前结果不是可编辑的图片格式');
-  if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
-    throw new Error(`当前图片超过 ${MAX_REFERENCE_IMAGE_MB}MB，暂时无法连续编辑`);
+  if (blob.size > 25 * 1024 * 1024) {
+    throw new Error(`当前图片超过 25MB，暂时无法连续编辑`);
   }
   const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
   const preview = await fileToBase64(new File([blob], `edit-source.${extension}`, { type: blob.type }));
@@ -1119,14 +1124,17 @@ function VideoCreateView({
   onCreditsChange: (creditsRemaining: number) => void;
 }) {
   const [prompt, setPrompt] = useState('');
-  const [modelId, setModelId] = useState<VideoModelId>('gemini-veo31');
+  const [modelId, setModelId] = useState<VideoModelId>('sd2.0fast');
   const [ratio, setRatio] = useState<VideoRatio>('16:9');
-  const [resolution, setResolution] = useState<VideoResolution>('1080p');
+  const [resolution, setResolution] = useState<VideoResolution>('720p');
   const [seconds, setSeconds] = useState<VideoDurationSeconds>(4);
   const modelConfig = getVideoModelConfig(modelId);
   const creditsNeeded = getConfiguredVideoCredits(modelCreditPricing, modelId, resolution, seconds);
   const availableVideoCredits = getAvailableUserCredits(user, 'general');
+  const isSd2Fast = modelId === 'sd2.0fast';
   const [references, setReferences] = useState<UploadPreview[]>([]);
+  const [audioReferences, setAudioReferences] = useState<UploadPreview[]>([]);
+  const [realPerson, setRealPerson] = useState(false);
   const [job, setJob] = useState<VideoGenerationJobInfo | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [recentVideos, setRecentVideos] = useState<string[]>([]);
@@ -1142,7 +1150,9 @@ function VideoCreateView({
     ? providerRouting.junliaiGeminiVeo31
     : candidate === 'seedance2.5'
       ? providerRouting.schatSeedance25
-      : providerRouting.junliaiGrokVideo;
+      : candidate === 'sd2.0fast'
+        ? providerRouting.junliaiSd2Fast
+        : providerRouting.junliaiGrokVideo;
 
   function selectVideoModel(nextModelId: VideoModelId) {
     const next = getVideoModelConfig(nextModelId);
@@ -1157,31 +1167,65 @@ function VideoCreateView({
     if (isVideoModelEnabled(modelId)) return;
     const next = VIDEO_GENERATION_MODELS.find((candidate) => isVideoModelEnabled(candidate.id));
     if (next) selectVideoModel(next.id);
-  }, [modelId, providerRouting.junliaiGrokVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25]);
+  }, [modelId, providerRouting.junliaiGrokVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25, providerRouting.junliaiSd2Fast]);
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const files: File[] = event.target.files ? Array.from(event.target.files) : [];
     event.target.value = '';
     setError('');
 
-    const remaining = Math.max(0, 2 - references.length);
+    const maxImages = isSd2Fast ? 9 : 2;
+    const maxMB = isSd2Fast ? 30 : 20;
+    const maxBytes = maxMB * 1024 * 1024;
+
+    const remaining = Math.max(0, maxImages - references.length);
     if (remaining === 0) {
-      setError('最多上传 2 张参考图');
+      setError(`最多上传 ${maxImages} 张参考图`);
       return;
     }
 
     const selected = files.slice(0, remaining);
-    const oversized = selected.find((file) => file.size > 20 * 1024 * 1024);
+    const oversized = selected.find((file) => file.size > maxBytes);
     if (oversized) {
-      setError(`${oversized.name} 超过 20MB，请压缩后再上传`);
+      setError(`${oversized.name} 超过 ${maxMB}MB，请压缩后再上传`);
       return;
     }
 
     try {
-      const next = await Promise.all(selected.map(fileToBase64));
-      setReferences((current) => [...current, ...next].slice(0, 2));
+      const next = await Promise.all(selected.map((file) => fileToBase64(file, maxBytes, maxMB)));
+      setReferences((current) => [...current, ...next].slice(0, maxImages));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '参考图读取失败');
+    }
+  }
+
+  async function handleAudioUpload(event: ChangeEvent<HTMLInputElement>) {
+    const files: File[] = event.target.files ? Array.from(event.target.files) : [];
+    event.target.value = '';
+    setError('');
+
+    const maxAudio = 3;
+    const maxMB = 15;
+    const maxBytes = maxMB * 1024 * 1024;
+
+    const remaining = Math.max(0, maxAudio - audioReferences.length);
+    if (remaining === 0) {
+      setError('最多上传 3 个音频文件');
+      return;
+    }
+
+    const selected = files.slice(0, remaining);
+    const oversized = selected.find((file) => file.size > maxBytes);
+    if (oversized) {
+      setError(`${oversized.name} 超过 ${maxMB}MB，请压缩后再上传`);
+      return;
+    }
+
+    try {
+      const next = await Promise.all(selected.map((file) => fileToBase64(file, maxBytes, maxMB)));
+      setAudioReferences((current) => [...current, ...next].slice(0, maxAudio));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '音频文件读取失败');
     }
   }
 
@@ -1218,6 +1262,10 @@ function VideoCreateView({
         resolution,
         seconds,
         referenceImages: references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        ...(isSd2Fast ? {
+          audioReferences: audioReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+          realPerson,
+        } : {}),
       });
       setJob(started.job);
 
@@ -1365,32 +1413,105 @@ function VideoCreateView({
             </div>
           </section>
 
-          <section className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
-              <span>参考图（最多 2 张 · 首帧/末帧 · 单张 ≤20MB）</span>
-              <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 2</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {references.length < 2 ? (
-                <label className="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
-                  <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
-                  <Plus size={20} />
-                </label>
-              ) : null}
-              {references.map((item, index) => (
-                <button
-                  key={item.id}
-                  className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-white/10"
-                  type="button"
-                  title="点击删除"
-                  onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
-                >
-                  <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
-                  <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">{index === 0 ? '首帧' : '末帧'}</span>
-                </button>
-              ))}
-            </div>
-          </section>
+          {isSd2Fast ? (
+            <label className="flex items-center gap-2 text-[11px] font-extrabold text-zinc-400">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 accent-violet-500"
+                checked={realPerson}
+                onChange={(e) => setRealPerson(e.target.checked)}
+              />
+              过真人请勾选
+            </label>
+          ) : null}
+
+          {isSd2Fast ? (
+            <section className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
+                <span>参考素材（最多12个·图片≤30MB, 视频≤50MB, 音频≤15MB）</span>
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[10px] text-zinc-500">
+                    <span>图片</span>
+                    <span>{references.length} / 9</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {references.length < 9 ? (
+                      <label className="flex h-[64px] w-[64px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
+                        <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
+                        <Plus size={18} />
+                      </label>
+                    ) : null}
+                    {references.map((item) => (
+                      <button
+                        key={item.id}
+                        className="group relative h-[64px] w-[64px] overflow-hidden rounded-xl border border-white/10"
+                        type="button"
+                        title="点击删除"
+                        onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
+                      >
+                        <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-[10px] text-zinc-500">
+                    <span>音频</span>
+                    <span>{audioReferences.length} / 3</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {audioReferences.length < 3 ? (
+                      <label className="flex h-[64px] w-[64px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
+                        <input className="hidden" type="file" accept="audio/*" multiple onChange={handleAudioUpload} />
+                        <Plus size={18} />
+                      </label>
+                    ) : null}
+                    {audioReferences.map((item) => (
+                      <button
+                        key={item.id}
+                        className="group relative flex h-[64px] w-[64px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-zinc-800/50 text-[10px] font-bold text-zinc-300"
+                        type="button"
+                        title="点击删除"
+                        onClick={() => setAudioReferences((current) => current.filter((target) => target.id !== item.id))}
+                      >
+                        <Music size={16} />
+                        <span className="absolute bottom-1 truncate px-1 text-[8px]">{item.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
+                <span>参考图（最多 2 张 · 首帧/末帧 · 单张 ≤20MB）</span>
+                <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 2</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {references.length < 2 ? (
+                  <label className="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
+                    <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
+                    <Plus size={20} />
+                  </label>
+                ) : null}
+                {references.map((item, index) => (
+                  <button
+                    key={item.id}
+                    className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-white/10"
+                    type="button"
+                    title="点击删除"
+                    onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
+                  >
+                    <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
+                    <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">{index === 0 ? '首帧' : '末帧'}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           <div className="mt-auto space-y-2">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
@@ -4066,6 +4187,7 @@ function AdminView({
                     { key: 'junliaiGeminiVeo31', title: 'Gemini Veo 3.1' },
                     { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
                     { key: 'schatSeedance25', title: 'Schat · Seedance 2.5' },
+                    { key: 'junliaiSd2Fast', title: 'seedance 2.0 fast' },
                   ] as const).map((route) => {
                     const enabled = providerRouting[route.key];
                     const updating = updatingProviderRoute === route.key;
@@ -5545,7 +5667,9 @@ export default function App() {
       return;
     }
 
-    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file)));
+    const maxRefMB = getMaxReferenceMB(selectedModel);
+    const maxRefBytes = maxRefMB * 1024 * 1024;
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, maxRefBytes, maxRefMB)));
     setReferences((current) => [...current, ...next].slice(0, getMaxReferences(selectedModel)));
   }
 
@@ -7403,7 +7527,7 @@ export default function App() {
               <section className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {getMaxReferences(selectedModel)} · 单张 ≤{MAX_REFERENCE_IMAGE_MB}MB</span>
+                  <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {getMaxReferences(selectedModel)} · 单张 ≤{getMaxReferenceMB(selectedModel)}MB</span>
                 </div>
                 <div
                   className={

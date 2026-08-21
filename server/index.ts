@@ -670,10 +670,12 @@ const IMAGE_CHANNEL_RETRY_COOLDOWN_MS = Math.max(
 const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
 const VIDEO_MODEL_GROK_ID = 'grok-video';
 const VIDEO_MODEL_SEEDANCE_25_ID = 'seedance2.5';
+const VIDEO_MODEL_SD2_FAST_ID = 'sd2.0fast';
 const VIDEO_MODEL_LABELS: Record<string, string> = {
   [VIDEO_MODEL_GEMINI_ID]: 'Gemini Veo 3.1',
   [VIDEO_MODEL_GROK_ID]: 'Grok Video',
   [VIDEO_MODEL_SEEDANCE_25_ID]: 'Seedance 2.5',
+  [VIDEO_MODEL_SD2_FAST_ID]: 'seedance 2.0 fast',
 };
 const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v3';
@@ -730,6 +732,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
   junliaiGrokVideo: JUNLIAI_PRIMARY_ENABLED,
   schatSeedance25: false,
+  junliaiSd2Fast: false,
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -4853,6 +4856,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
 
 function videoSize(ratio: string, resolution: string) {
   const sizes: Record<string, Record<string, string>> = {
+    '480p': { '21:9': '1120x480', '16:9': '854x480', '4:3': '640x480', '1:1': '480x480', '3:4': '480x640', '9:16': '480x854' },
     '720p': { '21:9': '1680x720', '16:9': '1280x720', '4:3': '960x720', '1:1': '720x720', '3:4': '720x960', '9:16': '720x1280' },
     '1080p': { '21:9': '2520x1080', '16:9': '1920x1080', '4:3': '1440x1080', '1:1': '1080x1080', '3:4': '1080x1440', '9:16': '1080x1920' },
   };
@@ -4892,8 +4896,11 @@ async function createJunliaiVideoTask(input: {
   resolution: string;
   seconds: VideoDurationSeconds;
   referenceImages: ReferenceUploadInput[];
+  audioReferences?: ReferenceUploadInput[];
+  realPerson?: boolean;
 }) {
   const isSeedance = input.modelId === VIDEO_MODEL_SEEDANCE_25_ID;
+  const isSd2Fast = input.modelId === VIDEO_MODEL_SD2_FAST_ID;
   const baseUrl = (isSeedance ? SCHAT_BASE_URL : JUNLIAI_BASE_URL).replace(/\/+$/, '');
   const apiKey = isSeedance ? SCHAT_API_KEY : JUNLIAI_API_KEY;
   const providerModel = isSeedance ? SCHAT_SEEDANCE_25_MODEL : input.modelId;
@@ -4902,26 +4909,40 @@ async function createJunliaiVideoTask(input: {
     Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
   };
   let body: BodyInit;
-  if (input.referenceImages.length > 0) {
+  const hasReferences = input.referenceImages.length > 0 || (isSd2Fast && input.audioReferences && input.audioReferences.length > 0);
+  if (hasReferences) {
     const form = new FormData();
     form.set('model', providerModel);
     form.set('prompt', input.prompt);
     form.set('seconds', String(input.seconds));
     form.set('size', videoSize(input.ratio, input.resolution));
     form.set('response_format', 'url');
-    input.referenceImages.slice(0, 2).forEach((item, index) => {
+    const maxRefImages = isSd2Fast ? 9 : 2;
+    input.referenceImages.slice(0, maxRefImages).forEach((item, index) => {
       form.append('input_reference', dataUrlBlob(item.data), item.name || `reference-${index + 1}.png`);
     });
+    if (isSd2Fast && input.audioReferences) {
+      input.audioReferences.slice(0, 3).forEach((item, index) => {
+        form.append('input_audio', dataUrlBlob(item.data), item.name || `audio-${index + 1}.mp3`);
+      });
+    }
+    if (isSd2Fast && input.realPerson) {
+      form.set('input_real_person', 'true');
+    }
     body = form;
   } else {
     headers['Content-Type'] = 'application/json';
-    body = JSON.stringify({
+    const jsonBody: Record<string, string> = {
       model: providerModel,
       prompt: input.prompt,
       seconds: String(input.seconds),
       size: videoSize(input.ratio, input.resolution),
       response_format: 'url',
-    });
+    };
+    if (isSd2Fast && input.realPerson) {
+      jsonBody.input_real_person = 'true';
+    }
+    body = JSON.stringify(jsonBody);
   }
   const response = await fetch(url, {
     method: 'POST',
@@ -5431,12 +5452,15 @@ function validateReferenceImageSources(referenceImages: string[], modelId?: stri
     throw new Error(`A maximum of ${maxCount} reference images is supported`);
   }
 
+  const maxMB = modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+  const maxBytes = maxMB * 1024 * 1024;
+
   for (const source of referenceImages) {
     const dataUrl = normalizeString(source);
     if (!dataUrl.startsWith('data:image/')) continue;
     const base64 = dataUrl.split(',', 2)[1] || '';
-    if (Buffer.from(base64, 'base64').byteLength > MAX_REFERENCE_IMAGE_BYTES) {
-      throw new Error(`Each reference image must be ${MAX_REFERENCE_IMAGE_MB} MB or smaller`);
+    if (Buffer.from(base64, 'base64').byteLength > maxBytes) {
+      throw new Error(`Each reference image must be ${maxMB} MB or smaller`);
     }
   }
 }
@@ -7891,6 +7915,8 @@ async function start() {
     modelId: VideoModelId;
     seconds: VideoDurationSeconds;
     referenceImages: ReferenceUploadInput[];
+    audioReferences?: ReferenceUploadInput[];
+    realPerson?: boolean;
     createdAt: string;
     updatedAt: string;
     completedAt?: string;
@@ -8073,14 +8099,27 @@ async function start() {
     const resolution = normalizeString(req.body?.resolution) as VideoGenerationJob['resolution'];
     const seconds = Number(req.body?.seconds) as VideoDurationSeconds;
     const rawReferences = Array.isArray(req.body?.referenceImages) ? req.body.referenceImages : [];
-    const referenceImages = rawReferences.slice(0, 2).map((item: unknown, index: number) => {
+    const isSd2Fast = modelId === VIDEO_MODEL_SD2_FAST_ID;
+    const maxRefImages = isSd2Fast ? 9 : 2;
+    const maxRefBytes = isSd2Fast ? 32_000_000 : 28_000_000;
+    const referenceImages = rawReferences.slice(0, maxRefImages).map((item: unknown, index: number) => {
       const value = asPlainObject(item);
       return {
         name: normalizeString(value.name) || `video-reference-${index + 1}.png`,
         mimeType: normalizeString(value.mimeType) || 'image/png',
         data: normalizeString(value.data),
       };
-    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:image/') && item.data.length <= 28_000_000);
+    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:image/') && item.data.length <= maxRefBytes);
+    const rawAudioReferences = isSd2Fast && Array.isArray(req.body?.audioReferences) ? req.body.audioReferences : [];
+    const audioReferences = rawAudioReferences.slice(0, 3).map((item: unknown, index: number) => {
+      const value = asPlainObject(item);
+      return {
+        name: normalizeString(value.name) || `audio-reference-${index + 1}.mp3`,
+        mimeType: normalizeString(value.mimeType) || 'audio/mpeg',
+        data: normalizeString(value.data),
+      };
+    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:audio/') && item.data.length <= 16_000_000);
+    const realPerson = isSd2Fast ? Boolean(req.body?.realPerson) : false;
     if (!prompt) {
       res.status(400).json({ error: '请输入视频提示词' });
       return;
@@ -8094,7 +8133,9 @@ async function start() {
       ? routing.junliaiGeminiVeo31
       : modelId === VIDEO_MODEL_SEEDANCE_25_ID
         ? routing.schatSeedance25
-        : routing.junliaiGrokVideo;
+        : modelId === VIDEO_MODEL_SD2_FAST_ID
+          ? routing.junliaiSd2Fast
+          : routing.junliaiGrokVideo;
     if (!routeEnabled) {
       res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
       return;
@@ -8140,6 +8181,8 @@ async function start() {
         resolution,
         seconds,
         referenceImages,
+        audioReferences: audioReferences.length > 0 ? audioReferences : undefined,
+        realPerson: realPerson || undefined,
         creditDebit: reservedDebit,
         createdAt: now,
         updatedAt: now,
@@ -9105,6 +9148,9 @@ async function start() {
       }
       if (typeof req.body?.schatSeedance25 === 'boolean') {
         patch.schatSeedance25 = req.body.schatSeedance25;
+      }
+      if (typeof req.body?.junliaiSd2Fast === 'boolean') {
+        patch.junliaiSd2Fast = req.body.junliaiSd2Fast;
       }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });

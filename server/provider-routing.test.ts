@@ -61,6 +61,7 @@ const defaults: ProviderRoutingConfig = {
   junliaiGeminiVeo31: true,
   junliaiGrokVideo: true,
   schatSeedance25: true,
+  junliaiSd2Fast: false,
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
