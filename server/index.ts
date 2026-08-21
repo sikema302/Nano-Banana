@@ -639,6 +639,7 @@ const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANAN
 const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || '即梦seedream 4');
 const GROK_IMAGE_MODEL = 'grok-image';
 const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
+const SCHAT_SEEDANCE_2_FAST_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_2_FAST_MODEL || 'sd2.0fast（可音频，过真人）');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 // Previous Chat2API primary integration is intentionally disabled:
 // CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
@@ -4901,9 +4902,14 @@ async function createJunliaiVideoTask(input: {
 }) {
   const isSeedance = input.modelId === VIDEO_MODEL_SEEDANCE_25_ID;
   const isSd2Fast = input.modelId === VIDEO_MODEL_SD2_FAST_ID;
-  const baseUrl = (isSeedance ? SCHAT_BASE_URL : JUNLIAI_BASE_URL).replace(/\/+$/, '');
-  const apiKey = isSeedance ? SCHAT_API_KEY : JUNLIAI_API_KEY;
-  const providerModel = isSeedance ? SCHAT_SEEDANCE_25_MODEL : input.modelId;
+  const useSchat = isSeedance || isSd2Fast;
+  const baseUrl = (useSchat ? SCHAT_BASE_URL : JUNLIAI_BASE_URL).replace(/\/+$/, '');
+  const apiKey = useSchat ? SCHAT_API_KEY : JUNLIAI_API_KEY;
+  const providerModel = isSd2Fast
+    ? SCHAT_SEEDANCE_2_FAST_MODEL
+    : isSeedance
+      ? SCHAT_SEEDANCE_25_MODEL
+      : input.modelId;
   const url = `${baseUrl}/videos`;
   const headers: Record<string, string> = {
     Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
@@ -7965,7 +7971,7 @@ async function start() {
       try {
         const requestId = await recordGenerationRequest({
           modelId,
-          provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
+          provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
           configuration: metricConfiguration,
           durationMs,
           success,
@@ -8045,7 +8051,7 @@ async function start() {
       }
       void providerMetrics?.record({
         modelId: job.modelId,
-        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
+        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
         configuration: metricConfiguration,
         durationMs: apiRequestMs,
         success: true,
@@ -8076,7 +8082,7 @@ async function start() {
       );
       void providerMetrics?.record({
         modelId: job.modelId,
-        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID ? 'Schat' : 'Junliai',
+        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
         configuration: metricConfiguration,
         durationMs,
         success: false,
@@ -8140,7 +8146,7 @@ async function start() {
       res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
       return;
     }
-    const videoApiKey = modelId === VIDEO_MODEL_SEEDANCE_25_ID ? SCHAT_API_KEY : JUNLIAI_API_KEY;
+    const videoApiKey = (modelId === VIDEO_MODEL_SEEDANCE_25_ID || modelId === VIDEO_MODEL_SD2_FAST_ID) ? SCHAT_API_KEY : JUNLIAI_API_KEY;
     if (!videoApiKey) {
       res.status(503).json({ error: '视频生成接口尚未配置' });
       return;
