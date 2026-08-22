@@ -18,6 +18,7 @@ import WebSocket from 'ws';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
 import { startSqliteBackupScheduler } from './sqlite-backup.js';
+import { uploadLatestBackupToR2 } from './r2-backup.js';
 import {
   ADMIN_OVERVIEW_RECORDS_SQL,
   ADMIN_USERS_SQL,
@@ -5910,6 +5911,14 @@ async function start() {
       backupDir: path.join(DATA_DIR, 'sqlite-backups'),
       label: 'daily',
       retentionCount: 14,
+      onBackup: async () => {
+        await uploadLatestBackupToR2({
+          backupDir: path.join(DATA_DIR, 'sqlite-backups'),
+          bucketPrefix: process.env.R2_BACKUP_PREFIX || 'backups/sqlite',
+          label: 'daily',
+          retentionCount: Math.floor(boundedEnvNumber('R2_BACKUP_RETENTION_COUNT', 30, 1, 1_000)),
+        });
+      },
     });
   }
 
@@ -9292,6 +9301,60 @@ async function start() {
       res.json(payload);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch admin dashboard failed' });
+    }
+  });
+
+  app.get('/api/admin/generation-ranking', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const rankings = await db.getGenerationRankings();
+        res.json(rankings);
+        return;
+      }
+
+      const rankings = await withReadDb((db) => {
+        ensureSchema(db);
+        const todayKey = formatDateKeyInTimeZone(new Date());
+        const todayRows = runQuery<Record<string, unknown>>(
+          db,
+          "SELECT user_id, username, credits_used, created_at FROM generations WHERE username != 'demo'",
+        );
+        const todayMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
+        const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
+
+        for (const row of todayRows) {
+          const userId = String(row.user_id || '');
+          const username = String(row.username || '');
+          const credits = Number(row.credits_used || 0);
+          const createdAt = String(row.created_at || '');
+
+          const total = totalMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+          total.generationCount += 1;
+          total.creditsUsed += credits;
+          totalMap.set(userId, total);
+
+          if (formatDateKeyInTimeZone(createdAt) === todayKey) {
+            const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+            today.generationCount += 1;
+            today.creditsUsed += credits;
+            todayMap.set(userId, today);
+          }
+        }
+
+        return {
+          today: [...todayMap.values()]
+            .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
+            .slice(0, 10),
+          total: [...totalMap.values()]
+            .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
+            .slice(0, 10),
+        };
+      });
+
+      res.json(rankings);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch generation ranking failed' });
     }
   });
 

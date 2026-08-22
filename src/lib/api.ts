@@ -206,6 +206,18 @@ export interface AdminDashboardStats {
   usedInviteCodeCount: number;
 }
 
+export interface AdminGenerationRankingEntry {
+  userId: string;
+  username: string;
+  generationCount: number;
+  creditsUsed: number;
+}
+
+export interface AdminGenerationRanking {
+  today: AdminGenerationRankingEntry[];
+  total: AdminGenerationRankingEntry[];
+}
+
 export interface ProviderMetricRow {
   modelId: string;
   provider: string;
@@ -251,46 +263,6 @@ export interface ProviderRoutingConfig {
   junliaiGrokVideo: boolean;
   schatSeedance25: boolean;
   junliaiSd2Fast: boolean;
-}
-
-export interface VisionaryDocSyncStatus {
-  lastAttemptAt: string;
-  lastCheckedAt: string;
-  nextCheckAt: string;
-  documentChangedAt: string;
-  pricingChangedAt: string;
-  reviewRequired: boolean;
-  lastError: string;
-  pricing: GptImagePricing;
-}
-
-export interface AdminImageStorageStats {
-  uploadsTotalBytes: number;
-  generatedBytes: number;
-  generatedCount: number;
-  thumbnailBytes: number;
-  thumbnailCount: number;
-  referenceBytes: number;
-  referenceCount: number;
-  referenceStorageEnabled: boolean;
-  retentionDays: number;
-  originalRetentionDays: number;
-  thumbnailRetentionDays: number;
-  diskUsagePercent: number;
-  diskWarningPercent: number;
-  diskEmergencyPercent: number;
-}
-
-export interface AdminImageCleanupResult {
-  retentionDays: number;
-  cutoffIso: string;
-  deletedGenerations: number;
-  deletedImages: number;
-  deletedReferenceFiles: number;
-  deletedGeneratedFiles: number;
-  deletedThumbnailFiles: number;
-  deletedEmergencyFiles: number;
-  diskUsagePercent: number;
 }
 
 export interface AdminRecordsStats {
@@ -998,10 +970,12 @@ export async function fetchAdminDashboard() {
     providerMetrics: ProviderMetricRow[];
     providerRisks: ProviderRiskRecord[];
     providerRouting: ProviderRoutingConfig;
-    imageStorage: AdminImageStorageStats;
     adminCredits: CreditSummary;
-    visionaryDocSync: VisionaryDocSyncStatus;
   }>('/api/admin/dashboard', {}, true);
+}
+
+export async function fetchAdminGenerationRanking() {
+  return request<AdminGenerationRanking>('/api/admin/generation-ranking', {}, true);
 }
 
 export async function updateAdminProviderRouting(patch: Partial<ProviderRoutingConfig>) {
@@ -1058,20 +1032,6 @@ export async function startAdminDeploy(message?: string) {
   return request<{ operation: AdminAutomationOperation }>(
     '/api/admin/automation/deploy',
     { method: 'POST', body: JSON.stringify({ message }) },
-    true,
-  );
-}
-
-export async function cleanupAdminImages(retentionDays = 2) {
-  return request<{
-    cleanup: AdminImageCleanupResult;
-    imageStorage: AdminImageStorageStats;
-  }>(
-    '/api/admin/image-cleanup',
-    {
-      method: 'POST',
-      body: JSON.stringify({ retentionDays }),
-    },
     true,
   );
 }

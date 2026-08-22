@@ -18,6 +18,7 @@ type CreateSqliteBackupOptions = {
 type SqliteBackupSchedulerOptions = CreateSqliteBackupOptions & {
   intervalHours?: number;
   startupMaxAgeHours?: number;
+  onBackup?: (filePath: string) => Promise<void> | void;
 };
 
 function positiveInteger(value: unknown, fallback: number) {
@@ -142,16 +143,24 @@ export function startSqliteBackupScheduler(options: SqliteBackupSchedulerOptions
     6,
   );
   const intervalMs = intervalHours * 60 * 60 * 1_000;
-  let backupRun: Promise<unknown> | null = null;
+  let backupRun: Promise<Awaited<ReturnType<typeof createEncryptedSqliteBackup>>> | null = null;
 
   const run = async (force: boolean) => {
     if (!force && (await latestBackupAgeMs(backupDir, label)) < startupMaxAgeHours * 60 * 60 * 1_000) return;
-    if (backupRun) return backupRun;
-    backupRun = createEncryptedSqliteBackup({ ...options, backupDir, label }).finally(() => {
-      backupRun = null;
-    });
-    const result = await backupRun;
-    console.log('SQLite backup completed:', result);
+    if (backupRun) return backupRun.then(() => undefined);
+    const started = createEncryptedSqliteBackup({ ...options, backupDir, label });
+    backupRun = started;
+    try {
+      const result = await started;
+      console.log('SQLite backup completed:', result);
+      try {
+        await options.onBackup?.(result.filePath);
+      } catch (error) {
+        console.error('SQLite backup post-step failed:', error);
+      }
+    } finally {
+      if (backupRun === started) backupRun = null;
+    }
   };
 
   void run(false).catch((error) => console.error('SQLite backup failed:', error));

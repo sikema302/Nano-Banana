@@ -35,7 +35,6 @@ import {
 } from 'lucide-react';
 import {
   clearSession,
-  cleanupAdminImages,
   createAdminNotification,
   createPublicApiKey,
   createUserApiKey,
@@ -50,6 +49,7 @@ import {
   deductPublicApiKeyCredits,
   deductAdminUserCredits,
   fetchAdminDashboard,
+  fetchAdminGenerationRanking,
   fetchAdminNotifications,
   fetchAdminInviteCodes,
   fetchAdminOverview,
@@ -98,7 +98,7 @@ import {
   startGenerateImageJob,
   startGenerateVideoJob,
   type AdminDashboardStats,
-  type AdminImageStorageStats,
+  type AdminGenerationRanking,
   type AdminRecordsStats,
   type AdminUserSummary,
   type CreditSummary,
@@ -123,7 +123,6 @@ import {
   type SiteNotification,
   type UserInfo,
   type UserApiKeyInfo,
-  type VisionaryDocSyncStatus,
   type AdminAutomationOperation,
 } from './lib/api';
 import {
@@ -232,11 +231,10 @@ interface AdminOverviewState {
   dashboardStats: AdminDashboardStats;
   providerMetrics: ProviderMetricRow[];
   providerRisks: ProviderRiskRecord[];
-  imageStorageStats: AdminImageStorageStats;
+  generationRanking: AdminGenerationRanking;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
   recordResolutionOptions: string[];
-  visionaryDocSync: VisionaryDocSyncStatus | null;
 }
 
 const emptyPage: PaginationInfo = {
@@ -339,23 +337,6 @@ function isImageResolutionEnabled(
         : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
-
-const emptyImageStorageStats: AdminImageStorageStats = {
-  uploadsTotalBytes: 0,
-  generatedBytes: 0,
-  generatedCount: 0,
-  thumbnailBytes: 0,
-  thumbnailCount: 0,
-  referenceBytes: 0,
-  referenceCount: 0,
-  referenceStorageEnabled: false,
-  retentionDays: 2,
-  originalRetentionDays: 2,
-  thumbnailRetentionDays: 2,
-  diskUsagePercent: 0,
-  diskWarningPercent: 70,
-  diskEmergencyPercent: 85,
-};
 
 const emptyRecordsStats: AdminRecordsStats = {
   todayCreditsUsed: 0,
@@ -547,14 +528,6 @@ function formatHourKey(value: string | Date) {
     hour12: false,
   });
   return formatter.format(date);
-}
-
-function formatStorageSize(value: number) {
-  const size = Number.isFinite(value) ? Math.max(0, value) : 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size >= 10 * 1024 ? 0 : 1)} KB`;
-  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
-  return `${(size / (1024 * 1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GB`;
 }
 
 function formatCouponTime(value: string) {
@@ -3275,10 +3248,9 @@ function AdminView({
   dashboardStats,
   providerMetrics,
   providerRisks,
+  generationRanking,
   providerRouting,
   modelCreditPricing,
-  visionaryDocSync,
-  imageStorageStats,
   recordsStats,
   recordModelOptions,
   recordResolutionOptions,
@@ -3292,7 +3264,6 @@ function AdminView({
   onRechargeUser,
   onDeductUser,
   onDeleteUser,
-  onCleanupImages,
   onUpdateProviderRouting,
   onUpdateModelCreditPricing,
   onLoadSection,
@@ -3309,10 +3280,9 @@ function AdminView({
   dashboardStats: AdminDashboardStats;
   providerMetrics: ProviderMetricRow[];
   providerRisks: ProviderRiskRecord[];
+  generationRanking: AdminGenerationRanking;
   providerRouting: ProviderRoutingConfig;
   modelCreditPricing: ModelCreditPricing;
-  visionaryDocSync: VisionaryDocSyncStatus | null;
-  imageStorageStats: AdminImageStorageStats;
   recordsStats: AdminRecordsStats;
   recordModelOptions: string[];
   recordResolutionOptions: string[];
@@ -3329,7 +3299,6 @@ function AdminView({
   onRechargeUser: (user: AdminUserSummary, credits: CreditBalances) => Promise<void>;
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
-  onCleanupImages: (retentionDays: number) => Promise<void>;
   onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice: string) => Promise<void>;
   onUpdateModelCreditPricing: (pricing: ModelCreditPricing) => Promise<void>;
   onLoadSection: (
@@ -3380,7 +3349,6 @@ function AdminView({
   const [generatedInviteCodes, setGeneratedInviteCodes] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedInviteCodes, setSelectedInviteCodes] = useState<string[]>([]);
-  const [cleaningImages, setCleaningImages] = useState<number | null>(null);
   const [updatingProviderRoute, setUpdatingProviderRoute] = useState<string | null>(null);
   const [inviteStatusFilter, setInviteStatusFilter] = useState<InviteStatusFilter>('all');
   const [inviteSortMode, setInviteSortMode] = useState<InviteSortMode>('created-desc');
@@ -3408,10 +3376,6 @@ function AdminView({
     : records.filter((item) => formatDateKey(item.createdAt) === todayKey);
   const lowCreditUsers = users.filter((item) => item.remainingCredits <= 50);
   const dashboardTodayRecordCount = dashboardStats.todayRecordCount || todayRecords.length;
-  const dashboardLowCreditUserCount = dashboardStats.lowCreditUserCount || lowCreditUsers.length;
-  const dashboardUserCount = dashboardStats.userCount || usersPage.total || users.length;
-  const dashboardInviteCodeCount = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
-  const dashboardRecordCount = dashboardStats.recordCount || recordsPage.total || records.length;
   const todayCreditsUsed = dashboardStats.todayCreditsUsed || todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
   const totalInviteCodes = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
   const usedInviteCodes = dashboardStats.usedInviteCodeCount || inviteCodes.filter((item) => Boolean(item.redeemedBy)).length;
@@ -3837,22 +3801,6 @@ function AdminView({
     }
   }
 
-  async function handleCleanupImages(retentionDays: 0.5 | 2) {
-    if (cleaningImages !== null) return;
-    const retentionLabel = retentionDays === 0.5 ? '12小时前' : '2天前';
-    const confirmed = window.confirm(`确认清理 ${retentionLabel}的本地图片和相关图片记录吗？`);
-    if (!confirmed) return;
-
-    setCleaningImages(retentionDays);
-    try {
-      await onCleanupImages(retentionDays);
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : '图片清理失败');
-    } finally {
-      setCleaningImages(null);
-    }
-  }
-
   async function handleBulkDeleteInviteCodes() {
     const availableCodes = selectedInviteCodes.filter((code) => inviteCodes.some((item) => item.code === code));
 
@@ -3996,6 +3944,70 @@ function AdminView({
                   <p className="mt-2 text-xs text-zinc-500">{card.hint}</p>
                 </div>
               ))}
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <h2 className="text-base font-black text-white">今日生图数量排名</h2>
+                <p className="mt-1 text-xs text-zinc-500">仅按生图数量排序，积分仅供参考、不计入排名</p>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-white/[0.04] text-zinc-500">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">排名</th>
+                        <th className="px-3 py-2 font-bold">用户</th>
+                        <th className="px-3 py-2 text-right font-bold">生图数量</th>
+                        <th className="px-3 py-2 text-right font-bold">消耗积分</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/8">
+                      {generationRanking.today.map((item, index) => (
+                        <tr key={item.userId} className="text-zinc-300">
+                          <td className="px-3 py-2.5 font-black text-white">{index + 1}</td>
+                          <td className="px-3 py-2.5">{item.username}</td>
+                          <td className="px-3 py-2.5 text-right font-black text-white">{item.generationCount}</td>
+                          <td className="px-3 py-2.5 text-right text-amber-200">{item.creditsUsed}</td>
+                        </tr>
+                      ))}
+                      {generationRanking.today.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-zinc-500" colSpan={4}>今日暂无数据</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
+                <h2 className="text-base font-black text-white">总生图数量排名</h2>
+                <p className="mt-1 text-xs text-zinc-500">全量累计，仅按生图数量排序</p>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-white/[0.04] text-zinc-500">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">排名</th>
+                        <th className="px-3 py-2 font-bold">用户</th>
+                        <th className="px-3 py-2 text-right font-bold">生图数量</th>
+                        <th className="px-3 py-2 text-right font-bold">消耗积分</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/8">
+                      {generationRanking.total.map((item, index) => (
+                        <tr key={item.userId} className="text-zinc-300">
+                          <td className="px-3 py-2.5 font-black text-white">{index + 1}</td>
+                          <td className="px-3 py-2.5">{item.username}</td>
+                          <td className="px-3 py-2.5 text-right font-black text-white">{item.generationCount}</td>
+                          <td className="px-3 py-2.5 text-right text-amber-200">{item.creditsUsed}</td>
+                        </tr>
+                      ))}
+                      {generationRanking.total.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-zinc-500" colSpan={4}>暂无数据</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
             <div className="rounded-[22px] border border-amber-300/15 bg-amber-500/[0.04] p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4360,128 +4372,6 @@ function AdminView({
                     {providerRisks.length === 0 ? <tr><td className="px-4 py-8 text-center text-zinc-500" colSpan={5}>{'\u4eca\u65e5\u6682\u65e0\u53ef\u6838\u5bf9\u7684\u4e0a\u6e38\u8c03\u7528'}</td></tr> : null}
                   </tbody>
                 </table>
-              </div>
-            </div>
-            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
-              <h2 className="text-base font-black text-white">数据概览</h2>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">用户总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{dashboardUserCount}</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">邀请码总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{dashboardInviteCodeCount}</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">生图记录总数</p>
-                  <p className="mt-2 text-2xl font-black text-white">{dashboardRecordCount}</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">低积分提醒</p>
-                  <p className="mt-2 text-2xl font-black text-amber-200">{dashboardLowCreditUserCount}</p>
-                </div>
-              </div>
-            </div>
-            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-black text-white">Visionary 文档同步</h2>
-                  <p className="mt-1 text-xs text-zinc-500">每 3 天自动校验计费配置和 API 文档变化。</p>
-                </div>
-                <span className={`rounded-full border px-3 py-1 text-xs font-bold ${visionaryDocSync?.lastError || visionaryDocSync?.reviewRequired ? 'border-amber-400/30 bg-amber-500/10 text-amber-100' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'}`}>
-                  {visionaryDocSync?.lastError ? '同步失败' : visionaryDocSync?.reviewRequired ? '文档变化待确认' : '同步正常'}
-                </span>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">上次检查</p>
-                  <p className="mt-2 text-sm font-black text-white">{visionaryDocSync?.lastCheckedAt ? new Date(visionaryDocSync.lastCheckedAt).toLocaleString('zh-CN') : '等待首次检查'}</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">下次检查</p>
-                  <p className="mt-2 text-sm font-black text-white">{visionaryDocSync?.nextCheckAt ? new Date(visionaryDocSync.nextCheckAt).toLocaleString('zh-CN') : '--'}</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">当前 Image2 计费</p>
-                  <p className="mt-2 text-sm font-black text-sky-200">
-                    {visionaryDocSync ? `2K ${visionaryDocSync.pricing.twoK}/${visionaryDocSync.pricing.twoKHigh} · 4K ${visionaryDocSync.pricing.fourK}/${visionaryDocSync.pricing.fourKHigh}` : '--'}
-                  </p>
-                </div>
-              </div>
-              {visionaryDocSync?.lastError ? <p className="mt-3 text-xs text-amber-200">{visionaryDocSync.lastError}</p> : null}
-            </div>
-            <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-black text-white">图片占用统计</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    原图保留 {imageStorageStats.originalRetentionDays} 天，缩略图和记录保留 {imageStorageStats.thumbnailRetentionDays} 天，参考图任务结束立即删除。
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    type="button"
-                    disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(2)}
-                  >
-                    {cleaningImages === 2 ? '清理中...' : '清理2天前图片'}
-                  </button>
-                  <button
-                    className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    type="button"
-                    disabled={cleaningImages !== null}
-                    onClick={() => void handleCleanupImages(0.5)}
-                  >
-                    {cleaningImages === 0.5 ? '清理中...' : '清理12小时前的图片'}
-                  </button>
-                </div>
-                <span
-                  className={
-                    imageStorageStats.referenceStorageEnabled
-                      ? 'rounded-full border border-amber-400/25 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-200'
-                      : 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200'
-                  }
-                >
-                  {imageStorageStats.referenceStorageEnabled ? '参考图本地存储：已开启' : '参考图本地存储：已关闭'}
-                </span>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">总占用</p>
-                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.uploadsTotalBytes)}</p>
-                  <p className="mt-2 text-xs text-zinc-500">
-                    共 {imageStorageStats.generatedCount + imageStorageStats.thumbnailCount + imageStorageStats.referenceCount} 个本地文件
-                  </p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">生成图占用</p>
-                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.generatedBytes)}</p>
-                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.generatedCount} 张图片</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">缩略图占用</p>
-                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.thumbnailBytes)}</p>
-                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.thumbnailCount} 张缩略图</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">磁盘使用率</p>
-                  <p className={`mt-2 text-2xl font-black ${imageStorageStats.diskUsagePercent >= imageStorageStats.diskEmergencyPercent ? 'text-rose-300' : imageStorageStats.diskUsagePercent >= imageStorageStats.diskWarningPercent ? 'text-amber-300' : 'text-emerald-200'}`}>
-                    {imageStorageStats.diskUsagePercent.toFixed(1)}%
-                  </p>
-                  <p className="mt-2 text-xs text-zinc-500">70% 告警，85% 自动清理最旧原图</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">参考图占用</p>
-                  <p className="mt-2 text-2xl font-black text-white">{formatStorageSize(imageStorageStats.referenceBytes)}</p>
-                  <p className="mt-2 text-xs text-zinc-500">{imageStorageStats.referenceCount} 张图片</p>
-                </div>
-                <div className="rounded-[18px] border border-white/8 bg-white/[0.03] p-4">
-                  <p className="text-xs text-zinc-500">清理策略</p>
-                  <p className="mt-2 text-lg font-black text-sky-100">{imageStorageStats.originalRetentionDays} 天原图 / {imageStorageStats.thumbnailRetentionDays} 天缩略图</p>
-                  <p className="mt-2 text-xs text-zinc-500">缩略图用于列表，打开和下载使用有效期内的原图。</p>
-                </div>
               </div>
             </div>
             </>
@@ -5281,11 +5171,10 @@ export default function App() {
     dashboardStats: emptyDashboardStats,
     providerMetrics: [],
     providerRisks: [],
-    imageStorageStats: emptyImageStorageStats,
+    generationRanking: { today: [], total: [] },
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
     recordResolutionOptions: [],
-    visionaryDocSync: null,
   });
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
     if (typeof window === 'undefined') return 'home';
@@ -5877,16 +5766,18 @@ export default function App() {
       }
 
       if (section === 'dashboard') {
-        const payload = await fetchAdminDashboard();
+        const [payload, rankingPayload] = await Promise.all([
+          fetchAdminDashboard(),
+          fetchAdminGenerationRanking().catch(() => null),
+        ]);
         setProviderRouting(payload.providerRouting || defaultProviderRouting);
         setAdminOverview((current) => ({
           ...current,
           dashboardStats: payload.stats,
           providerMetrics: payload.providerMetrics || [],
           providerRisks: payload.providerRisks || [],
-          imageStorageStats: payload.imageStorage,
           adminCredits: payload.adminCredits,
-          visionaryDocSync: payload.visionaryDocSync,
+          generationRanking: rankingPayload || { today: [], total: [] },
         }));
         return;
       }
@@ -6138,20 +6029,6 @@ export default function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '邀请码积分回收失败');
     }
-  }
-
-  async function handleCleanupImages(retentionDays: number) {
-    const payload = await cleanupAdminImages(retentionDays);
-    setAdminOverview((current) => ({
-      ...current,
-      imageStorageStats: payload.imageStorage,
-    }));
-    const cleanup = payload.cleanup;
-    const retentionLabel = cleanup.retentionDays === 0.5 ? '12小时前' : `${cleanup.retentionDays}天前`;
-    setNotice(
-      `已清理${retentionLabel}图片：生图记录 ${cleanup.deletedGenerations} 条，图片记录 ${cleanup.deletedImages} 条，本地生成图 ${cleanup.deletedGeneratedFiles} 张，参考图 ${cleanup.deletedReferenceFiles} 张。`,
-    );
-    void loadAdminSection('dashboard');
   }
 
   async function handleUpdateProviderRouting(
@@ -6930,11 +6807,10 @@ export default function App() {
       dashboardStats: emptyDashboardStats,
       providerMetrics: [],
       providerRisks: [],
-      imageStorageStats: emptyImageStorageStats,
+      generationRanking: { today: [], total: [] },
       recordsStats: emptyRecordsStats,
       recordModelOptions: [],
       recordResolutionOptions: [],
-      visionaryDocSync: null,
     });
     setActiveTab('create');
     setCurrentImage(null);
@@ -7916,10 +7792,9 @@ export default function App() {
               dashboardStats={adminOverview.dashboardStats}
               providerMetrics={adminOverview.providerMetrics}
               providerRisks={adminOverview.providerRisks}
+              generationRanking={adminOverview.generationRanking}
               providerRouting={providerRouting}
               modelCreditPricing={modelCreditPricing}
-              visionaryDocSync={adminOverview.visionaryDocSync}
-              imageStorageStats={adminOverview.imageStorageStats}
               recordsStats={adminOverview.recordsStats}
               recordModelOptions={adminOverview.recordModelOptions}
               recordResolutionOptions={adminOverview.recordResolutionOptions}
@@ -7933,7 +7808,6 @@ export default function App() {
               onRechargeUser={handleRechargeUserCredits}
               onDeductUser={handleDeductUserCredits}
               onDeleteUser={handleDeleteAdminUser}
-              onCleanupImages={handleCleanupImages}
               onUpdateProviderRouting={handleUpdateProviderRouting}
               onUpdateModelCreditPricing={handleUpdateModelCreditPricing}
               onLoadSection={loadAdminSection}

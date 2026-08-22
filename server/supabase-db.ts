@@ -1346,6 +1346,87 @@ export async function getAdminDashboardCounts(): Promise<{
   };
 }
 
+export type GenerationRankingEntry = {
+  userId: string;
+  username: string;
+  generationCount: number;
+  creditsUsed: number;
+};
+
+function formatRankingDateKeyInTimeZone(value: string | Date, timeZone = 'Asia/Shanghai') {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((item) => item.type === 'year')?.value || '0000';
+  const month = parts.find((item) => item.type === 'month')?.value || '00';
+  const day = parts.find((item) => item.type === 'day')?.value || '00';
+  return `${year}-${month}-${day}`;
+}
+
+export async function getGenerationRankings(): Promise<{
+  today: GenerationRankingEntry[];
+  total: GenerationRankingEntry[];
+}> {
+  const todayKey = formatRankingDateKeyInTimeZone(new Date());
+  const todayMap = new Map<string, GenerationRankingEntry>();
+  const totalMap = new Map<string, GenerationRankingEntry>();
+  const pageSize = 1000;
+
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await getSupabase()
+      .from('generations')
+      .select('user_id, username, credits_used, created_at')
+      .neq('username', 'demo')
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) break;
+
+    const page = (data || []) as Array<{
+      user_id: string | number;
+      username: string;
+      credits_used: number;
+      created_at: string;
+    }>;
+    if (page.length === 0) break;
+
+    for (const row of page) {
+      const userId = normalizeSupabaseId(row.user_id);
+      if (!userId) continue;
+      const username = String(row.username || '');
+      const credits = Number(row.credits_used || 0);
+      const createdAt = String(row.created_at || '');
+
+      const total = totalMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+      total.generationCount += 1;
+      total.creditsUsed += credits;
+      totalMap.set(userId, total);
+
+      if (formatRankingDateKeyInTimeZone(createdAt) === todayKey) {
+        const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+        today.generationCount += 1;
+        today.creditsUsed += credits;
+        todayMap.set(userId, today);
+      }
+    }
+
+    if (page.length < pageSize) break;
+  }
+
+  const today = [...todayMap.values()]
+    .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
+    .slice(0, 10);
+  const total = [...totalMap.values()]
+    .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
+    .slice(0, 10);
+
+  return { today, total };
+}
+
 export async function getGenerationStatsRows(
   options: GenerationFilterOptions = {},
 ): Promise<{ rows: GenerationStatRow[]; total: number }> {
