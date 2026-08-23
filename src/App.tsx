@@ -310,18 +310,6 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   junliaiSd2Fast: false,
 };
 
-const providerChannelDetails: Record<string, { title: string; description: string }> = {
-  'junliai-economy': { title: 'Junli · GPT Image 2 低价', description: '适用于 Image2 1K / STANDARD' },
-  'junliai-firefly': { title: 'Junli · Firefly GPT Image 2', description: '适用于 Image2 1K / 2K / 4K' },
-  visionary: { title: 'Visionary', description: '按当前模型与分辨率选择对应线路' },
-  flux: { title: 'Flux', description: '1K / 2K 固定 Flash；4K Pro' },
-  junliai: { title: 'Junli · Nano Banana Pro', description: '使用既有 Nano Banana Pro 线路' },
-  'junliai-nano-banana-2': { title: 'Junli · Nano Banana 2', description: '用于 Banana 1K / 2K' },
-  'schat-gpt-image-2': { title: 'Schat · GPT Image 2', description: '兼容现有 Image2 参数与分辨率' },
-  'schat-nano-banana-2': { title: 'Schat · Nano Banana 2', description: '用于 Banana 1K' },
-  'schat-seedream-4': { title: 'Schat · Seedream 4', description: '用于 Seedream 2K / 4K' },
-};
-
 function isImageResolutionEnabled(
   routing: ProviderRoutingConfig,
   modelId: string,
@@ -3299,7 +3287,7 @@ function AdminView({
   onRechargeUser: (user: AdminUserSummary, credits: CreditBalances) => Promise<void>;
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
-  onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice: string) => Promise<void>;
+  onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice?: string) => Promise<void>;
   onUpdateModelCreditPricing: (pricing: ModelCreditPricing) => Promise<void>;
   onLoadSection: (
     section: AdminSection,
@@ -4088,10 +4076,7 @@ function AdminView({
                             </div>
                             <div className="space-y-2">
                               {channels.map((channel, index) => {
-                                const details = providerChannelDetails[channel.id] || {
-                                  title: channel.id,
-                                  description: '',
-                                };
+                                const routeLabel = `备用渠道 ${index + 1}`;
                                 const routeKey = `${group.key}:${resolution}:${channel.id}`;
                                 const updating = updatingProviderRoute === routeKey;
                                 const saveChannels = async (
@@ -4125,13 +4110,12 @@ function AdminView({
                                       {index + 1}
                                     </span>
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-xs font-bold text-white">{details.title}</div>
-                                      <div className="mt-0.5 truncate text-[10px] text-zinc-500">{details.description}</div>
+                                      <div className="truncate text-xs font-bold text-white">{routeLabel}</div>
                                     </div>
                                     <div className="flex flex-none items-center gap-1">
                                       <button
                                         type="button"
-                                        aria-label={`${details.title} 上移`}
+                                        aria-label={`${routeLabel} 上移`}
                                         disabled={index === 0 || updatingProviderRoute !== null}
                                         className="rounded-md p-1 text-zinc-500 transition hover:bg-white/8 hover:text-white disabled:opacity-25"
                                         onClick={() => {
@@ -4144,7 +4128,7 @@ function AdminView({
                                       </button>
                                       <button
                                         type="button"
-                                        aria-label={`${details.title} 下移`}
+                                        aria-label={`${routeLabel} 下移`}
                                         disabled={index === channels.length - 1 || updatingProviderRoute !== null}
                                         className="rounded-md p-1 text-zinc-500 transition hover:bg-white/8 hover:text-white disabled:opacity-25"
                                         onClick={() => {
@@ -4158,7 +4142,7 @@ function AdminView({
                                       <button
                                         type="button"
                                         role="switch"
-                                        aria-label={`${details.title} ${channel.enabled ? '停用' : '启用'}`}
+                                        aria-label={`${routeLabel} ${channel.enabled ? '停用' : '启用'}`}
                                         aria-checked={channel.enabled}
                                         disabled={updatingProviderRoute !== null}
                                         className={`relative ml-1 h-6 w-10 rounded-full border transition ${
@@ -4172,7 +4156,7 @@ function AdminView({
                                             : { ...item });
                                           void saveChannels(
                                             next,
-                                            `${details.title} 已${channel.enabled ? '停用' : '启用'}（${group.title} ${resolution}）`,
+                                            `${routeLabel} 已${channel.enabled ? '停用' : '启用'}`,
                                           );
                                         }}
                                       >
@@ -4200,13 +4184,13 @@ function AdminView({
                     { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
                     { key: 'schatSeedance25', title: 'Schat · Seedance 2.5' },
                     { key: 'junliaiSd2Fast', title: 'seedance 2.0 fast' },
-                  ] as const).map((route) => {
+                  ] as const).map((route, index) => {
                     const enabled = providerRouting[route.key];
                     const updating = updatingProviderRoute === route.key;
                     return (
                       <article key={route.key} className="flex items-center justify-between rounded-[16px] border border-white/8 bg-black/25 p-3">
                         <div>
-                          <div className="text-xs font-bold text-white">{route.title}</div>
+                          <div className="text-xs font-bold text-white">{`视频接口 ${index + 1}`}</div>
                           <div className="mt-1 text-[10px] text-zinc-500">{enabled ? '已启用' : '已停用'}</div>
                         </div>
                         <button
@@ -4220,7 +4204,7 @@ function AdminView({
                           onClick={async () => {
                             setUpdatingProviderRoute(route.key);
                             try {
-                              await onUpdateProviderRouting({ [route.key]: !enabled }, `${route.title} 已${enabled ? '停用' : '启用'}`);
+                              await onUpdateProviderRouting({ [route.key]: !enabled });
                             } catch (error) {
                               onNotice(error instanceof Error ? error.message : '接口开关更新失败');
                             } finally {
@@ -6033,14 +6017,13 @@ export default function App() {
 
   async function handleUpdateProviderRouting(
     patch: Partial<ProviderRoutingConfig>,
-    notice: string,
+    notice?: string,
   ) {
     const previous = providerRouting;
     setProviderRouting((current) => ({ ...current, ...patch }));
     try {
       const payload = await updateAdminProviderRouting(patch);
       setProviderRouting(payload.providerRouting);
-      setNotice(notice);
     } catch (error) {
       setProviderRouting(previous);
       throw error;
