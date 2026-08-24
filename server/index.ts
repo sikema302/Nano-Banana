@@ -2438,6 +2438,30 @@ function ensureSchema(db: SqlDatabase) {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS user_generation_stats (
+      user_id TEXT PRIMARY KEY,
+      username TEXT NOT NULL DEFAULT '',
+      generations_total INTEGER NOT NULL DEFAULT 0,
+      credits_total INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  try {
+    db.run(
+      `
+        INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+        SELECT user_id, MAX(username) AS username, COUNT(*), COALESCE(SUM(credits_used), 0), MAX(created_at)
+        FROM generations
+        GROUP BY user_id
+        ON CONFLICT(user_id) DO NOTHING
+      `,
+    );
+  } catch {
+    // Backfill can run against an un-migrated generations table; seed the next startup.
+  }
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS generation_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -8413,6 +8437,7 @@ async function start() {
           referenceImages,
           createdAt,
         });
+        await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
       } else {
         await withWriteDb((db) => {
           ensureSchema(db);
@@ -8448,6 +8473,18 @@ async function start() {
               serializeReferenceImages(referenceImages),
               createdAt,
             ],
+          );
+          db.run(
+            `
+              INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+              VALUES (?, ?, 1, ?, ?)
+              ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                generations_total = generations_total + 1,
+                credits_total = credits_total + excluded.credits_total,
+                updated_at = excluded.updated_at
+            `,
+            [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
           );
         });
       }
@@ -9321,25 +9358,33 @@ async function start() {
           "SELECT user_id, username, credits_used, created_at FROM generations WHERE username != 'demo'",
         );
         const todayMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
-        const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
 
         for (const row of todayRows) {
+          const createdAt = String(row.created_at || '');
+          if (formatDateKeyInTimeZone(createdAt) !== todayKey) continue;
           const userId = String(row.user_id || '');
           const username = String(row.username || '');
           const credits = Number(row.credits_used || 0);
-          const createdAt = String(row.created_at || '');
+          const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+          today.generationCount += 1;
+          today.creditsUsed += credits;
+          todayMap.set(userId, today);
+        }
 
-          const total = totalMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
-          total.generationCount += 1;
-          total.creditsUsed += credits;
-          totalMap.set(userId, total);
-
-          if (formatDateKeyInTimeZone(createdAt) === todayKey) {
-            const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
-            today.generationCount += 1;
-            today.creditsUsed += credits;
-            todayMap.set(userId, today);
-          }
+        const totalRows = runQuery<Record<string, unknown>>(
+          db,
+          "SELECT user_id, username, generations_total, credits_total FROM user_generation_stats WHERE username != 'demo'",
+        );
+        const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
+        for (const row of totalRows) {
+          const userId = String(row.user_id || '');
+          const username = String(row.username || '');
+          totalMap.set(userId, {
+            userId,
+            username,
+            generationCount: Number(row.generations_total || 0),
+            creditsUsed: Number(row.credits_total || 0),
+          });
         }
 
         return {

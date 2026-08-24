@@ -1046,6 +1046,34 @@ export async function insertGeneration(record: {
   throw new Error('Insert generation failed: unable to allocate a unique generation id');
 }
 
+export async function incrementGenerationCount(
+  userId: string,
+  username: string,
+  creditsUsed: number,
+  createdAt: string,
+): Promise<void> {
+  const client = getSupabase();
+  const { data: existing } = await client
+    .from('user_generation_stats')
+    .select('generations_total, credits_total, username')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const nextGenerations = Number(existing?.generations_total || 0) + 1;
+  const nextCredits = Number(existing?.credits_total || 0) + creditsUsed;
+  const { error } = await client.from('user_generation_stats').upsert(
+    {
+      user_id: userId,
+      username: existing?.username || username,
+      generations_total: nextGenerations,
+      credits_total: nextCredits,
+      updated_at: createdAt,
+    },
+    { onConflict: 'user_id' },
+  );
+  if (error) throw new Error(`Increment generation count failed: ${error.message}`);
+}
+
 export async function getUserGenerations(userId: string): Promise<GenerationRow[]> {
   const { data, error } = await getSupabase()
     .from('generations')
@@ -1374,7 +1402,6 @@ export async function getGenerationRankings(): Promise<{
 }> {
   const todayKey = formatRankingDateKeyInTimeZone(new Date());
   const todayMap = new Map<string, GenerationRankingEntry>();
-  const totalMap = new Map<string, GenerationRankingEntry>();
   const pageSize = 1000;
 
   for (let offset = 0; ; offset += pageSize) {
@@ -1397,24 +1424,40 @@ export async function getGenerationRankings(): Promise<{
     for (const row of page) {
       const userId = normalizeSupabaseId(row.user_id);
       if (!userId) continue;
+      if (formatRankingDateKeyInTimeZone(String(row.created_at || '')) !== todayKey) continue;
       const username = String(row.username || '');
       const credits = Number(row.credits_used || 0);
-      const createdAt = String(row.created_at || '');
 
-      const total = totalMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
-      total.generationCount += 1;
-      total.creditsUsed += credits;
-      totalMap.set(userId, total);
-
-      if (formatRankingDateKeyInTimeZone(createdAt) === todayKey) {
-        const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
-        today.generationCount += 1;
-        today.creditsUsed += credits;
-        todayMap.set(userId, today);
-      }
+      const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
+      today.generationCount += 1;
+      today.creditsUsed += credits;
+      todayMap.set(userId, today);
     }
 
     if (page.length < pageSize) break;
+  }
+
+  const totalMap = new Map<string, GenerationRankingEntry>();
+  const { data: totalData, error: totalError } = await getSupabase()
+    .from('user_generation_stats')
+    .select('user_id, username, generations_total, credits_total')
+    .neq('username', 'demo');
+  if (!totalError) {
+    for (const row of (totalData || []) as Array<{
+      user_id: string | number;
+      username: string;
+      generations_total: number;
+      credits_total: number;
+    }>) {
+      const userId = normalizeSupabaseId(row.user_id);
+      if (!userId) continue;
+      totalMap.set(userId, {
+        userId,
+        username: String(row.username || ''),
+        generationCount: Number(row.generations_total || 0),
+        creditsUsed: Number(row.credits_total || 0),
+      });
+    }
   }
 
   const today = [...todayMap.values()]

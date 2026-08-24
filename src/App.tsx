@@ -712,6 +712,7 @@ function StageCard({
   loading,
   progress,
   showActions,
+  downloading,
   onDownload,
   onSave,
   onDelete,
@@ -724,6 +725,7 @@ function StageCard({
   loading?: boolean;
   progress?: GenerationProgress | null;
   showActions?: boolean;
+  downloading?: boolean;
   onDownload?: () => void;
   onSave?: (category: ImageCategory) => void;
   onDelete?: () => void;
@@ -834,12 +836,17 @@ function StageCard({
                 备份
               </button>
               <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-zinc-200 transition hover:border-white/20 hover:text-white"
+                className={`inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-zinc-200 transition ${
+                  downloading
+                    ? 'cursor-wait opacity-60'
+                    : 'hover:border-white/20 hover:text-white'
+                }`}
                 type="button"
                 onClick={onDownload}
+                disabled={downloading}
               >
-                <Download size={13} />
-                下载
+                <Download size={13} className={downloading ? 'animate-spin' : ''} />
+                {downloading ? '下载中…' : '下载'}
               </button>
               <button
                 className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/25 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-100 transition hover:bg-rose-500/20"
@@ -5238,6 +5245,8 @@ export default function App() {
   const hasVisitedCreateRef = useRef(false);
   const submittingGenerationRef = useRef(false);
   const currentImageRef = useRef<DisplayImage | null>(null);
+  const downloadingRef = useRef(new Set<string>());
+  const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
 
   const sideFavoriteItems = user ? favorites : [];
   const sideBackupItems = user ? backup : [];
@@ -6630,27 +6639,28 @@ export default function App() {
     }
   }
 
-  async function downloadCurrentImage() {
-    if (!currentImage) return;
+  async function runDownload(url: string) {
+    if (!url) return;
+    if (downloadingRef.current.has(url)) return; // 同一张图正在下载时忽略重复点击，避免重复下载
+    downloadingRef.current.add(url);
+    setDownloadingUrl(url);
     try {
-      console.log('[downloadCurrentImage] 开始下载，imageUrl:', currentImage.imageUrl);
-      await downloadAsset(currentImage.imageUrl, `pixory-${Date.now()}`);
-      console.log('[downloadCurrentImage] 下载完成');
-    } catch (downloadError) {
-      console.error('[downloadCurrentImage] 下载失败:', downloadError);
-      setNotice(downloadError instanceof Error ? downloadError.message : '下载失败');
-    }
-  }
-
-  async function downloadDisplayImage(item: DisplayImage | SavedImage | GenerationRecord) {
-    try {
-      console.log('[downloadDisplayImage] 开始下载，imageUrl:', item.imageUrl);
-      await downloadAsset(item.imageUrl, `pixory-${Date.now()}`);
-      console.log('[downloadDisplayImage] 下载完成');
+      await downloadAsset(url, `pixory-${Date.now()}`);
     } catch (downloadError) {
       console.error('[downloadDisplayImage] 下载失败:', downloadError);
       setNotice(downloadError instanceof Error ? downloadError.message : '下载失败');
+    } finally {
+      downloadingRef.current.delete(url);
+      setDownloadingUrl((current) => (current === url ? null : current));
     }
+  }
+
+  function downloadCurrentImage() {
+    if (currentImage) void runDownload(currentImage.imageUrl);
+  }
+
+  function downloadDisplayImage(item: DisplayImage | SavedImage | GenerationRecord) {
+    void runDownload(item.imageUrl);
   }
 
   async function deleteCurrentImage() {
@@ -7087,6 +7097,7 @@ export default function App() {
                 loading={activeGenerationStageIndexes.includes(index) || (index === 0 && loading)}
                 progress={activeGenerationStageEntries[index]?.generation?.progress || (index === 0 && loading ? generationProgress : null)}
                 showActions={Boolean(item && !activeGenerationStageIndexes.includes(index) && !(index === 0 && loading) && user)}
+                downloading={downloadingUrl === (item?.imageUrl ?? null)}
                 onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                 onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                 onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}
@@ -7745,6 +7756,7 @@ export default function App() {
                       showActions={Boolean(item && !activeGenerationStageIndexes.includes(index) && !(index === activeGenerationStageIndex && loading) && user)}
                       showActivity={SHOW_CREATION_ACTIVITY && index === activityStageIndex}
                       activityPreviewCount={activityPreviewCount}
+                      downloading={downloadingUrl === (item?.imageUrl ?? null)}
                       onDownload={item ? () => downloadDisplayImage(item) : downloadCurrentImage}
                       onSave={item ? (category) => void saveDisplayImage(item, category) : saveCurrentImage}
                       onDelete={item ? () => void deleteStageImage(index, item) : () => void deleteCurrentImage()}

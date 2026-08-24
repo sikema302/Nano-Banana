@@ -394,11 +394,27 @@ function dataURLToBlob(dataURL: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+
 async function downloadViaServer(source: string): Promise<Blob> {
   const headers = new Headers({ 'Content-Type': 'application/json' });
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(toApiUrl('/api/user/assets/download'), {
+  const response = await fetchWithTimeout(toApiUrl('/api/user/assets/download'), {
     method: 'POST',
     headers,
     body: JSON.stringify({ source }),
@@ -430,10 +446,13 @@ export async function downloadAsset(
     try {
       blob = await downloadViaServer(source);
     } catch (serverError) {
+      if (serverError instanceof Error && serverError.name === 'AbortError') {
+        throw new Error('下载超时，图片较大或网络较慢，请重试');
+      }
       console.warn('[downloadAsset] 服务端下载失败，尝试直接 fetch 图片:', serverError);
       // 回退：直接 fetch 图片 URL（同源或支持 CORS 的图片）
       try {
-        const directResponse = await fetch(source);
+        const directResponse = await fetchWithTimeout(source);
         if (!directResponse.ok) {
           throw new Error(`直接下载失败 (${directResponse.status})`);
         }
