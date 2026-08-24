@@ -4838,7 +4838,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
       imageChannelFailover.markSuccess(routeKey, channelId);
       return source;
     } catch (error) {
-      console.warn(`[image-channel] ${channelId} failed: ${imageErrorText(error)}`);
+      console.warn(`[image-channel] traceId=${traceId} ${channelId} failed: ${imageErrorText(error)}`);
       const publicError = classifyPublicImageError(imageErrorText(error));
       if (publicError.category === 'sensitive_prompt' || publicError.category === 'reference_image') {
         throw new Error(publicError.message);

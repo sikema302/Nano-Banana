@@ -61,7 +61,7 @@ type RouterOptions = {
   fallback: (input: ImageGenerationInput) => Promise<string>;
   fetchImpl?: typeof fetch;
   now?: () => number;
-  logger?: Pick<Console, 'info' | 'warn'>;
+  logger?: Pick<Console, 'info' | 'warn' | 'error'>;
   onAttempt?: (attempt: {
     traceId: string;
     modelId: string;
@@ -272,6 +272,9 @@ export function createImageProviderRouter(options: RouterOptions) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
     let requestSent = false;
+    let requestUrl = '';
+    let httpStatus = 0;
+    let responseBody = '';
     try {
       const baseUrl = options.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '');
       const headers: Record<string, string> = {
@@ -301,14 +304,17 @@ export function createImageProviderRouter(options: RouterOptions) {
           response_format: 'b64_json',
         });
       }
+      requestUrl = `${baseUrl}${endpoint}`;
       requestSent = true;
-      const response = await fetchImpl(`${baseUrl}${endpoint}`, {
+      const response = await fetchImpl(requestUrl, {
         method: 'POST',
         headers,
         body,
         signal: controller.signal,
       });
+      httpStatus = response.status;
       const raw = await response.text();
+      responseBody = raw.slice(0, 600);
       let payload: ImageApiPayload = {};
       try {
         payload = raw ? JSON.parse(raw) as ImageApiPayload : {};
@@ -336,6 +342,13 @@ export function createImageProviderRouter(options: RouterOptions) {
       if (!requestSent && error && typeof error === 'object') {
         (error as { safeToFallback?: boolean }).safeToFallback = true;
       }
+      logger.error(
+        `[image-provider] FAILED traceId=${input.traceId || ''} model=${input.modelId} upstream=${upstreamModel} ` +
+        `size=${requestSize(input, upstreamModel)} ratio=${input.ratio} imageSize=${input.imageSize} ` +
+        `images=${input.images.length} prompt="${input.prompt.slice(0, 200)}" ` +
+        `url=${requestUrl || '(not sent)'} http=${httpStatus} body=${responseBody || ''} ` +
+        `err=${errorText(error)}`,
+      );
       throw error;
     } finally {
       clearTimeout(timeout);
