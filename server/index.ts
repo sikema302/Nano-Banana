@@ -2342,14 +2342,50 @@ function getOne<T extends Record<string, unknown>>(db: SqlDatabase, sql: string,
   return runQuery<T>(db, sql, params)[0] || null;
 }
 
-async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T) {
-  const db = await openDatabase();
+let readQueue = Promise.resolve();
 
+// 读缓存：避免每次读请求都全量加载并反序列化整个 SQLite 文件（此前下载接口 9 秒的根因）。
+// 以 DB_FILE 的 mtime + size 作为失效依据：写操作落盘后 mtime 变化，下一次读自动重载。
+let cachedReadDb: { db: SqlDatabase; mtimeMs: number; size: number } | null = null;
+
+async function getReadDb(): Promise<SqlDatabase> {
+  let mtimeMs = 0;
+  let size = 0;
   try {
-    return await task(db);
-  } finally {
-    db.close();
+    const stat = await fs.stat(DB_FILE);
+    mtimeMs = stat.mtimeMs;
+    size = stat.size;
+  } catch {
+    // DB_FILE 尚不存在（首次启动）：按空库处理，openDatabase 会创建内存空库。
   }
+
+  if (cachedReadDb && cachedReadDb.mtimeMs === mtimeMs && cachedReadDb.size === size) {
+    return cachedReadDb.db;
+  }
+
+  const fresh = await openDatabase();
+  if (cachedReadDb) {
+    try {
+      cachedReadDb.db.close();
+    } catch {
+      // 忽略旧缓存关闭失败
+    }
+  }
+  cachedReadDb = { db: fresh, mtimeMs, size };
+  return fresh;
+}
+
+async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
+  const run = async () => {
+    const db = await getReadDb();
+    return await task(db);
+  };
+  const next = readQueue.then(run, run);
+  readQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
 }
 
 async function withWriteDb<T>(task: (db: SqlDatabase) => Promise<T> | T) {
@@ -2448,15 +2484,18 @@ function ensureSchema(db: SqlDatabase) {
   `);
 
   try {
-    db.run(
-      `
-        INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-        SELECT user_id, MAX(username) AS username, COUNT(*), COALESCE(SUM(credits_used), 0), MAX(created_at)
-        FROM generations
-        GROUP BY user_id
-        ON CONFLICT(user_id) DO NOTHING
-      `,
-    );
+    const statCount = getOne<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM user_generation_stats');
+    if (Number(statCount?.c || 0) === 0) {
+      db.run(
+        `
+          INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+          SELECT user_id, MAX(username) AS username, COUNT(*), COALESCE(SUM(credits_used), 0), MAX(created_at)
+          FROM generations
+          GROUP BY user_id
+          ON CONFLICT(user_id) DO NOTHING
+        `,
+      );
+    }
   } catch {
     // Backfill can run against an un-migrated generations table; seed the next startup.
   }
@@ -2481,6 +2520,8 @@ function ensureSchema(db: SqlDatabase) {
     )
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requests(created_at DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id)');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS invite_codes (

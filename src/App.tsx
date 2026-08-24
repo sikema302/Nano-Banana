@@ -836,7 +836,7 @@ function StageCard({
                 备份
               </button>
               <button
-                className={`inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-zinc-200 transition ${
+                className={`inline-flex w-[100px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-zinc-200 transition ${
                   downloading
                     ? 'cursor-wait opacity-60'
                     : 'hover:border-white/20 hover:text-white'
