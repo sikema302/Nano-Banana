@@ -310,6 +310,45 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   junliaiSd2Fast: false,
 };
 
+const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
+  'junliai-economy': 'Junli · GPT 经济版',
+  'junliai-firefly': 'Junli · Firefly',
+  'schat-gpt-image-2': 'Schat · GPT Image 2',
+  'junliai-grok': 'Junli · Grok Image',
+  'visionary': 'Visionary',
+  'flux': 'Flux',
+  'junliai': 'Junli · Nano Banana Pro',
+  'junliai-nano-banana-2': 'Junli · Nano Banana 2',
+  'schat-nano-banana-2': 'Schat · Nano Banana 2',
+  'schat-seedream-4': 'Schat · Seedream 4',
+};
+
+function providerChannelName(id: string) {
+  return PROVIDER_CHANNEL_NAMES[id] ?? id;
+}
+
+// 用户端只展示前端模型名（GPT-image-2 / Nano Banana Pro / Seedream 4 / Grok Image），
+// 隐藏内部渠道与上游模型（如 "Flux · gemini-3-pro-image-preview"）。
+function displayModelName(modelName: string) {
+  const value = String(modelName ?? '').trim();
+  if (!value) return value;
+  const probe = value.toLowerCase();
+  if (probe.includes('seedream')) return 'Seedream 4';
+  if (probe.includes('grok')) return 'Grok Image';
+  if (probe.includes('gpt-image') || probe.includes('firefly')) return 'GPT-image-2';
+  if (
+    probe.includes('nano-banana') ||
+    probe.includes('nano banana') ||
+    probe.includes('gemini') ||
+    probe.includes('banana')
+  ) {
+    return 'Nano Banana Pro';
+  }
+  // 未识别时也隐藏渠道前缀，避免暴露内部渠道名
+  const parts = value.split('·');
+  return parts.length > 1 ? parts[parts.length - 1].trim() || value : value;
+}
+
 function isImageResolutionEnabled(
   routing: ProviderRoutingConfig,
   modelId: string,
@@ -762,7 +801,7 @@ function StageCard({
               {item.prompt}
             </button>
             <p className="mt-1 text-xs text-zinc-500">
-              {item.modelName} / {item.dimensions}
+              {displayModelName(item.modelName)} / {item.dimensions}
               {item.imageSize ? ` / ${item.imageSize}` : ''}
             </p>
           </div>
@@ -4076,7 +4115,7 @@ function AdminView({
                             </div>
                             <div className="space-y-2">
                               {channels.map((channel, index) => {
-                                const routeLabel = `备用渠道 ${index + 1}`;
+                                const routeLabel = providerChannelName(channel.id);
                                 const routeKey = `${group.key}:${resolution}:${channel.id}`;
                                 const updating = updatingProviderRoute === routeKey;
                                 const saveChannels = async (
@@ -7934,7 +7973,7 @@ export default function App() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-white">{previewImage.prompt}</p>
                 <p className="mt-1 text-xs text-zinc-500">
-                  {previewImage.modelName} / {previewImage.dimensions}
+                  {displayModelName(previewImage.modelName)} / {previewImage.dimensions}
                   {previewImage.imageSize ? ` / ${previewImage.imageSize}` : ''}
                 </p>
               </div>
