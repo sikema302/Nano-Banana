@@ -3916,6 +3916,55 @@ function getUserCreditDetails(userId: string) {
   return withUserCreditMutationLock(() => getUserCreditDetailsUnlocked(userId));
 }
 
+// ─── 生成计费：成功才扣款 + 并发预留 ───
+// 生成开始前只校验并预留积分（防止并发超支），真正扣款推迟到生成成功之后。
+// 失败/中断只会释放预留、从未扣过款，因此进程被杀也不会误扣积分（比「先扣后退」更稳）。
+const creditReservations = new Map<string, number>();
+
+function creditReservationKey(userId: string, bucket: CreditBucket) {
+  return `${userId}:${bucket}`;
+}
+
+function reservedCreditAmount(userId: string, bucket: CreditBucket) {
+  return creditReservations.get(creditReservationKey(userId, bucket)) || 0;
+}
+
+function reserveCreditFor(userId: string, bucket: CreditBucket, amount: number, balances: CreditBalances): boolean {
+  const available = availableCreditsForBucket(balances, bucket) - reservedCreditAmount(userId, bucket);
+  if (available < amount) return false;
+  const key = creditReservationKey(userId, bucket);
+  creditReservations.set(key, reservedCreditAmount(userId, bucket) + amount);
+  return true;
+}
+
+function releaseCreditReservation(userId: string, bucket: CreditBucket, amount: number) {
+  const key = creditReservationKey(userId, bucket);
+  const current = creditReservations.get(key) || 0;
+  const next = Math.max(0, current - amount);
+  if (next === 0) creditReservations.delete(key);
+  else creditReservations.set(key, next);
+}
+
+function creditAudit(
+  action: 'debit' | 'refund' | 'reserve' | 'release',
+  userId: string,
+  username: string,
+  bucket: CreditBucket,
+  amount: number,
+  extra: Record<string, unknown> = {},
+) {
+  console.log(JSON.stringify({
+    type: 'credit-audit',
+    action,
+    userId,
+    username,
+    bucket,
+    amount,
+    ts: nowIso(),
+    ...extra,
+  }));
+}
+
 async function debitUserCredits(userId: string, bucket: CreditBucket, amount: number) {
   return withUserCreditMutationLock(async () => {
     if (USE_SUPABASE) {
@@ -3925,6 +3974,7 @@ async function debitUserCredits(userId: string, bucket: CreditBucket, amount: nu
       await db.incrementUsedCredits(userId, totalCreditBalance(charged.debit));
       await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(charged.balances));
       const summary = await db.getUserCredits(userId);
+      creditAudit('debit', userId, '', bucket, amount, { remainingCredits: summary.remainingCredits, supabase: true });
       return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
     }
     return withWriteDb((db) => {
@@ -3934,6 +3984,7 @@ async function debitUserCredits(userId: string, bucket: CreditBucket, amount: nu
       incrementUserUsedCredits(db, userId, totalCreditBalance(charged.debit));
       setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(charged.balances));
       const summary = getUserCredits(db, userId);
+      creditAudit('debit', userId, '', bucket, amount, { remainingCredits: summary.remainingCredits, supabase: false });
       return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
     });
   });
@@ -3948,6 +3999,7 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
       const balances = refundCreditBalances(current.creditBalances, debit);
       await db.incrementUsedCredits(userId, -Math.min(current.usedCredits, refundAmount));
       await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(balances));
+      creditAudit('refund', userId, '', 'general', refundAmount, { debit, supabase: true, remainingCredits: totalCreditBalance(balances) });
       return { ...(await db.getUserCredits(userId)), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     }
     return withWriteDb((db) => {
@@ -8344,7 +8396,7 @@ async function start() {
       return;
     }
 
-    let reservedUserDebit: CreditDebit | null = null;
+    let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | null = null;
     try {
       let modelId = normalizeModelId(model);
       validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
@@ -8381,12 +8433,14 @@ async function start() {
         }
       }
 
+      // 生成前只校验并发预留，不实际扣款；成功后才扣（见下方「成功才扣款」）。
       const poolCredits = await getUserCreditDetails(req.authUser!.userId);
       const availableModelCredits = availableCreditsForBucket(poolCredits.creditBalances, creditBucket);
-      if (availableModelCredits < creditsUsed) {
-        throw new Error(`当前可用于该模型的积分不足，需要 ${creditsUsed}，可用 ${availableModelCredits}`);
+      if (!reserveCreditFor(req.authUser!.userId, creditBucket, creditsUsed, poolCredits.creditBalances)) {
+        throw new Error(`当前可用于该模型的积分不足，需要 ${creditsUsed}，可用 ${Math.max(0, availableModelCredits - reservedCreditAmount(req.authUser!.userId, creditBucket))}`);
       }
-      reservedUserDebit = (await debitUserCredits(req.authUser!.userId, creditBucket, creditsUsed)).debit;
+      reservedGenerationCredit = { bucket: creditBucket, amount: creditsUsed };
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize });
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
@@ -8435,6 +8489,18 @@ async function start() {
         await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       }
 
+      // 成功才扣款：生成成功后才真正扣除。debitUserCredits 原子扣款（不足会先抛错、不动任何账），
+      // 扣款成功后再释放预留；后续若只是记账失败，也不影响已经发生的扣款与返图（best-effort recording）。
+      if (reservedGenerationCredit) {
+        await debitUserCredits(
+          req.authUser!.userId,
+          reservedGenerationCredit.bucket,
+          reservedGenerationCredit.amount,
+        );
+        releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
+        reservedGenerationCredit = null;
+      }
+
       const payload: GeneratedImagePayload = {
         prompt,
         modelName,
@@ -8445,7 +8511,8 @@ async function start() {
         createdAt,
       };
 
-      // 鎵ｉ櫎绉垎
+      try {
+      // 鎵ｉ櫎绉垚
       if (creditsUsed > 0) {
         if (USE_SUPABASE) {
           const db = await getSupabaseDb();
@@ -8529,13 +8596,18 @@ async function start() {
           );
         });
       }
+      } catch (recordingError) {
+        console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
+      }
 
       res.json({ image: toPublicGeneratedImagePayload(req, payload) });
     } catch (error) {
-      if (reservedUserDebit) {
-        await refundUserCredits(req.authUser!.userId, reservedUserDebit).catch((refundError) => {
-          console.error('[generate-credit-refund]', refundError);
-        });
+      // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
+      if (reservedGenerationCredit) {
+        creditAudit('release', req.authUser!.userId, req.authUser!.username,
+          reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined });
+        releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
+        reservedGenerationCredit = null;
       }
       console.error('[generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';
