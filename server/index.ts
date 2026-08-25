@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns';
 import fs from 'node:fs/promises';
+import { writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -2342,72 +2343,106 @@ function getOne<T extends Record<string, unknown>>(db: SqlDatabase, sql: string,
   return runQuery<T>(db, sql, params)[0] || null;
 }
 
-let readQueue = Promise.resolve();
+// ─── SQLite 常驻实例 + 事务 + 去抖合并落盘 ───
+// 根因：旧实现每次读/写都全量加载(openDatabase)并反序列化整个 SQLite 文件，写操作再全量序列化(export)落盘，
+// 且全局串行队列在高并发下互相阻塞——上游 43s 的生图被本地数据库 IO 放大到几百秒（与「下载 9 秒」同源）。
+// 方案：常驻单个内存数据库实例，读写串行、写走事务（异常自动回滚），落盘去抖合并到后台异步执行。
+let residentDb: SqlDatabase | null = null;
+let dbDirty = false;
+let flushTimer: NodeJS.Timeout | null = null;
+let flushScheduled = false;
+let dbOpDepth = 0;
+let activeWriteTransaction = false;
 
-// 读缓存：避免每次读请求都全量加载并反序列化整个 SQLite 文件（此前下载接口 9 秒的根因）。
-// 以 DB_FILE 的 mtime + size 作为失效依据：写操作落盘后 mtime 变化，下一次读自动重载。
-let cachedReadDb: { db: SqlDatabase; mtimeMs: number; size: number } | null = null;
+const SQLITE_FLUSH_DEBOUNCE_MS = 40;
 
-async function getReadDb(): Promise<SqlDatabase> {
-  let mtimeMs = 0;
-  let size = 0;
-  try {
-    const stat = await fs.stat(DB_FILE);
-    mtimeMs = stat.mtimeMs;
-    size = stat.size;
-  } catch {
-    // DB_FILE 尚不存在（首次启动）：按空库处理，openDatabase 会创建内存空库。
-  }
-
-  if (cachedReadDb && cachedReadDb.mtimeMs === mtimeMs && cachedReadDb.size === size) {
-    return cachedReadDb.db;
-  }
-
-  const fresh = await openDatabase();
-  if (cachedReadDb) {
-    try {
-      cachedReadDb.db.close();
-    } catch {
-      // 忽略旧缓存关闭失败
-    }
-  }
-  cachedReadDb = { db: fresh, mtimeMs, size };
-  return fresh;
+async function getResidentDb(): Promise<SqlDatabase> {
+  if (!residentDb) residentDb = await openDatabase();
+  return residentDb;
 }
 
-async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
+function enqueueDb<T>(op: () => Promise<T> | T): Promise<T> {
+  if (dbOpDepth > 0) {
+    // 已在数据库操作内部（例如写事务中嵌套读写），直接执行，避免在串行队列中等待自身而死锁。
+    return Promise.resolve().then(op);
+  }
   const run = async () => {
-    const db = await getReadDb();
-    return await task(db);
-  };
-  const next = readQueue.then(run, run);
-  readQueue = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
-}
-
-async function withWriteDb<T>(task: (db: SqlDatabase) => Promise<T> | T) {
-  const nextTask = async () => {
-    const db = await openDatabase();
-
+    dbOpDepth++;
     try {
-      const result = await task(db);
-      await saveDatabase(db);
-      await syncSqliteToSupabase(db);
-      return result;
+      return await op();
     } finally {
-      db.close();
+      dbOpDepth--;
     }
   };
-
-  const result = writeQueue.then(nextTask, nextTask);
+  const result = writeQueue.then(run, run);
   writeQueue = result.then(
     () => undefined,
     () => undefined,
   );
   return result;
+}
+
+async function flushSqlite(): Promise<void> {
+  if (!residentDb || !dbDirty) return;
+  dbDirty = false;
+  await saveDatabase(residentDb);
+  await syncSqliteToSupabase(residentDb);
+}
+
+function scheduleFlush() {
+  dbDirty = true;
+  if (flushScheduled) return;
+  flushScheduled = true;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flushScheduled = false;
+    void enqueueDb(() => flushSqlite()).catch((error) => console.error('[sqlite-flush]', error));
+  }, SQLITE_FLUSH_DEBOUNCE_MS);
+}
+
+async function flushSqliteNow(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    flushScheduled = false;
+  }
+  await enqueueDb(() => flushSqlite());
+}
+
+async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
+  return enqueueDb(async () => {
+    const db = await getResidentDb();
+    return await task(db);
+  });
+}
+
+async function withWriteDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
+  return enqueueDb(async () => {
+    const db = await getResidentDb();
+    if (activeWriteTransaction) {
+      // 嵌套在外层写事务内：不开启嵌套事务，直接执行（由外层统一提交/回滚）
+      const result = await task(db);
+      scheduleFlush();
+      return result;
+    }
+    activeWriteTransaction = true;
+    try {
+      db.run('BEGIN IMMEDIATE');
+      const result = await task(db);
+      db.run('COMMIT');
+      scheduleFlush();
+      return result;
+    } catch (error) {
+      try {
+        db.run('ROLLBACK');
+      } catch {
+        // 忽略回滚失败（例如事务已因 SQL 错误自动中止）
+      }
+      throw error;
+    } finally {
+      activeWriteTransaction = false;
+    }
+  });
 }
 
 function ensureSchema(db: SqlDatabase) {
@@ -3977,7 +4012,7 @@ async function debitUserCredits(userId: string, bucket: CreditBucket, amount: nu
       creditAudit('debit', userId, '', bucket, amount, { remainingCredits: summary.remainingCredits, supabase: true });
       return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
     }
-    return withWriteDb((db) => {
+    const result = await withWriteDb((db) => {
       ensureSchema(db);
       const current = getUserCreditDetailsSqlite(db, userId);
       const charged = debitCreditBalances(current.creditBalances, bucket, amount);
@@ -3987,6 +4022,8 @@ async function debitUserCredits(userId: string, bucket: CreditBucket, amount: nu
       creditAudit('debit', userId, '', bucket, amount, { remainingCredits: summary.remainingCredits, supabase: false });
       return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
     });
+    await flushSqliteNow();
+    return result;
   });
 }
 
@@ -4002,7 +4039,7 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
       creditAudit('refund', userId, '', 'general', refundAmount, { debit, supabase: true, remainingCredits: totalCreditBalance(balances) });
       return { ...(await db.getUserCredits(userId)), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     }
-    return withWriteDb((db) => {
+    const result = await withWriteDb((db) => {
       ensureSchema(db);
       const current = getUserCreditDetailsSqlite(db, userId);
       const balances = refundCreditBalances(current.creditBalances, debit);
@@ -4014,6 +4051,8 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
       setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
       return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     });
+    await flushSqliteNow();
+    return result;
   });
 }
 
@@ -4033,7 +4072,7 @@ async function rechargeUserCreditPools(userId: string, additions: CreditBalances
       await db.setSetting(userCreditPoolsSettingKey(userId), JSON.stringify(balances));
       return { ...(await db.getUserCredits(userId)), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     }
-    return withWriteDb((db) => {
+    const result = await withWriteDb((db) => {
       ensureSchema(db);
       const current = getUserCreditDetailsSqlite(db, userId);
       const balances = {
@@ -4045,6 +4084,8 @@ async function rechargeUserCreditPools(userId: string, additions: CreditBalances
       setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
       return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     });
+    await flushSqliteNow();
+    return result;
   });
 }
 
@@ -6689,7 +6730,6 @@ async function start() {
 
         return withWriteDb((db) => {
           ensureSchema(db);
-          db.run('BEGIN TRANSACTION');
           try {
             const invite = getOne<Record<string, unknown>>(
               db,
@@ -6704,10 +6744,8 @@ async function start() {
               'UPDATE invite_codes SET credits = 0, redeemed_by = ?, redeemed_at = ?, low_balance_since = NULL WHERE code = ? AND (redeemed_by IS NULL OR redeemed_by = "") AND credits = ?',
               [req.authUser!.userId, nowIso(), inviteCode, credits],
             );
-            db.run('COMMIT');
             return credits;
           } catch (error) {
-            db.run('ROLLBACK');
             throw error;
           }
         });
@@ -11062,6 +11100,17 @@ async function start() {
     setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   const shutdown = () => {
+    // 退出前同步落盘：避免去抖窗口(≤40ms)内的已成功写因正常退出而丢失。
+    try {
+      if (residentDb && dbDirty) {
+        const temporaryPath = `${DB_FILE}.${process.pid}.tmp`;
+        writeFileSync(temporaryPath, residentDb.export(), { mode: 0o600 });
+        renameSync(temporaryPath, DB_FILE);
+        dbDirty = false;
+      }
+    } catch (error) {
+      console.error('[sqlite-exit-flush]', error);
+    }
     const forceExit = setTimeout(() => process.exit(1), 30_000);
     forceExit.unref();
     httpServer.close(() => process.exit(0));
