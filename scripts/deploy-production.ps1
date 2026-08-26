@@ -71,15 +71,44 @@ function Invoke-GitHubApi {
   throw "GitHub API request failed: $Path. Last error: $lastError"
 }
 
+function Test-ProxyAvailable {
+  param([string]$ProxyHost = '127.0.0.1', [int]$ProxyPort = 7890)
+
+  $client = $null
+  try {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $connect = $client.ConnectAsync($ProxyHost, $ProxyPort)
+    if ($connect.Wait(1500) -and $client.Connected) {
+      return $true
+    }
+  } catch {
+    return $false
+  } finally {
+    if ($client) { $client.Dispose() }
+  }
+  return $false
+}
+
 function Push-MainBranch {
   $lastError = $null
-  foreach ($ip in $GitHubWebIps) {
-    Write-Host "==> Push origin $Branch via github.com $ip"
-    & git -c "http.curloptResolve=github.com:443:$ip" push origin $Branch
+
+  if (Test-ProxyAvailable) {
+    Write-Host '==> Local proxy 127.0.0.1:7890 detected, pushing via proxy'
+    & git push origin $Branch
     if ($LASTEXITCODE -eq 0) {
       return
     }
-    $lastError = "git push exit code $LASTEXITCODE via $ip"
+    $lastError = "git push exit code $LASTEXITCODE via proxy"
+  } else {
+    Write-Host '==> Local proxy not available, bypassing it and resolving GitHub IPs directly'
+    foreach ($ip in $GitHubWebIps) {
+      Write-Host "==> Push origin $Branch via github.com $ip"
+      & git -c "http.proxy=" -c "http.curloptResolve=github.com:443:$ip" push origin $Branch
+      if ($LASTEXITCODE -eq 0) {
+        return
+      }
+      $lastError = "git push exit code $LASTEXITCODE via $ip"
+    }
   }
 
   throw "Unable to push to GitHub. Last error: $lastError"
