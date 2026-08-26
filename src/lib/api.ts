@@ -583,13 +583,13 @@ function normalizeHttpErrorText(value: string) {
   const lower = normalized.toLowerCase();
 
   if (lower.includes('504 gateway time-out') || lower.includes('504 gateway timeout')) {
-    return '图像服务响应超时，请稍后重试。';
+    return '服务响应超时，请稍后重试。';
   }
   if (lower.includes('502 bad gateway')) {
-    return '图像服务网关异常，请稍后重试。';
+    return '服务网关异常，请稍后重试。';
   }
   if (lower.includes('503 service unavailable')) {
-    return '图像服务暂时不可用，请稍后重试。';
+    return '服务正在维护中，请稍后重试。';
   }
   if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
     return normalized || '服务接口返回异常，请稍后重试。';
@@ -614,60 +614,88 @@ function getApiErrorCode(payload: unknown): string {
   return typeof code === 'string' ? code : '';
 }
 
-async function request<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
-  const headers = new Headers(init.headers || {});
-  headers.set('Content-Type', 'application/json');
+// 网关 HTML 错误页（部署/维护窗口由反向代理返回 502/503/504 的 HTML 页面）会被上层静默重试一次，
+  // 不再当作业务/图像服务错误向用户展示，从而避免「其实后台没报错、用户却看到图像服务不可用」的误报。
+  const GATEWAY_RETRY_MARKER = '__gateway_retry_marker__';
 
-  if (auth) {
-    const token = getToken();
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
+  function looksLikeGatewayErrorPage(responseText: string): boolean {
+    if (!/<\/?html/i.test(responseText)) return false;
+    const lower = (responseText || '').toLowerCase();
+    return /\b(502|503|504)\b|bad gateway|gateway time-?out|service unavailable/.test(lower);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const externalSignal = init.signal;
-  const abortFromCaller = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener('abort', abortFromCaller, { once: true });
-  }
+  async function requestOnce<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
+    const headers = new Headers(init.headers || {});
+    headers.set('Content-Type', 'application/json');
 
-  let response: Response;
-  let responseText: string;
-  try {
-    response = await fetch(toApiUrl(input), {
-      ...init,
-      headers,
-      signal: controller.signal,
-    });
-    responseText = await response.text();
-  } catch (error) {
-    if (controller.signal.aborted && !externalSignal?.aborted) {
-      throw new Error('请求超时，请稍后重试');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    externalSignal?.removeEventListener('abort', abortFromCaller);
-  }
-
-  const payload = parseJsonPayload<T>(responseText);
-
-  if (!response.ok) {
-    const errorCode = getApiErrorCode(payload);
-    if (auth && response.status === 401 && ['AUTH_TOKEN_INVALID', 'AUTH_SESSION_REPLACED'].includes(errorCode)) {
-      clearSession();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('pixory:session-expired'));
+    if (auth) {
+      const token = getToken();
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
       }
     }
-    throw new Error(getApiErrorMessage(payload, responseText));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const externalSignal = init.signal;
+    const abortFromCaller = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', abortFromCaller, { once: true });
+    }
+
+    let response: Response;
+    let responseText: string;
+    try {
+      response = await fetch(toApiUrl(input), {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+      responseText = await response.text();
+    } catch (error) {
+      if (controller.signal.aborted && !externalSignal?.aborted) {
+        throw new Error('请求超时，请稍后重试');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromCaller);
+    }
+
+    const payload = parseJsonPayload<T>(responseText);
+
+    if (!response.ok) {
+      if (looksLikeGatewayErrorPage(responseText)) {
+        throw new Error(GATEWAY_RETRY_MARKER);
+      }
+      const errorCode = getApiErrorCode(payload);
+      if (auth && response.status === 401 && ['AUTH_TOKEN_INVALID', 'AUTH_SESSION_REPLACED'].includes(errorCode)) {
+        clearSession();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('pixory:session-expired'));
+        }
+      }
+      throw new Error(getApiErrorMessage(payload, responseText));
+    }
+
+    return payload as T;
   }
 
-  return payload as T;
-}
+  const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  // 网关 503/502/504 属于部署/维护瞬态，静默重试一次后自愈；仍失败才抛错误。
+  async function request<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await requestOnce(input, init, auth, timeoutMs);
+      } catch (error) {
+        const shouldRetry = attempt === 0 && error instanceof Error && error.message === GATEWAY_RETRY_MARKER;
+        if (!shouldRetry) throw error;
+        await delay(1500);
+      }
+    }
+  }
 
 export async function fetchHealth() {
   return request<{ ok: boolean; userStorage: string }>('/api/health');

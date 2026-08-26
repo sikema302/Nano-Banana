@@ -6850,8 +6850,21 @@ export default function App() {
     setNotice('');
   }
 
+  // 创作页作品区与「历史记录」同源：以历史记录为基底派生卡片，确保「要有都有、要没有都没有」。
+  // 本次会话刚生成的最新图（currentImage + historyQueue）仍置前，历史作品随后补齐。
+  const creationHistoryImages: DisplayImage[] = historyRecords.map((record) => ({
+    imageUrl: record.imageUrl,
+    thumbnailUrl: record.thumbnailUrl,
+    modelName: record.modelName,
+    dimensions: record.dimensions,
+    imageSize: record.imageSize,
+    prompt: record.prompt,
+    createdAt: record.createdAt,
+  }));
+
   const stageSourceCards = (currentImage ? [currentImage, ...historyQueue] : historyQueue)
-    .filter((item, index, array) => index === 0 || array.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index);
+    .concat(creationHistoryImages)
+    .filter((item, index, array) => index === array.findIndex((candidate) => candidate.imageUrl === item.imageUrl));
   const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => [
     ...generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null })),
     { image: null, generation },

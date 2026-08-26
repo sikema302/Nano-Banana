@@ -208,6 +208,27 @@ export function createImageProviderRouter(options: RouterOptions) {
   const logger = options.logger || console;
   const cachedStates = new Map<string, PrimaryCircuitState>();
 
+  // 提取 fetch 层失败的真实底层原因（如 undici 的 ECONNRESET / UND_ERR_CONNECT_TIMEOUT）。
+  // undici 的网络失败统一 message 是 "fetch failed"，真正的 code/message 在 error.cause 里。
+  function errorCauseText(error: unknown): string {
+    const cause = error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined;
+    if (cause == null) return '';
+    if (cause instanceof Error) {
+      const code = (cause as { code?: string }).code;
+      return code ? `${code}: ${cause.message}` : cause.message;
+    }
+    if (typeof cause === 'object') {
+      const record = cause as Partial<Record<'code' | 'message', string>>;
+      if (record.code || record.message) return `${record.code || ''} ${record.message || ''}`.trim();
+      try {
+        return JSON.stringify(cause);
+      } catch {
+        return String(cause);
+      }
+    }
+    return String(cause);
+  }
+
   function configuration(input: ImageGenerationInput) {
     return `${input.imageSize || 'STANDARD'} / ${input.quality || 'default'} / ${input.ratio || '1:1'}`;
   }
@@ -347,7 +368,7 @@ export function createImageProviderRouter(options: RouterOptions) {
         `size=${requestSize(input, upstreamModel)} ratio=${input.ratio} imageSize=${input.imageSize} ` +
         `images=${input.images.length} prompt="${input.prompt.slice(0, 200)}" ` +
         `url=${requestUrl || '(not sent)'} http=${httpStatus} body=${responseBody || ''} ` +
-        `err=${errorText(error)}`,
+        `cause=${errorCauseText(error)} err=${errorText(error)}`,
       );
       throw error;
     } finally {
