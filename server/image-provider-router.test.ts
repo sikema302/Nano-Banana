@@ -57,7 +57,7 @@ test('uses the primary Junliai image when it succeeds', async () => {
     model: 'firefly-gpt-image-2',
     prompt: 'A lighthouse',
     size: '1024x1024',
-    response_format: 'b64_json',
+    response_format: 'url',
   });
 });
 
@@ -413,7 +413,7 @@ test('uses repeated image[] fields for multiple Junliai reference images', async
   assert.equal(requestBody?.get('size'), '2560x3200');
   assert.equal(requestBody?.getAll('image').length, 0);
   assert.equal(requestBody?.getAll('image[]').length, 2);
-  assert.equal(requestBody?.get('response_format'), 'b64_json');
+  assert.equal(requestBody?.get('response_format'), 'url');
   assert.equal(requestBody?.has('quality'), false);
 });
 
@@ -546,7 +546,7 @@ test('uses the mapped Junliai nano-banana-pro model at 1K', async () => {
     model: 'nano-banana-pro',
     prompt: 'A lighthouse',
     size: '1024x1024',
-    response_format: 'b64_json',
+    response_format: 'url',
   });
 });
 
@@ -620,7 +620,7 @@ test('uses the Junliai nano-banana-2 override for independent Banana 1K and 2K c
     model: 'nano-banana-2',
     prompt: 'A lighthouse',
     size: '1024x1024',
-    response_format: 'b64_json',
+    response_format: 'url',
   });
 
   assert.equal(
@@ -637,7 +637,7 @@ test('uses the Junliai nano-banana-2 override for independent Banana 1K and 2K c
     model: 'nano-banana-2',
     prompt: 'A lighthouse',
     size: '2048x2048',
-    response_format: 'b64_json',
+    response_format: 'url',
   });
 });
 

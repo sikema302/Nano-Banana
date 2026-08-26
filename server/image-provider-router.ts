@@ -309,7 +309,7 @@ export function createImageProviderRouter(options: RouterOptions) {
         form.set('model', upstreamModel);
         form.set('prompt', input.prompt);
         form.set('size', requestSize(input, upstreamModel));
-        form.set('response_format', 'b64_json');
+        form.set('response_format', 'url');
         const blobs = await Promise.all(
           input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
         );
@@ -322,7 +322,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           model: upstreamModel,
           prompt: input.prompt,
           size: requestSize(input, upstreamModel),
-          response_format: 'b64_json',
+          response_format: 'url',
         });
       }
       requestUrl = `${baseUrl}${endpoint}`;
