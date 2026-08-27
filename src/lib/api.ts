@@ -460,9 +460,7 @@ export async function downloadAsset(
       } catch (directError) {
         console.error('[downloadAsset] 直接 fetch 也失败:', directError);
         if (!save) throw directError;
-        // 最后尝试：用 window.open 打开图片
-        window.open(source, '_blank');
-        return new Blob();
+        throw new Error('下载失败：图片资源无法访问，请稍后重试');
       }
     }
   }

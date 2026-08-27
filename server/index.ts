@@ -5842,9 +5842,7 @@ async function readOwnedAsset(req: Request, storedSource: string) {
   const objectKey = legacyAssetObjectKey(source);
   const remoteUrl = R2_STORAGE && objectKey ? R2_STORAGE.publicUrl(objectKey) : publicUrl;
   if (!/^https?:\/\//i.test(remoteUrl)) return null;
-  const response = await fetch(remoteUrl, {
-    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
-  });
+  const response = await fetch(remoteUrl);
   if (!response.ok) return null;
   const responseType = normalizeString(response.headers.get('content-type')).split(';')[0].toLowerCase();
   const contentType = /^(?:image|video)\//.test(responseType)
@@ -8712,17 +8710,20 @@ async function start() {
     }
 
     try {
+      const startedAt = Date.now();
       const storedSource = await findOwnedAssetSource(req, requestedSource);
       if (!storedSource) {
         res.status(404).json({ error: '文件不存在或已过期' });
         return;
       }
+      const lookupMs = Date.now() - startedAt;
 
       const asset = await readOwnedAsset(req, storedSource);
       if (!asset?.buffer.length) {
         res.status(404).json({ error: '文件不存在或已过期' });
         return;
       }
+      const readMs = Date.now() - startedAt - lookupMs;
 
       const extension = asset.contentType.startsWith('video/')
         ? asset.contentType === 'video/webm' ? 'webm' : 'mp4'
@@ -8732,6 +8733,9 @@ async function start() {
       res.setHeader('Content-Disposition', `attachment; filename="pixory-${Date.now()}.${extension}"`);
       res.setHeader('Cache-Control', 'private, no-store');
       res.send(asset.buffer);
+      console.log(
+        `[asset-download] userId=${req.authUser?.userId ?? ''} bytes=${asset.buffer.length} lookup=${lookupMs}ms read=${readMs}ms total=${Date.now() - startedAt}ms`,
+      );
     } catch (error) {
       console.error('[asset-download]', error);
       res.status(502).json({ error: '下载失败，请稍后重试' });
