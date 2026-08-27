@@ -383,6 +383,26 @@ const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 5;
 const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
 
+// 灶台阶段状态按标签页隔离地读写 sessionStorage（每个窗口独立，互不串扰）。
+function readStageStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStageStorage<T>(key: string, value: T) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // 忽略配额/序列化异常，不影响界面
+  }
+}
+
 const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
   { value: '1:1', label: '1:1' },
   { value: '3:2', label: '3:2' },
@@ -5183,8 +5203,14 @@ export default function App() {
   const [favorites, setFavorites] = useState<SavedImage[]>([]);
   const [backup, setBackup] = useState<SavedImage[]>([]);
   const [discarded, setDiscarded] = useState<SavedImage[]>([]);
-  const [currentImage, setCurrentImage] = useState<DisplayImage | null>(null);
-  const [historyQueue, setHistoryQueue] = useState<DisplayImage[]>([]);
+  // 灶台只展示当前窗口自己的图片：用 sessionStorage 按标签页隔离持久化，
+  // 避免多窗口共享服务端历史导致相互挤占（sessionStorage 每个标签页独立，不会跨窗口串扰）。
+  const [currentImage, setCurrentImage] = useState<DisplayImage | null>(() =>
+    readStageStorage<DisplayImage | null>('pixory:stage:current', null),
+  );
+  const [historyQueue, setHistoryQueue] = useState<DisplayImage[]>(() =>
+    readStageStorage<DisplayImage[]>('pixory:stage:queue', []),
+  );
   const [editVersions, setEditVersions] = useState<DisplayImage[]>([]);
   const [editInstruction, setEditInstruction] = useState('');
   const [editLocks, setEditLocks] = useState<Set<EditLock>>(() => new Set(['person', 'composition']));
@@ -5311,6 +5337,11 @@ export default function App() {
   useEffect(() => {
     currentImageRef.current = currentImage;
   }, [currentImage]);
+
+  useEffect(() => {
+    writeStageStorage('pixory:stage:current', currentImage);
+    writeStageStorage('pixory:stage:queue', historyQueue);
+  }, [currentImage, historyQueue]);
 
   useEffect(() => {
     if (!SHOW_CREATION_ACTIVITY || activeTab !== 'create' || creationMode !== 'image') return;
@@ -6850,20 +6881,9 @@ export default function App() {
     setNotice('');
   }
 
-  // 创作页作品区与「历史记录」同源：以历史记录为基底派生卡片，确保「要有都有、要没有都没有」。
-  // 本次会话刚生成的最新图（currentImage + historyQueue）仍置前，历史作品随后补齐。
-  const creationHistoryImages: DisplayImage[] = historyRecords.map((record) => ({
-    imageUrl: record.imageUrl,
-    thumbnailUrl: record.thumbnailUrl,
-    modelName: record.modelName,
-    dimensions: record.dimensions,
-    imageSize: record.imageSize,
-    prompt: record.prompt,
-    createdAt: record.createdAt,
-  }));
-
+  // 灶台只展示当前窗口本次会话生成的图片，不再用服务端历史补齐。
+  // 这样每个窗口只占用自己的灶台数量，不会被其他窗口的生成挤掉；删除后也不会因历史回填而"没反应"。
   const stageSourceCards = (currentImage ? [currentImage, ...historyQueue] : historyQueue)
-    .concat(creationHistoryImages)
     .filter((item, index, array) => index === array.findIndex((candidate) => candidate.imageUrl === item.imageUrl));
   const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => [
     ...generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null })),
