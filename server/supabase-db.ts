@@ -1893,28 +1893,14 @@ export async function purgeExpiredImageData(retentionDays = IMAGE_RETENTION_DAYS
 }> {
   const cutoffIso = subtractDaysIso(retentionDays);
 
-  const { data: oldGenerations, error: generationsQueryError } = await getSupabase()
-    .from('generations')
-    .select('id')
-    .lt('created_at', cutoffIso);
-  if (generationsQueryError) {
-    throw new Error(`Query expired generations failed: ${generationsQueryError.message}`);
-  }
-
+  // 历史记录（generations）是轻量元数据，必须与后台累计统计保持一致并永久保留；
+  // 磁盘回收只针对 images 表与物理图片文件，因此不再删除 generations 行。
   const { data: oldImages, error: imagesQueryError } = await getSupabase()
     .from('images')
     .select('id')
     .lt('created_at', cutoffIso);
   if (imagesQueryError) {
     throw new Error(`Query expired images failed: ${imagesQueryError.message}`);
-  }
-
-  if ((oldGenerations || []).length > 0) {
-    const generationIds = oldGenerations.map((row) => normalizeSupabaseId((row as { id: string | number }).id));
-    const { error: deleteGenerationsError } = await getSupabase().from('generations').delete().in('id', generationIds);
-    if (deleteGenerationsError) {
-      throw new Error(`Delete expired generations failed: ${deleteGenerationsError.message}`);
-    }
   }
 
   if ((oldImages || []).length > 0) {
@@ -1926,7 +1912,7 @@ export async function purgeExpiredImageData(retentionDays = IMAGE_RETENTION_DAYS
   }
 
   return {
-    deletedGenerations: (oldGenerations || []).length,
+    deletedGenerations: 0,
     deletedImages: (oldImages || []).length,
     cutoffIso,
   };

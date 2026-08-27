@@ -4248,13 +4248,6 @@ function reclaimLowBalanceInviteCodes(db: SqlDatabase) {
 function purgeExpiredImageDataSqlite(db: SqlDatabase, retentionDays = IMAGE_RETENTION_DAYS) {
   ensureSchema(db);
   const cutoffIso = subtractDaysIso(retentionDays);
-  const deletedGenerations = Number(
-    getOne<{ total: number }>(
-      db,
-      'SELECT COUNT(*) AS total FROM generations WHERE datetime(created_at) < datetime(?)',
-      [cutoffIso],
-    )?.total || 0,
-  );
   const deletedImages = Number(
     getOne<{ total: number }>(
       db,
@@ -4263,18 +4256,55 @@ function purgeExpiredImageDataSqlite(db: SqlDatabase, retentionDays = IMAGE_RETE
     )?.total || 0,
   );
 
-  if (deletedGenerations > 0) {
-    db.run('DELETE FROM generations WHERE datetime(created_at) < datetime(?)', [cutoffIso]);
-  }
+  // 历史记录（generations）是轻量元数据，必须与后台累计统计（user_generation_stats）
+  // 保持一致并永久保留；磁盘回收只针对 images 表与物理图片文件，因此不再删除 generations 行。
+  // 若删除 generations，会出现「后台累计成功 N 张、用户历史只有 N-k 张」的永久性差异。
   if (deletedImages > 0) {
     db.run('DELETE FROM images WHERE datetime(created_at) < datetime(?)', [cutoffIso]);
   }
 
   return {
-    deletedGenerations,
+    deletedGenerations: 0,
     deletedImages,
     cutoffIso,
   };
+}
+
+function backfillMissingGenerationsFromRequestsSqlite(db: SqlDatabase) {
+  ensureSchema(db);
+  const missing = Number(
+    getOne<{ c: number }>(
+      db,
+      `SELECT COUNT(*) AS c FROM generation_requests r
+       WHERE r.result_status = 'success'
+         AND r.image_path != ''
+         AND r.username != 'demo'
+         AND NOT EXISTS (
+           SELECT 1 FROM generations g WHERE g.user_id = r.user_id AND g.image_path = r.image_path
+         )`,
+    )?.c || 0,
+  );
+  if (missing === 0) return 0;
+
+  db.run(
+    `
+      INSERT INTO generations (
+        user_id, username, prompt, model_id, model_name, dimensions,
+        image_size, image_path, credits_used, api_request_ms, reference_images, created_at
+      )
+      SELECT
+        r.user_id, r.username, r.prompt, r.model_id, r.model_name, r.dimensions,
+        r.image_size, r.image_path, r.credits_used, r.api_request_ms, r.reference_images, r.created_at
+      FROM generation_requests r
+      WHERE r.result_status = 'success'
+        AND r.image_path != ''
+        AND r.username != 'demo'
+        AND NOT EXISTS (
+          SELECT 1 FROM generations g WHERE g.user_id = r.user_id AND g.image_path = r.image_path
+        )
+    `,
+  );
+  return missing;
 }
 
 async function purgeExpiredReferenceFiles(retentionDays = IMAGE_RETENTION_DAYS) {
@@ -4481,6 +4511,17 @@ async function ensureRuntimeSchema() {
     migrateLegacyApiCreditsSqlite(db);
     syncRedeemedInviteCodeBalances(db);
     reclaimLowBalanceInviteCodes(db);
+
+    // 历史记录回填：把 generation_requests 中成功、但被旧保留策略误删的记录补回 generations，
+    // 使「后台累计成功张数」与「用户历史记录」保持一致（幂等，按 user_id + image_path 去重）。
+    try {
+      const restored = backfillMissingGenerationsFromRequestsSqlite(db);
+      if (restored > 0) {
+        console.log(`[history-backfill] restored ${restored} missing generation record(s)`);
+      }
+    } catch (error) {
+      console.warn('[history-backfill] failed', error);
+    }
   });
 }
 
