@@ -8702,6 +8702,30 @@ async function start() {
 
   // 鈹€鈹€鈹€ 绠＄悊鍛樻瑙?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
+  const downloadTimingLog: Array<{
+    at: string;
+    userId: string;
+    bytes: number;
+    lookupMs: number;
+    readMs: number;
+    totalMs: number;
+    ok: boolean;
+  }> = [];
+  const DOWNLOAD_LOG_LIMIT = 200;
+  function recordDownloadTiming(entry: {
+    userId: string;
+    bytes: number;
+    lookupMs: number;
+    readMs: number;
+    totalMs: number;
+    ok: boolean;
+  }) {
+    downloadTimingLog.push({ at: new Date().toISOString(), ...entry });
+    if (downloadTimingLog.length > DOWNLOAD_LOG_LIMIT) {
+      downloadTimingLog.splice(0, downloadTimingLog.length - DOWNLOAD_LOG_LIMIT);
+    }
+  }
+
   app.post('/api/user/assets/download', requireAuth, async (req, res) => {
     const requestedSource = normalizeString(req.body?.source);
     if (!requestedSource) {
@@ -8709,8 +8733,8 @@ async function start() {
       return;
     }
 
+    const startedAt = Date.now();
     try {
-      const startedAt = Date.now();
       const storedSource = await findOwnedAssetSource(req, requestedSource);
       if (!storedSource) {
         res.status(404).json({ error: '文件不存在或已过期' });
@@ -8733,13 +8757,38 @@ async function start() {
       res.setHeader('Content-Disposition', `attachment; filename="pixory-${Date.now()}.${extension}"`);
       res.setHeader('Cache-Control', 'private, no-store');
       res.send(asset.buffer);
+      const totalMs = Date.now() - startedAt;
+      recordDownloadTiming({
+        userId: req.authUser?.userId ?? '',
+        bytes: asset.buffer.length,
+        lookupMs,
+        readMs,
+        totalMs,
+        ok: true,
+      });
       console.log(
-        `[asset-download] userId=${req.authUser?.userId ?? ''} bytes=${asset.buffer.length} lookup=${lookupMs}ms read=${readMs}ms total=${Date.now() - startedAt}ms`,
+        `[asset-download] userId=${req.authUser?.userId ?? ''} bytes=${asset.buffer.length} lookup=${lookupMs}ms read=${readMs}ms total=${totalMs}ms`,
       );
     } catch (error) {
       console.error('[asset-download]', error);
+      recordDownloadTiming({
+        userId: req.authUser?.userId ?? '',
+        bytes: 0,
+        lookupMs: 0,
+        readMs: 0,
+        totalMs: Date.now() - startedAt,
+        ok: false,
+      });
       res.status(502).json({ error: '下载失败，请稍后重试' });
     }
+  });
+
+  app.get('/api/admin/download-log', requireAuth, requireAdmin, (req, res) => {
+    const count = parsePaginationValue(req.query.count, 50, 1, DOWNLOAD_LOG_LIMIT);
+    res.json({
+      total: downloadTimingLog.length,
+      entries: downloadTimingLog.slice(-count).reverse(),
+    });
   });
 
   app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
