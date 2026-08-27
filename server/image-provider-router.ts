@@ -301,38 +301,68 @@ export function createImageProviderRouter(options: RouterOptions) {
       const headers: Record<string, string> = {
         Authorization: normalizeAuthorization(options.authorization),
       };
-      let body: BodyInit;
-      let endpoint = '/v1/images/generations';
-      if (input.images.length) {
-        endpoint = '/v1/images/edits';
-        const form = new FormData();
-        form.set('model', upstreamModel);
-        form.set('prompt', input.prompt);
-        form.set('size', requestSize(input, upstreamModel));
-        form.set('response_format', 'url');
-        const blobs = await Promise.all(
-          input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
-        );
-        const imageField = blobs.length > 1 ? 'image[]' : 'image';
-        blobs.forEach((blob, index) => form.append(imageField, blob, `reference-${index + 1}.png`));
-        body = form;
-      } else {
-        headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({
-          model: upstreamModel,
-          prompt: input.prompt,
-          size: requestSize(input, upstreamModel),
-          response_format: 'url',
-        });
+
+      const buildRequest = async () => {
+        let body: BodyInit;
+        let endpoint = '/v1/images/generations';
+        if (input.images.length) {
+          endpoint = '/v1/images/edits';
+          const form = new FormData();
+          form.set('model', upstreamModel);
+          form.set('prompt', input.prompt);
+          form.set('size', requestSize(input, upstreamModel));
+          form.set('response_format', 'url');
+          const blobs = await Promise.all(
+            input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
+          );
+          const imageField = blobs.length > 1 ? 'image[]' : 'image';
+          blobs.forEach((blob, index) => form.append(imageField, blob, `reference-${index + 1}.png`));
+          body = form;
+        } else {
+          headers['Content-Type'] = 'application/json';
+          body = JSON.stringify({
+            model: upstreamModel,
+            prompt: input.prompt,
+            size: requestSize(input, upstreamModel),
+            response_format: 'url',
+          });
+        }
+        return { url: `${baseUrl}${endpoint}`, body };
+      };
+
+      // 网络层失败（fetch reject，未拿到任何 HTTP 响应）会直接抛 "fetch failed"，
+      // 此时自动重试 1 次以缓解上游瞬时网络抖动；图片为成功后扣费，重试不会重复扣钱。
+      let response: globalThis.Response;
+      {
+        const first = await buildRequest();
+        requestUrl = first.url;
+        requestSent = true;
+        try {
+          response = await fetchImpl(requestUrl, {
+            method: 'POST',
+            headers,
+            body: first.body,
+            signal: controller.signal,
+          });
+        } catch (networkError) {
+          // 仅在非超时/非中断的真实网络抖动时重试一次；自身超时（signal 已 abort）不重试，
+          // 否则会复用一个已中止的 signal 导致请求永不返回。
+          const aborted = controller.signal.aborted
+            || (typeof DOMException !== 'undefined' && networkError instanceof DOMException && networkError.name === 'AbortError');
+          if (aborted) throw networkError;
+          logger.warn(
+            `[image-provider] network error on ${upstreamModel}; retrying once: ${errorCauseText(networkError)}`,
+          );
+          const retry = await buildRequest();
+          requestUrl = retry.url;
+          response = await fetchImpl(requestUrl, {
+            method: 'POST',
+            headers,
+            body: retry.body,
+            signal: controller.signal,
+          });
+        }
       }
-      requestUrl = `${baseUrl}${endpoint}`;
-      requestSent = true;
-      const response = await fetchImpl(requestUrl, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
       httpStatus = response.status;
       const raw = await response.text();
       responseBody = raw.slice(0, 600);

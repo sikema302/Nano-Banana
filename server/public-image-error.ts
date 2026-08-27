@@ -78,15 +78,21 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
   }
 
   if (containsAny(lower, [
+    /database|prisma|server is shutting down|error querying the database|database system is shutting down|database connection/i,
+  ])) {
+    return { category: 'service_unavailable', message: '图像服务暂时不可用，请稍后重试' };
+  }
+
+  if (containsAny(lower, [
     /image_service_unavailable/,
     /(?:502|503|504)(?:\s|\b)/,
     /bad gateway|gateway time-?out|service unavailable/,
     /timed?\s*out|timeout|abort(?:ed|error)/,
     /network|fetch failed|socket|dns|econn|connection (?:reset|refused|terminated)/,
-    /database|prisma|internal (?:server )?(?:error|failure)|server is shutting down/,
+    /internal (?:server )?(?:error|failure)/,
     /服务暂时不可用|服务异常|网络异常|响应超时|网关异常/,
   ])) {
-    return { category: 'service_unavailable', message: '图像服务暂时不可用，请稍后重试' };
+    return { category: 'service_unavailable', message: '当前模型太拥挤了，请稍后重试或试试其他模型' };
   }
 
   if (containsAny(lower, [
@@ -109,7 +115,7 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     return { category: 'request', message: '当前请求较多，请稍后重试' };
   }
 
-  return { category: 'busy', message: '当前模型过于拥挤，请使用其他模型' };
+  return { category: 'busy', message: '当前模型太拥挤了，请稍后重试或试试其他模型' };
 }
 
 export function publicImageErrorMessage(value: unknown) {

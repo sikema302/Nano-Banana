@@ -38,9 +38,15 @@ test('keeps reference image errors useful and specific', () => {
 });
 
 test('separates real service failures from congestion and hides routing', () => {
-  assert.equal(publicImageErrorMessage('503 service unavailable from Visionary'), '图像服务暂时不可用，请稍后重试');
+  assert.equal(
+    publicImageErrorMessage('Database system is shutting down'),
+    '图像服务暂时不可用，请稍后重试',
+  );
+  assert.equal(publicImageErrorMessage('503 service unavailable from Visionary'), '当前模型太拥挤了，请稍后重试或试试其他模型');
+  assert.equal(publicImageErrorMessage('504 Gateway Timeout'), '当前模型太拥挤了，请稍后重试或试试其他模型');
+  assert.equal(publicImageErrorMessage('fetch failed: ECONNRESET'), '当前模型太拥挤了，请稍后重试或试试其他模型');
   const busy = publicImageErrorMessage('gpt-image-2 quota exhausted; switching to Visionary fallback');
-  assert.equal(busy, '当前模型过于拥挤，请使用其他模型');
+  assert.equal(busy, '当前模型太拥挤了，请稍后重试或试试其他模型');
   assert.doesNotMatch(busy, /gpt|visionary|switch|fallback/i);
 });
 

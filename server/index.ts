@@ -4599,14 +4599,13 @@ function sanitizeExternalErrorMessage(value: string, fallback = '图像服务返
     return '图像服务暂时不可用，请稍后重试';
   }
 
-  if (lower.includes('504 gateway time-out') || lower.includes('504 gateway timeout')) {
-    return '图像服务响应超时，请稍后重试';
-  }
-  if (lower.includes('502 bad gateway')) {
-    return '图像服务网关异常，请稍后重试';
-  }
-  if (lower.includes('503 service unavailable')) {
-    return '图像服务暂时不可用，请稍后重试';
+  if (
+    lower.includes('502 bad gateway') ||
+    lower.includes('503 service unavailable') ||
+    lower.includes('504 gateway time-out') ||
+    lower.includes('504 gateway timeout')
+  ) {
+    return '当前模型太拥挤了，请稍后重试或试试其他模型';
   }
   if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
     return normalized && normalized.length <= 180 ? normalized : fallback;
@@ -5031,6 +5030,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
 
   const traceId = crypto.randomUUID();
   let sawServiceFailure = false;
+  let sawReferenceError = '';
   for (const channelId of channels) {
     try {
       const source = await callConfiguredImageChannel(effectiveInput, channelId, traceId);
@@ -5039,10 +5039,17 @@ async function callImageGeneration(input: ImageGenerationInput) {
     } catch (error) {
       console.warn(`[image-channel] traceId=${traceId} ${channelId} failed: ${imageErrorText(error)}`);
       const publicError = classifyPublicImageError(imageErrorText(error));
-      if (publicError.category === 'sensitive_prompt' || publicError.category === 'reference_image') {
+      if (publicError.category === 'sensitive_prompt') {
         throw new Error(publicError.message);
       }
-      imageChannelFailover.markFailure(routeKey, channelId);
+      if (publicError.category === 'reference_image') {
+        // 参考图错误是本渠道不支持/处理不了该参考图，换成支持参考图的渠道仍可能成功，
+        // 因此不立即报错，继续尝试下一个渠道（更有利于客户）；这类错误并非渠道健康问题，
+        // 不将该渠道计入冷却，避免误伤其他用户的请求。
+        sawReferenceError = sawReferenceError || publicError.message;
+      } else {
+        imageChannelFailover.markFailure(routeKey, channelId);
+      }
       const errorStatus = Number((error as { status?: unknown } | null)?.status);
       if (publicError.category === 'service_unavailable' || (errorStatus >= 500 && errorStatus < 600)) {
         sawServiceFailure = true;
@@ -5052,6 +5059,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
       }
     }
   }
+  if (sawReferenceError) throw new Error(sawReferenceError);
   throw new Error(sawServiceFailure ? 'IMAGE_SERVICE_UNAVAILABLE' : 'IMAGE_MODEL_BUSY');
 }
 
