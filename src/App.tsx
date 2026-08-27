@@ -615,6 +615,9 @@ function createActivityPreviewCount() {
 }
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
+// 生成任务在服务端异步执行；轮询命中网络/网关抖动时不应过早放弃。
+// 用一个宽松的整体上限兜底，避免因瞬时抖动把「后台其实还在正常生成」的任务误判为失败。
+const GENERATION_JOB_POLL_MAX_MS = 6 * 60_000;
 const SHOW_CREATION_ACTIVITY = true;
 const SHOW_PROMO_COUPON_HEADER_ENTRY = false;
 
@@ -6304,16 +6307,15 @@ export default function App() {
     fallbackStartedAt: number,
     onProgress?: (completed: number, visual: number) => void,
   ) {
-    let pollingFailures = 0;
+    const deadlineMs = Date.now() + GENERATION_JOB_POLL_MAX_MS;
 
     while (true) {
       let job: GenerationJobInfo;
       try {
         ({ job } = await fetchGenerateImageJob(jobId));
-        pollingFailures = 0;
       } catch (error) {
-        pollingFailures += 1;
-        if (pollingFailures >= 5) {
+        // 网络/网关抖动不意味着任务失败：生成在服务端异步继续，稍后重试轮询即可。
+        if (Date.now() > deadlineMs) {
           throw error;
         }
         const fallbackPercent = getFriendlyJobProgress(
@@ -6344,6 +6346,9 @@ export default function App() {
       }
       if (job.status === 'failed') {
         throw new Error(job.error || '生成失败');
+      }
+      if (Date.now() > deadlineMs) {
+        throw new Error('生成超时，请稍后重试');
       }
 
       await sleep(GENERATION_JOB_POLL_INTERVAL_MS);

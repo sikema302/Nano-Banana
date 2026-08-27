@@ -7951,6 +7951,24 @@ async function start() {
     }
   }
 
+  // 由真正执行生成的后台 handler 写入终态（它负责扣款与落库），是权威结果。
+  // 一旦进入 succeeded/failed 终态，就不再被内网 HTTP 响应中的错乱信号覆盖，
+  // 从而避免「后台已成功并扣积分、前端却显示失败」的不一致。
+  function setGenerationJobTerminal(
+    jobId: string,
+    patch: { status: 'succeeded' | 'failed'; image?: GeneratedImagePayload; error?: string },
+  ) {
+    const current = generationJobs.get(jobId);
+    if (!current) return;
+    generationJobs.set(jobId, {
+      ...current,
+      ...patch,
+      progress: patch.status === 'succeeded' ? 100 : Math.max(current.progress || 12, 12),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+  }
+
   async function runGenerationJob(jobId: string) {
     const job = generationJobs.get(jobId);
     if (!job) return;
@@ -7977,7 +7995,6 @@ async function start() {
         },
         body: JSON.stringify(job.requestBody),
       });
-      updateJob({ progress: 88 });
 
       const responseText = await response.text().catch(() => '');
       let payload: { image?: GeneratedImagePayload; error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null = null;
@@ -7997,19 +8014,24 @@ async function start() {
         throw new Error('Generate failed: missing image result');
       }
 
-      updateJob({
-        status: 'succeeded',
-        progress: 100,
-        image: payload.image,
-        completedAt: nowIso(),
-      });
+      // 后台 handler 在成功时已写入终态；这里仅兜底，不覆盖权威结果。
+      const current = generationJobs.get(jobId);
+      if (!current || (current.status !== 'succeeded' && current.status !== 'failed')) {
+        updateJob({ status: 'succeeded', progress: 100, image: payload.image, completedAt: nowIso() });
+      }
     } catch (error) {
-      updateJob({
-        status: 'failed',
-        progress: Math.max(12, generationJobs.get(jobId)?.progress || 12),
-        error: publicImageErrorMessage(error instanceof Error ? error.message : 'Generate failed'),
-        completedAt: nowIso(),
-      });
+      // 权威结果是后台 handler 写入的终态（扣款+落库都在那里发生）；
+      // 若内网响应丢失/超时而 handler 已成功，这里绝不把它改写成失败。
+      const current = generationJobs.get(jobId);
+      const alreadyTerminal = current?.status === 'succeeded' || current?.status === 'failed';
+      if (!alreadyTerminal) {
+        updateJob({
+          status: 'failed',
+          progress: Math.max(12, current?.progress || 12),
+          error: publicImageErrorMessage(error instanceof Error ? error.message : 'Generate failed'),
+          completedAt: nowIso(),
+        });
+      }
     }
   }
 
@@ -8685,7 +8707,9 @@ async function start() {
         console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
       }
 
-      res.json({ image: toPublicGeneratedImagePayload(req, payload) });
+      const publicImage = toPublicGeneratedImagePayload(req, payload);
+      setGenerationJobTerminal(queuedJobId, { status: 'succeeded', image: publicImage });
+      res.json({ image: publicImage });
     } catch (error) {
       // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
       if (reservedGenerationCredit) {
@@ -8697,6 +8721,7 @@ async function start() {
       console.error('[generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';
       const status = getPublicApiErrorStatus(rawMessage);
+      setGenerationJobTerminal(queuedJobId, { status: 'failed', error: publicImageErrorMessage(rawMessage) });
       res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
     }
   });
