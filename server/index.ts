@@ -8748,7 +8748,20 @@ async function start() {
         });
       }
       } catch (recordingError) {
+        // 扣款与历史记录必须同进退：写历史/计数失败即退回本次积分并判定失败，绝不留下「扣了分却没有记录」的脏账。
         console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
+        try {
+          await refundUserCredits(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
+          creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
+            { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` });
+          releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
+        } catch (refundError) {
+          console.error('[generate] refund after history recording failure failed:', refundError);
+        }
+        const historyFailureMessage = '记录生成结果失败，本次积分已退回，请重试';
+        setGenerationJobTerminal(queuedJobId, { status: 'failed', error: historyFailureMessage });
+        res.status(500).json({ error: historyFailureMessage });
+        return;
       }
 
       const publicImage = toPublicGeneratedImagePayload(req, payload);
