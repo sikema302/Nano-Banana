@@ -643,6 +643,19 @@ const GROK_IMAGE_MODEL = 'grok-image';
 const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
 const SCHAT_SEEDANCE_2_FAST_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_2_FAST_MODEL || 'sd2.0fast（可音频，过真人）');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
+
+// Uselg(FluxPort) 生图渠道：标准(STANDARD/1K)用 STANDARD key，2K/4K 用 HD key。
+const USSELG_BASE_URL = normalizeEnvValue(process.env.USSELG_BASE_URL || 'https://uselg.top/v1');
+const USSELG_STANDARD_KEY = normalizeEnvValue(process.env.USSELG_STANDARD_KEY);
+const USSELG_HD_KEY = normalizeEnvValue(process.env.USSELG_HD_KEY);
+const USSELG_MODEL = normalizeEnvValue(process.env.USSELG_MODEL || 'gpt-image-2');
+const USSELG_TIMEOUT_MS = Math.max(60_000, Number(process.env.USSELG_TIMEOUT_MS || 15 * 60_000));
+
+function selectUselgApiKey(imageSize: string) {
+  const size = ['1K', '2K', '4K'].includes(imageSize) ? imageSize : 'STANDARD';
+  if (size === '2K' || size === '4K') return USSELG_HD_KEY || USSELG_STANDARD_KEY;
+  return USSELG_STANDARD_KEY;
+}
 // Previous Chat2API primary integration is intentionally disabled:
 // CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
 const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
@@ -688,16 +701,19 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
+      { id: 'uselg', enabled: true },
       { id: 'visionary', enabled: true },
     ],
     '2K': [
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
+      { id: 'uselg', enabled: true },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
+      { id: 'uselg', enabled: true },
       { id: 'visionary', enabled: true },
     ],
   },
@@ -4989,6 +5005,20 @@ async function callConfiguredImageChannel(
         'Visionary',
         'gpt-image-2',
         () => callVisionaryGeneration(input),
+      );
+    }
+    if (channelId === 'uselg') {
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Uselg · Flux',
+        USSELG_MODEL,
+        () => generateSchatImage(input, {
+          baseUrl: USSELG_BASE_URL,
+          apiKey: selectUselgApiKey(input.imageSize),
+          model: USSELG_MODEL,
+          timeoutMs: USSELG_TIMEOUT_MS,
+        }),
       );
     }
     const upstreamModel = channelId === 'junliai-economy'
