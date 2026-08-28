@@ -20,6 +20,8 @@ jobs:
       VISIONARY_NANO_LITE_API_KEY: ${{ secrets.VISIONARY_NANO_LITE_API_KEY }}
       FLUX_BANANA_API_KEY: ${{ secrets.FLUX_BANANA_API_KEY }}
       SCHAT_API_KEY: ${{ secrets.SCHAT_API_KEY }}
+      USSELG_STANDARD_KEY: ${{ secrets.USSELG_STANDARD_KEY }}
+      USSELG_HD_KEY: ${{ secrets.USSELG_HD_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -70,6 +72,11 @@ jobs:
             printf 'R2_BUCKET_NAME="%s"\n' "$R2_BUCKET_NAME"
             printf 'R2_PUBLIC_BASE_URL="%s"\n' "$R2_PUBLIC_BASE_URL"
           } > .deploy-package/.secrets/r2-env
+
+          {
+            if [ -n "$USSELG_STANDARD_KEY" ]; then printf 'USSELG_STANDARD_KEY="%s"\n' "$USSELG_STANDARD_KEY"; fi
+            if [ -n "$USSELG_HD_KEY" ]; then printf 'USSELG_HD_KEY="%s"\n' "$USSELG_HD_KEY"; fi
+          } > .deploy-package/.secrets/uselg-env
 
           tar -czf release.tar.gz -C .deploy-package .
           echo "Release package: $(du -sh release.tar.gz | cut -f1)"

@@ -122,6 +122,14 @@ if [ -d "$SECRETS_DIR" ]; then
     chmod 600 .env.local
   fi
 
+  if [ -s "$SECRETS_DIR/uselg-env" ]; then
+    touch .env.local
+    (grep -v -E '^USSELG_(STANDARD_KEY|HD_KEY)=' .env.local 2>/dev/null || true) > .env.local.next
+    cat "$SECRETS_DIR/uselg-env" >> .env.local.next
+    mv .env.local.next .env.local
+    chmod 600 .env.local
+  fi
+
   rm -rf "$SECRETS_DIR"
 fi
 
