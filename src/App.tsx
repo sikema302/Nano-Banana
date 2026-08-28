@@ -831,35 +831,35 @@ function StageCard({
             </p>
           </div>
           {showActions ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {onEdit ? (
                 <button
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-100 transition hover:bg-sky-500/20"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-100 transition hover:bg-sky-500/20"
                   type="button"
                   onClick={() => onEdit(item)}
                 >
-                  <MessageCircle size={13} />
+                  <MessageCircle size={12} />
                   继续修改
                 </button>
               ) : null}
               <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/20"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-100 transition hover:bg-emerald-500/20"
                 type="button"
                 onClick={() => onSave?.('favorite')}
               >
-                <Star size={13} />
+                <Star size={12} />
                 满意
               </button>
               <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-pink-400/25 bg-pink-500/10 px-2.5 py-1.5 text-xs text-pink-100 transition hover:bg-pink-500/20"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-pink-400/25 bg-pink-500/10 px-2 py-1 text-[11px] text-pink-100 transition hover:bg-pink-500/20"
                 type="button"
                 onClick={() => onSave?.('backup')}
               >
-                <Bookmark size={13} />
+                <Bookmark size={12} />
                 备份
               </button>
               <button
-                className={`inline-flex w-[100px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-zinc-200 transition ${
+                className={`inline-flex w-[74px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] text-zinc-200 transition ${
                   downloading
                     ? 'cursor-wait opacity-60'
                     : 'hover:border-white/20 hover:text-white'
@@ -868,15 +868,15 @@ function StageCard({
                 onClick={onDownload}
                 disabled={downloading}
               >
-                <Download size={13} className={downloading ? 'animate-spin' : ''} />
+                <Download size={12} className={downloading ? 'animate-spin' : ''} />
                 {downloading ? '下载中…' : '下载'}
               </button>
               <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/25 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-100 transition hover:bg-rose-500/20"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-400/25 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-100 transition hover:bg-rose-500/20"
                 type="button"
                 onClick={onDelete}
               >
-                <Trash2 size={13} />
+                <Trash2 size={12} />
                 删除
               </button>
             </div>
