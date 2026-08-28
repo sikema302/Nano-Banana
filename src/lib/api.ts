@@ -124,6 +124,8 @@ export interface GenerationRecord {
   inviteCode?: string;
   resultStatus?: 'success' | 'failed';
   resultMessage?: string;
+  errorDetail?: string;
+  referenceImageTypes?: string[];
   createdAt: string;
 }
 

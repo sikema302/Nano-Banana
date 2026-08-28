@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS generation_requests (
   reference_images TEXT NOT NULL DEFAULT '[]',
   result_status TEXT NOT NULL,
   result_message TEXT NOT NULL DEFAULT '',
+  error_detail TEXT NOT NULL DEFAULT '',
+  reference_image_types TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -4915,6 +4915,7 @@ function AdminView({
                           <th className="w-24 px-3 py-2 font-medium">图片/视频</th>
                           <th className="px-3 py-2 font-medium">用户</th>
                           <th className="px-3 py-2 font-medium">请求结果</th>
+                          <th className="px-3 py-2 font-medium">参考图类型</th>
                           <th className="px-3 py-2 font-medium">源头模型</th>
                           <th className="px-3 py-2 font-medium">比例 / 分辨率</th>
                           <th className="px-3 py-2 font-medium">积分消耗</th>
@@ -4938,8 +4939,11 @@ function AdminView({
                               ) : <span className="text-zinc-600">-</span>}
                             </td>
                             <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                            <td className={`max-w-[280px] truncate px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultMessage || ''}>
-                              {item.resultStatus === 'failed' ? item.resultMessage || '请求失败' : '成功'}
+                            <td className={`max-w-[300px] break-words px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultStatus === 'failed' ? (item.errorDetail || item.resultMessage || '请求失败') : ''}>
+                              {item.resultStatus === 'failed' ? (item.errorDetail || item.resultMessage || '请求失败') : '成功'}
+                            </td>
+                            <td className="px-3 py-3 font-medium text-zinc-300" title={(item.referenceImageTypes || []).join(', ')}>
+                              {item.referenceImageTypes && item.referenceImageTypes.length > 0 ? item.referenceImageTypes.map((type) => type.toUpperCase()).join(', ') : '-'}
                             </td>
                             <td className="px-3 py-3">{item.modelName}</td>
                             <td className="px-3 py-3">

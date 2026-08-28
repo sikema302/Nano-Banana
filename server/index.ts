@@ -1374,8 +1374,36 @@ function toGeneration(row: Record<string, unknown>) {
     inviteCode: row.invite_code ? String(row.invite_code) : '',
     resultStatus: String(row.result_status || 'success'),
     resultMessage: String(row.result_message || ''),
+    errorDetail: String(row.error_detail || ''),
+    referenceImageTypes: parseReferenceImageTypes(row.reference_image_types),
     createdAt: String(row.created_at || ''),
   };
+}
+
+function parseReferenceImageTypes(raw: unknown): string[] {
+  const text = normalizeString(raw);
+  if (!text) return [];
+  return Array.from(
+    new Set(
+      text
+        .split(',')
+        .map((item) => normalizeString(item).replace(/^image\//, '').replace('jpeg', 'jpg').toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function extractReferenceImageTypes(inputs: ReferenceUploadInput[]): string[] {
+  const types: string[] = [];
+  for (const item of inputs.slice(0, MAX_REFERENCE_IMAGE_COUNT)) {
+    const mime = normalizeString(item.mimeType).toLowerCase();
+    const type = mime.startsWith('image/')
+      ? mime.slice('image/'.length).replace('jpeg', 'jpg')
+      : '';
+    if (!type) continue;
+    if (!types.includes(type)) types.push(type);
+  }
+  return types;
 }
 
 async function recordGenerationRequest(attempt: {
@@ -1387,7 +1415,7 @@ async function recordGenerationRequest(attempt: {
   errorMessage?: string;
   sourceModel: string;
   prompt: string;
-  requestContext?: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string };
+  requestContext?: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] };
 }): Promise<string> {
   const context = attempt.requestContext;
   if (!context?.userId || !context.username) return '';
@@ -1404,6 +1432,8 @@ async function recordGenerationRequest(attempt: {
     apiRequestMs: Math.max(0, Math.round(attempt.durationMs || 0)),
     resultStatus: attempt.success ? 'success' : 'failed',
     resultMessage: attempt.success ? '' : sanitizeExternalErrorMessage(attempt.errorMessage || 'Upstream request failed', 'Upstream request failed'),
+    errorDetail: attempt.success ? '' : (attempt.errorMessage || ''),
+    referenceImageTypes: (context.referenceImageTypes || []).join(','),
     createdAt: nowIso(),
   };
   if (USE_SUPABASE) {
@@ -1417,12 +1447,12 @@ async function recordGenerationRequest(attempt: {
       `INSERT INTO generation_requests (
         user_id, username, prompt, model_id, model_name, dimensions, image_size,
         image_path, credits_used, api_request_ms, reference_images, result_status,
-        result_message, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, '[]', ?, ?, ?)`,
+        result_message, error_detail, reference_image_types, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, '[]', ?, ?, ?, ?, ?)`,
       [
         record.userId, record.username, record.prompt, record.modelId, record.modelName,
         record.dimensions, record.imageSize, record.creditsUsed, record.apiRequestMs, record.resultStatus,
-        record.resultMessage, record.createdAt,
+        record.resultMessage, record.errorDetail, record.referenceImageTypes, record.createdAt,
       ],
     );
     requestId = lastInsertId(db);
@@ -2551,10 +2581,23 @@ function ensureSchema(db: SqlDatabase) {
       reference_images TEXT NOT NULL DEFAULT '[]',
       result_status TEXT NOT NULL,
       result_message TEXT NOT NULL DEFAULT '',
+      error_detail TEXT NOT NULL DEFAULT '',
+      reference_image_types TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     )
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requests(created_at DESC)');
+
+  const generationRequestColumns = new Set(
+    runQuery<Record<string, unknown>>(db, 'PRAGMA table_info(generation_requests)').map((row) => String(row.name || '')),
+  );
+  if (!generationRequestColumns.has('error_detail')) {
+    db.run("ALTER TABLE generation_requests ADD COLUMN error_detail TEXT NOT NULL DEFAULT ''");
+  }
+  if (!generationRequestColumns.has('reference_image_types')) {
+    db.run("ALTER TABLE generation_requests ADD COLUMN reference_image_types TEXT NOT NULL DEFAULT ''");
+  }
+
   db.run('CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id)');
 
@@ -8572,10 +8615,11 @@ async function start() {
       const createdAt = nowIso();
       let imagePath = '';
       let apiRequestMs = 0;
-      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string } = {
+      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } = {
         userId: req.authUser!.userId,
         username: req.authUser!.username,
         creditsUsed,
+        referenceImageTypes: extractReferenceImageTypes(referenceImagesInput),
       };
       try {
         const apiRequestStartedAt = Date.now();
@@ -10197,6 +10241,8 @@ async function start() {
           created_at: row.created_at,
           result_status: row.result_status,
           result_message: row.result_message,
+          error_detail: row.error_detail,
+          reference_image_types: row.reference_image_types,
         });
         const records = pagePayload.records.map(toRecord);
         const statRecords = statsPayload.rows.map((row) => ({

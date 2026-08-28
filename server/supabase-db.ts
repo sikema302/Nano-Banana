@@ -44,6 +44,8 @@ type GenerationRow = {
   invite_code?: string;
   result_status?: string;
   result_message?: string;
+  error_detail?: string;
+  reference_image_types?: string;
 };
 
 type GenerationFilterOptions = {
@@ -1096,29 +1098,65 @@ export async function insertGenerationRequest(record: {
   apiRequestMs: number;
   resultStatus: string;
   resultMessage: string;
+  errorDetail?: string;
+  referenceImageTypes?: string;
   createdAt: string;
 }): Promise<string> {
+  const insertWithNewColumns = (id: string | number) => getSupabase().from('generation_requests').insert({
+    id,
+    user_id: record.userId,
+    username: record.username,
+    prompt: record.prompt,
+    model_id: record.modelId,
+    model_name: record.modelName,
+    dimensions: record.dimensions,
+    image_size: record.imageSize,
+    image_path: '',
+    credits_used: record.creditsUsed,
+    api_request_ms: record.apiRequestMs,
+    reference_images: '[]',
+    result_status: record.resultStatus,
+    result_message: record.resultMessage,
+    error_detail: record.errorDetail || '',
+    reference_image_types: record.referenceImageTypes || '',
+    created_at: record.createdAt,
+  });
+  const insertLegacy = (id: string | number) => getSupabase().from('generation_requests').insert({
+    id,
+    user_id: record.userId,
+    username: record.username,
+    prompt: record.prompt,
+    model_id: record.modelId,
+    model_name: record.modelName,
+    dimensions: record.dimensions,
+    image_size: record.imageSize,
+    image_path: '',
+    credits_used: record.creditsUsed,
+    api_request_ms: record.apiRequestMs,
+    reference_images: '[]',
+    result_status: record.resultStatus,
+    result_message: record.resultMessage,
+    created_at: record.createdAt,
+  });
+
+  const isMissingColumn = (error: { message?: string } | null) => {
+    if (!error?.message) return false;
+    return /column[^:]*(error_detail|reference_image_types)/.test(error.message);
+  };
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const id = await getNextNumericId('generation_requests');
-    const { data, error } = await getSupabase().from('generation_requests').insert({
-      id,
-      user_id: record.userId,
-      username: record.username,
-      prompt: record.prompt,
-      model_id: record.modelId,
-      model_name: record.modelName,
-      dimensions: record.dimensions,
-      image_size: record.imageSize,
-      image_path: '',
-      credits_used: record.creditsUsed,
-      api_request_ms: record.apiRequestMs,
-      reference_images: '[]',
-      result_status: record.resultStatus,
-      result_message: record.resultMessage,
-      created_at: record.createdAt,
-    });
+    const { data, error } = await insertWithNewColumns(id);
     if (!error) return String((data as { id?: string | number } | null)?.id || id);
-    if (!isPrimaryKeyConflict(error)) throw new Error(`Insert generation request failed: ${error.message}`);
+    if (isPrimaryKeyConflict(error)) continue;
+    // 生产表尚未迁移出新列时降级写入，避免阻断生图主流程；迁移后自然回填完整字段。
+    if (isMissingColumn(error)) {
+      const legacy = await insertLegacy(id);
+      if (!legacy.error) return String((legacy.data as { id?: string | number } | null)?.id || id);
+      if (isPrimaryKeyConflict(legacy.error)) continue;
+      throw new Error(`Insert generation request failed: ${legacy.error.message}`);
+    }
+    throw new Error(`Insert generation request failed: ${error.message}`);
   }
   throw new Error('Insert generation request failed: unable to allocate a unique request id');
 }

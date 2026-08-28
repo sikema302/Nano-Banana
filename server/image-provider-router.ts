@@ -16,6 +16,7 @@ export type ImageGenerationInput = {
     username: string;
     creditsUsed: number;
     successfulRequestId?: string;
+    referenceImageTypes?: string[];
   };
 };
 
