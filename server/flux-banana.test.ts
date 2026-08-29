@@ -179,3 +179,140 @@ test('does not fail over when an accepted Flux task has an uncertain result', as
     (error: unknown) => (error as { safeToFallback?: unknown })?.safeToFallback === false,
   );
 });
+
+test('keeps polling through an uncertain status until the task completes', async () => {
+  const requests: string[] = [];
+  const responses = [
+    new Response(JSON.stringify({
+      status: 'queued',
+      task_id: 'imgtask_unc',
+      status_url: '/v1/images/tasks/imgtask_unc',
+      poll_after_ms: 1,
+      assets: [],
+    }), { status: 202 }),
+    new Response(JSON.stringify({
+      status: 'uncertain',
+      task_id: 'imgtask_unc',
+      error: 'Image result is temporarily uncertain; please query this task again later and do not submit a duplicate request',
+      assets: [],
+    })),
+    new Response(JSON.stringify({
+      status: 'success',
+      task_id: 'imgtask_unc',
+      assets: [{ url: 'https://media.ai-media.vip/result.png' }],
+    })),
+    new Response(Uint8Array.from([137, 80, 78, 71]), {
+      headers: { 'content-type': 'image/png' },
+    }),
+  ];
+
+  const result = await generateFluxBanana(
+    { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      sleepImpl: async () => undefined,
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        const response = responses.shift();
+        if (!response) throw new Error('Unexpected request');
+        return response;
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    source: 'data:image/png;base64,iVBORw==',
+    model: FLUX_BANANA_FLASH_MODEL,
+  });
+  assert.deepEqual(requests.slice(1), [
+    'https://api.ai-media.vip/v1/images/tasks/imgtask_unc',
+    'https://api.ai-media.vip/v1/images/tasks/imgtask_unc',
+    'https://media.ai-media.vip/result.png',
+  ]);
+});
+
+test('recovers when a task reports a transient failed status then succeeds', async () => {
+  const responses = [
+    new Response(JSON.stringify({
+      status: 'queued',
+      task_id: 'imgtask_tr',
+      status_url: '/v1/images/tasks/imgtask_tr',
+      poll_after_ms: 1,
+      assets: [],
+    }), { status: 202 }),
+    new Response(JSON.stringify({
+      status: 'failed',
+      task_id: 'imgtask_tr',
+      error: 'Image generation failed; please check the request or try again later',
+      assets: [],
+    })),
+    new Response(JSON.stringify({
+      status: 'success',
+      task_id: 'imgtask_tr',
+      assets: [{ url: 'https://media.ai-media.vip/ok.png' }],
+    })),
+    new Response(Uint8Array.from([137, 80, 78, 71]), {
+      headers: { 'content-type': 'image/png' },
+    }),
+  ];
+
+  const result = await generateFluxBanana(
+    { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      sleepImpl: async () => undefined,
+      fetchImpl: async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('Unexpected request');
+        return response;
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    source: 'data:image/png;base64,iVBORw==',
+    model: FLUX_BANANA_FLASH_MODEL,
+  });
+});
+
+test('keeps polling through transient HTTP poll errors until the task completes', async () => {
+  const responses = [
+    new Response(JSON.stringify({
+      status: 'queued',
+      task_id: 'imgtask_http',
+      status_url: '/v1/images/tasks/imgtask_http',
+      poll_after_ms: 1,
+      assets: [],
+    }), { status: 202 }),
+    new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), { status: 503 }),
+    new Response(JSON.stringify({
+      status: 'success',
+      task_id: 'imgtask_http',
+      assets: [{ url: 'https://media.ai-media.vip/http.png' }],
+    })),
+    new Response(Uint8Array.from([137, 80, 78, 71]), {
+      headers: { 'content-type': 'image/png' },
+    }),
+  ];
+
+  const result = await generateFluxBanana(
+    { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      sleepImpl: async () => undefined,
+      fetchImpl: async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('Unexpected request');
+        return response;
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    source: 'data:image/png;base64,iVBORw==',
+    model: FLUX_BANANA_FLASH_MODEL,
+  });
+});

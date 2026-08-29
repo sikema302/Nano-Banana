@@ -219,3 +219,67 @@ test('does not fail over when an accepted Schat task has an uncertain result', a
     (error: unknown) => (error as { safeToFallback?: unknown }).safeToFallback === false,
   );
 });
+
+test('recovers when a Schat task reports a transient failed status then succeeds', async () => {
+  const responses = [
+    new Response(JSON.stringify({
+      execution_mode: 'async',
+      task_id: 'task_rec',
+      status_url: '/v1/images/tasks/task_rec',
+      status: 'queued',
+      assets: [],
+    })),
+    new Response(JSON.stringify({
+      status: 'failed',
+      error: 'Image generation failed; please check the request or try again later',
+      assets: [],
+    })),
+    new Response(JSON.stringify({
+      status: 'success',
+      task_id: 'task_rec',
+      assets: [{ url: 'https://files.example.com/ok.png' }],
+    })),
+  ];
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://www.schat.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    sleepImpl: async () => undefined,
+    fetchImpl: async () => {
+      const response = responses.shift();
+      if (!response) throw new Error('Unexpected request');
+      return response;
+    },
+  });
+  assert.equal(source, 'https://files.example.com/ok.png');
+});
+
+test('keeps polling through transient HTTP poll errors until the task completes', async () => {
+  const responses = [
+    new Response(JSON.stringify({
+      execution_mode: 'async',
+      task_id: 'task_http',
+      status_url: '/v1/images/tasks/task_http',
+      status: 'queued',
+      assets: [],
+    })),
+    new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), { status: 503 }),
+    new Response(JSON.stringify({
+      status: 'success',
+      task_id: 'task_http',
+      assets: [{ url: 'https://files.example.com/http.png' }],
+    })),
+  ];
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://www.schat.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    sleepImpl: async () => undefined,
+    fetchImpl: async () => {
+      const response = responses.shift();
+      if (!response) throw new Error('Unexpected request');
+      return response;
+    },
+  });
+  assert.equal(source, 'https://files.example.com/http.png');
+});
