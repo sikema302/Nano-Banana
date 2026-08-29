@@ -7,13 +7,27 @@ type SchatImageOptions = {
   model: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (milliseconds: number) => Promise<void>;
 };
 
 type SchatImagePayload = {
-  data?: Array<{ b64_json?: string; url?: string }>;
+  data?: unknown;
   error?: { message?: string } | string;
   message?: string;
   detail?: string;
+  status?: string;
+  task_id?: string;
+  id?: string;
+  batch_id?: string;
+  client_request_id?: string;
+  request_id?: string;
+  status_url?: string;
+  poll_url?: string;
+  result_url?: string;
+  poll_after_ms?: number;
+  execution_mode?: string;
+  assets?: unknown;
+  output?: unknown;
 };
 
 const ONE_K_SIZES: Record<string, string> = {
@@ -69,6 +83,136 @@ function taggedError(message: string, safeToFallback: boolean, status?: number) 
   return error;
 }
 
+const ACTIVE_TASK_STATUSES = new Set([
+  'queued', 'dispatching', 'running', 'paused', 'in_progress', 'pending', 'processing',
+  'submitted', 'created', 'active', 'waiting', 'started',
+]);
+const SUCCESS_TASK_STATUSES = new Set([
+  'success', 'succeeded', 'successful', 'completed', 'complete', 'done', 'finished',
+]);
+const FAILED_TASK_STATUSES = new Set([
+  'failed', 'failure', 'fail', 'canceled', 'cancelled', 'error', 'timed_out', 'timeout', 'expired',
+]);
+const MAX_TASK_POLLS = 600;
+
+function toDataUrl(value: string, mimeType?: string) {
+  return `data:${mimeType || 'image/png'};base64,${value.replace(/\s+/g, '')}`;
+}
+
+function imageSourceFromList(list: unknown): string {
+  if (!Array.isArray(list)) return '';
+  for (const item of list) {
+    if (typeof item === 'string') return item;
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.b64_json === 'string' && record.b64_json) return toDataUrl(record.b64_json);
+    if (typeof record.data === 'string' && record.data) {
+      const mimeType = typeof record.mime_type === 'string'
+        ? record.mime_type
+        : typeof record.mimeType === 'string' ? record.mimeType : undefined;
+      return toDataUrl(record.data, mimeType);
+    }
+    if (typeof record.url === 'string' && record.url) return record.url;
+    if (typeof record.download_url === 'string' && record.download_url) return record.download_url;
+  }
+  return '';
+}
+
+function extractGeneratedImage(payload: SchatImagePayload): string {
+  if (Array.isArray(payload.data)) {
+    const source = imageSourceFromList(payload.data);
+    if (source) return source;
+  } else if (payload.data && typeof payload.data === 'object') {
+    const record = payload.data as Record<string, unknown>;
+    const nested = imageSourceFromList(record.data);
+    if (nested) return nested;
+    const nestedAssets = imageSourceFromList(record.assets);
+    if (nestedAssets) return nestedAssets;
+  }
+  const assetSource = imageSourceFromList(payload.assets);
+  if (assetSource) return assetSource;
+  if (Array.isArray(payload.output)) return imageSourceFromList(payload.output);
+  if (payload.output && typeof payload.output === 'object') {
+    const record = payload.output as Record<string, unknown>;
+    return imageSourceFromList(record.data) || imageSourceFromList(record.assets);
+  }
+  return '';
+}
+
+function taskStatus(payload: SchatImagePayload) {
+  if (typeof payload.status === 'string' && payload.status.trim()) return payload.status.trim().toLowerCase();
+  if (payload.data && typeof payload.data === 'object') {
+    const nested = (payload.data as Record<string, unknown>).status;
+    if (typeof nested === 'string' && nested.trim()) return nested.trim().toLowerCase();
+  }
+  return '';
+}
+
+function taskUrlFrom(payload: SchatImagePayload) {
+  return (payload.status_url || payload.poll_url || payload.result_url || '').trim();
+}
+
+function isActiveTask(status: string) {
+  return ACTIVE_TASK_STATUSES.has(status);
+}
+
+function isSuccessTask(status: string) {
+  return SUCCESS_TASK_STATUSES.has(status);
+}
+
+function isFailedTask(status: string) {
+  return FAILED_TASK_STATUSES.has(status);
+}
+
+function isTerminalTask(status: string) {
+  return isSuccessTask(status) || isFailedTask(status);
+}
+
+function taskIdFrom(payload: SchatImagePayload) {
+  for (const key of ['task_id', 'id', 'batch_id', 'client_request_id', 'request_id'] as const) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  if (payload.data && typeof payload.data === 'object') {
+    const record = payload.data as Record<string, unknown>;
+    for (const key of ['task_id', 'id', 'request_id']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  }
+  return '';
+}
+
+function isAsyncTaskResponse(payload: SchatImagePayload) {
+  if (payload.execution_mode === 'async') return true;
+  if (taskUrlFrom(payload)) return true;
+  if (typeof payload.task_id === 'string' && payload.task_id.trim()) return true;
+  if (typeof payload.status === 'string' && payload.status.trim()) return true;
+  if (Array.isArray(payload.assets)) return true;
+  if (Array.isArray(payload.data)) return false;
+  if (payload.data && typeof payload.data === 'object') {
+    const record = payload.data as Record<string, unknown>;
+    if (typeof record.task_id === 'string' && record.task_id.trim()) return true;
+    if (typeof record.status === 'string' && record.status.trim()) return true;
+  }
+  return false;
+}
+
+function resolvePollUrl(baseUrl: string, payload: SchatImagePayload, taskId: string) {
+  const given = taskUrlFrom(payload);
+  if (given) {
+    if (/^https?:\/\//i.test(given)) return given;
+    try {
+      const resolved = new URL(given, `${baseUrl}/`).toString();
+      if (/^https?:\/\//i.test(resolved)) return resolved;
+    } catch {
+      // An unresolvable task URL falls through to the task-id convention below.
+    }
+  }
+  if (taskId) return `${baseUrl}/v1/images/tasks/${encodeURIComponent(taskId)}`;
+  return '';
+}
+
 function dataUrlBlob(value: string) {
   const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
   if (!match) return null;
@@ -98,6 +242,7 @@ export async function generateSchatImage(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1, options.timeoutMs ?? 900_000));
   let requestSent = false;
+  const sleepImpl = options.sleepImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   try {
     const baseUrl = options.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '');
     const headers: Record<string, string> = {
@@ -145,10 +290,63 @@ export async function generateSchatImage(
         response.status,
       );
     }
-    const result = payload.data?.[0];
-    if (result?.b64_json) return `data:image/png;base64,${result.b64_json.replace(/\s+/g, '')}`;
-    if (result?.url) return result.url;
-    throw taggedError(`Schat image provider returned no image: ${raw.slice(0, 300)}`, true, response.status);
+    const immediate = extractGeneratedImage(payload);
+    if (immediate) return immediate;
+
+    if (!isAsyncTaskResponse(payload)) {
+      throw taggedError(`Schat image provider returned no image: ${raw.slice(0, 300)}`, true, response.status);
+    }
+
+    const taskId = taskIdFrom(payload);
+    let pollUrl = resolvePollUrl(baseUrl, payload, taskId);
+    if (!pollUrl) {
+      throw taggedError(`Schat image provider returned no task reference: ${raw.slice(0, 300)}`, false, response.status);
+    }
+
+    let current = payload;
+    let polls = 0;
+    while (pollUrl && (isActiveTask(taskStatus(current)) || !taskStatus(current))) {
+      if (polls >= MAX_TASK_POLLS) {
+        throw taggedError(`Schat image task polling exceeded ${MAX_TASK_POLLS} polls`, false);
+      }
+      const delay = Math.min(10_000, Math.max(250, Number(current.poll_after_ms) || 2_000));
+      await sleepImpl(delay);
+      const pollResponse = await fetchImpl(pollUrl, {
+        headers,
+        signal: controller.signal,
+      });
+      const pollRaw = await pollResponse.text();
+      let pollPayload: SchatImagePayload = {};
+      try {
+        pollPayload = pollRaw ? JSON.parse(pollRaw) as SchatImagePayload : {};
+      } catch {
+        // A malformed task status response is surfaced by the poll check below.
+      }
+      if (!pollResponse.ok) {
+        throw taggedError(
+          errorMessage(pollPayload, pollRaw) || `Schat image task status returned HTTP ${pollResponse.status}`,
+          false,
+          pollResponse.status,
+        );
+      }
+      current = pollPayload;
+      const pollImage = extractGeneratedImage(current);
+      if (pollImage) return pollImage;
+      const nextUrl = taskUrlFrom(current);
+      if (nextUrl) pollUrl = resolvePollUrl(baseUrl, current, taskId);
+      polls += 1;
+    }
+
+    const finalStatus = taskStatus(current);
+    const finalImage = extractGeneratedImage(current);
+    if (finalImage) return finalImage;
+    if (isFailedTask(finalStatus)) {
+      throw taggedError(errorMessage(current, '') || `Schat image task ${finalStatus}`, true);
+    }
+    if (isSuccessTask(finalStatus)) {
+      throw taggedError('Schat image task completed without an image', false);
+    }
+    throw taggedError(`Schat image task result is uncertain (${finalStatus || 'unknown'})`, false);
   } catch (error) {
     if (error && typeof error === 'object' && !('safeToFallback' in error)) {
       (error as { safeToFallback: boolean }).safeToFallback = !requestSent;

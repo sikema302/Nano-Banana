@@ -108,3 +108,114 @@ test('suppresses failover when a sent request times out with an uncertain result
     (error: unknown) => (error as { safeToFallback?: unknown }).safeToFallback === false,
   );
 });
+
+test('polls a configured-async Schat task and returns the completed image URL', async () => {
+  const requests: string[] = [];
+  const responses = [
+    new Response(JSON.stringify({
+      assets: [],
+      execution_mode: 'async',
+      execution_mode_reason: 'configured_async',
+      endpoint: '/v1/images/edits',
+      task_id: 'task_123',
+      status_url: '/v1/images/tasks/task_123',
+    })),
+    new Response(JSON.stringify({ status: 'IN_PROGRESS', task_id: 'task_123', assets: [] })),
+    new Response(JSON.stringify({
+      status: 'SUCCESS',
+      task_id: 'task_123',
+      assets: [{ url: 'https://files.example.com/result.png' }],
+    })),
+  ];
+  const source = await generateSchatImage(
+    { ...baseInput, images: ['data:image/png;base64,aW1hZ2U='] },
+    {
+      baseUrl: 'https://www.schat.top/v1',
+      apiKey: 'secret',
+      model: 'gpt-image-2',
+      sleepImpl: async () => undefined,
+      fetchImpl: async (url, init) => {
+        requests.push(`${init?.method || 'GET'} ${String(url)}`);
+        const response = responses.shift();
+        if (!response) throw new Error('Unexpected request');
+        return response;
+      },
+    },
+  );
+  assert.equal(source, 'https://files.example.com/result.png');
+  assert.deepEqual(requests, [
+    'POST https://www.schat.top/v1/images/edits',
+    'GET https://www.schat.top/v1/images/tasks/task_123',
+    'GET https://www.schat.top/v1/images/tasks/task_123',
+  ]);
+});
+
+test('polls a task with no status field and reads b64_json from assets', async () => {
+  let polls = 0;
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://www.schat.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    sleepImpl: async () => undefined,
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          execution_mode: 'async',
+          task_id: 't1',
+          status_url: '/v1/images/tasks/t1',
+          status: 'running',
+          assets: [],
+        }));
+      }
+      polls += 1;
+      return new Response(JSON.stringify({ status: 'SUCCESS', assets: [{ b64_json: 'aGVsbG8=' }] }));
+    },
+  });
+  assert.equal(source, 'data:image/png;base64,aGVsbG8=');
+  assert.equal(polls, 1);
+});
+
+test('allows failover only after an accepted Schat task explicitly fails', async () => {
+  await assert.rejects(
+    () => generateSchatImage(baseInput, {
+      baseUrl: 'https://www.schat.top/v1',
+      apiKey: 'secret',
+      model: 'gpt-image-2',
+      sleepImpl: async () => undefined,
+      fetchImpl: async (_url, init) => init?.method === 'POST'
+        ? new Response(JSON.stringify({
+          execution_mode: 'async',
+          task_id: 't_fail',
+          status_url: '/v1/images/tasks/t_fail',
+          status: 'queued',
+          assets: [],
+        }))
+        : new Response(JSON.stringify({ status: 'FAILURE', error: 'Image task failed' })),
+    }),
+    (error: unknown) => {
+      const tagged = error as { safeToFallback?: unknown };
+      return tagged.safeToFallback === true && /Image task failed/.test(String((error as Error).message));
+    },
+  );
+});
+
+test('does not fail over when an accepted Schat task has an uncertain result', async () => {
+  await assert.rejects(
+    () => generateSchatImage(baseInput, {
+      baseUrl: 'https://www.schat.top/v1',
+      apiKey: 'secret',
+      model: 'gpt-image-2',
+      sleepImpl: async () => undefined,
+      fetchImpl: async (_url, init) => init?.method === 'POST'
+        ? new Response(JSON.stringify({
+          execution_mode: 'async',
+          task_id: 't_unk',
+          status_url: '/v1/images/tasks/t_unk',
+          status: 'queued',
+          assets: [],
+        }))
+        : new Response(JSON.stringify({ status: 'client_disconnected' })),
+    }),
+    (error: unknown) => (error as { safeToFallback?: unknown }).safeToFallback === false,
+  );
+});
