@@ -52,6 +52,24 @@ function providerError(message: string, safeToFallback: boolean, status?: number
   return error;
 }
 
+const SUCCESS_TASK_STATUSES = new Set([
+  'success', 'succeeded', 'successful', 'completed', 'complete', 'done', 'finished',
+]);
+const FAILED_TASK_STATUSES = new Set([
+  'failed', 'failure', 'fail', 'canceled', 'cancelled', 'error', 'timed_out', 'timeout', 'expired',
+]);
+const MAX_TASK_POLLS = 600;
+const MAX_CONSECUTIVE_TASK_FAILURES = 5;
+const MAX_CONSECUTIVE_POLL_ERRORS = 5;
+
+function isSuccessTask(status: string) {
+  return SUCCESS_TASK_STATUSES.has(status);
+}
+
+function isFailedTask(status: string) {
+  return FAILED_TASK_STATUSES.has(status);
+}
+
 function payloadError(payload: GeminiPayload) {
   if (typeof payload.error === 'string') return payload.error;
   return payload.error?.message || payload.message || '';
@@ -191,10 +209,6 @@ function taskStatus(payload: GeminiPayload) {
   return String(payload.status || '').trim().toLowerCase();
 }
 
-function isActiveTask(status: string) {
-  return ['queued', 'dispatching', 'running', 'paused'].includes(status);
-}
-
 function taskUrl(payload: GeminiPayload) {
   return payload.status_url || payload.poll_url || payload.result_url || '';
 }
@@ -256,20 +270,61 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
     }
 
     let pollUrl = resolveProviderUrl(options.baseUrl, initialTaskUrl);
-    while (isActiveTask(taskStatus(payload))) {
+    let consecutiveFailures = 0;
+    let consecutivePollErrors = 0;
+    let polls = 0;
+    while (pollUrl && polls < MAX_TASK_POLLS) {
+      const status = taskStatus(payload);
+      if (isSuccessTask(status)) break;
+      if (isFailedTask(status)) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_TASK_FAILURES) break;
+      } else {
+        consecutiveFailures = 0;
+      }
       const delay = Math.min(10_000, Math.max(250, Number(payload.poll_after_ms) || 2_000));
       await (options.sleepImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
-      payload = await fetchTaskPayload(pollUrl, options, controller.signal);
+      let fetchedPayload: GeminiPayload = {};
+      try {
+        const response = await (options.fetchImpl || fetch)(pollUrl, {
+          headers: { 'x-goog-api-key': options.apiKey },
+          signal: controller.signal,
+        });
+        const parsed = await parsePayload(response);
+        if (!response.ok) {
+          consecutivePollErrors += 1;
+          if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+            throw providerError(
+              payloadError(parsed.payload) || `Flux task status returned HTTP ${response.status}: ${parsed.raw.slice(0, 240)}`,
+              false,
+              response.status,
+            );
+          }
+          polls += 1;
+          continue;
+        }
+        consecutivePollErrors = 0;
+        fetchedPayload = parsed.payload;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        if (error && typeof error === 'object' && 'safeToFallback' in error) throw error;
+        consecutivePollErrors += 1;
+        if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) throw error;
+        polls += 1;
+        continue;
+      }
+      payload = fetchedPayload;
       source = generatedImage(payload);
       if (source) {
         return { source: await materializeImage(source, options, controller.signal), model };
       }
       const nextUrl = taskUrl(payload);
       if (nextUrl) pollUrl = resolveProviderUrl(options.baseUrl, nextUrl);
+      polls += 1;
     }
 
     const finalStatus = taskStatus(payload);
-    if (finalStatus === 'success' || finalStatus === 'completed') {
+    if (isSuccessTask(finalStatus)) {
       const resultUrl = payload.result_url;
       if (resultUrl) {
         const resultPayload = await fetchTaskPayload(resolveProviderUrl(options.baseUrl, resultUrl), options, controller.signal);
@@ -280,7 +335,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       }
       throw providerError('Flux image task completed without a downloadable image', false);
     }
-    if (finalStatus === 'failed' || finalStatus === 'canceled' || finalStatus === 'cancelled') {
+    if (isFailedTask(finalStatus)) {
       throw providerError(payloadError(payload) || `Flux image task ${finalStatus}`, true);
     }
     throw providerError(
