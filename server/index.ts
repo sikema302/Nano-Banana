@@ -32,7 +32,7 @@ import {
   generatedImageDownloadError,
   isValidImageBuffer,
 } from './generated-image-download.js';
-import { durablePublicImageResultSource, EphemeralImageResultCache } from './ephemeral-image-results.js';
+import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
@@ -5641,6 +5641,19 @@ async function persistGeneratedImage(source: string) {
   return writeGeneratedImage(buffer, extension);
 }
 
+// 公共 API（同步/异步）返回上游图片结果时，上游可能给出临时任务 URL（会过期），
+// 这里尽力转存到本地/R2 生成永久链接；转存失败时回退到原始地址，避免破坏现有行为。
+async function persistPublicImageSource(source: string) {
+  const normalizedSource = normalizeString(source);
+  if (!normalizedSource) return '';
+  try {
+    return await persistGeneratedImage(normalizedSource);
+  } catch (error) {
+    console.warn('[public-image] persist failed, keeping original source:', error);
+    return normalizedSource;
+  }
+}
+
 async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
   // Vercel 鐜涓嬩笉淇濆瓨鍙傝€冨浘鐗囧埌鏈湴鏂囦欢绯荤粺锛岀洿鎺ヨ繑鍥炲師濮?data URL
   if (IS_VERCEL || !STORE_REFERENCE_IMAGES) {
@@ -7190,7 +7203,7 @@ async function start() {
           images: Array.from(new Set(referenceImages)),
           requestContext,
         });
-        const imagePath = normalizeString(generatedImageSource);
+        const imagePath = await persistPublicImageSource(generatedImageSource);
 
         res.json({
           image: toPublicGeneratedImagePayload(req, {
@@ -7519,8 +7532,11 @@ async function start() {
         upstream.results?.find((item) => item.url || item.content)?.url ||
         upstream.results?.[0]?.content;
       if (!imageSource) throw new Error('Visionary async task succeeded without an image URL');
-      const durableImageSource = durablePublicImageResultSource(imageSource);
-      if (!durableImageSource) publicAsyncTransientResults.set(taskId, imageSource);
+      const persistedSource = await persistPublicImageSource(imageSource);
+      const durableImageSource = /^(?:https?:\/\/|\/uploads\/)/i.test(normalizeString(persistedSource))
+        ? normalizeString(persistedSource)
+        : '';
+      if (!durableImageSource) publicAsyncTransientResults.set(taskId, persistedSource);
 
       return updatePublicAsyncTask(taskId, apiKeyHash, (current) => {
         if (current.status === 'succeeded') return current;
@@ -7642,8 +7658,11 @@ async function start() {
           images: current.referenceImages,
           requestContext,
         });
-        const durableImageSource = durablePublicImageResultSource(generatedImageSource);
-        if (!durableImageSource) publicAsyncTransientResults.set(current.id, generatedImageSource);
+        const persistedSource = await persistPublicImageSource(generatedImageSource);
+        const durableImageSource = /^(?:https?:\/\/|\/uploads\/)/i.test(normalizeString(persistedSource))
+          ? normalizeString(persistedSource)
+          : '';
+        if (!durableImageSource) publicAsyncTransientResults.set(current.id, persistedSource);
         current = await updatePublicAsyncTask(current.id, current.apiKeyHash, (latest) => {
           if (latest.status === 'succeeded') return latest;
           const completed: PublicAsyncGenerationTask = {
