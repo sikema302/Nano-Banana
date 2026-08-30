@@ -5,6 +5,8 @@ export type FluxBananaInput = {
   ratio: string;
   imageSize: string;
   images: string[];
+  /** 固定使用指定上游模型；缺省时按 imageSize 自动选择（4K=Pro，其余=Flash）。 */
+  model?: string;
 };
 
 type FluxBananaOptions = {
@@ -217,7 +219,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   const fetchImpl = options.fetchImpl || fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15 * 60_000);
-  const model = selectFluxBananaModel(input.imageSize);
+  const model = input.model || selectFluxBananaModel(input.imageSize);
   let requestSent = false;
 
   try {

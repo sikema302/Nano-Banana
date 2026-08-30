@@ -66,7 +66,7 @@ import {
   createImageProviderRouter,
   type ImageGenerationInput,
 } from './image-provider-router.js';
-import { generateFluxBanana } from './flux-banana.js';
+import { FLUX_BANANA_FLASH_MODEL, generateFluxBanana } from './flux-banana.js';
 import { generateSchatImage } from './schat-image.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
@@ -733,6 +733,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     ],
     '4K': [
       { id: 'flux', enabled: true },
+      { id: 'flux-flash', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
@@ -4920,7 +4921,7 @@ async function callConfiguredImageChannel(
         }),
       );
     }
-    if (channelId === 'flux') {
+    if (channelId === 'flux' || channelId === 'flux-flash') {
       if (!FLUX_BANANA_API_KEY) {
         const error = new Error('Flux banana key is not configured') as Error & { safeToFallback: boolean };
         error.safeToFallback = true;
@@ -4928,7 +4929,10 @@ async function callConfiguredImageChannel(
       }
       const startedAt = Date.now();
       try {
-        const selected = await generateFluxBanana(input, {
+        const fluxInput = channelId === 'flux-flash'
+          ? { ...input, model: FLUX_BANANA_FLASH_MODEL }
+          : input;
+        const selected = await generateFluxBanana(fluxInput, {
           baseUrl: FLUX_BANANA_API_BASE_URL,
           apiKey: FLUX_BANANA_API_KEY,
           timeoutMs: FLUX_BANANA_TIMEOUT_MS,

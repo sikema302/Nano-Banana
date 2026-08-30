@@ -293,6 +293,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
     ],
     '4K': [
       { id: 'flux', enabled: true },
+      { id: 'flux-flash', enabled: true },
       { id: 'visionary', enabled: true },
       { id: 'junliai', enabled: true },
     ],
@@ -321,13 +322,17 @@ const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
   'junliai-grok': 'Junli · Grok Image',
   'visionary': 'Visionary',
   'flux': 'Flux',
+  'flux-flash': 'Flux Flash',
   'junliai': 'Junli · Nano Banana Pro',
   'junliai-nano-banana-2': 'Junli · Nano Banana 2',
   'schat-nano-banana-2': 'Schat · Nano Banana 2',
   'schat-seedream-4': 'Schat · Seedream 4',
 };
 
-function providerChannelName(id: string) {
+function providerChannelName(id: string, resolution?: string) {
+  // 独立 Flash 渠道恒为 Flash；'flux' 渠道按分辨率解析上游模型（1K/2K=Flash，4K=Pro）
+  if (id === 'flux-flash') return 'Flux Flash';
+  if (id === 'flux') return resolution === '4K' ? 'Flux Pro' : 'Flux Flash';
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
 }
 
@@ -4149,7 +4154,7 @@ function AdminView({
                             </div>
                             <div className="space-y-2">
                               {channels.map((channel, index) => {
-                                const routeLabel = providerChannelName(channel.id);
+                                const routeLabel = providerChannelName(channel.id, resolution);
                                 const routeKey = `${group.key}:${resolution}:${channel.id}`;
                                 const updating = updatingProviderRoute === routeKey;
                                 const saveChannels = async (
