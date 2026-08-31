@@ -479,12 +479,12 @@ const boundedEnvNumber = (name: string, fallback: number, minimum: number, maxim
 const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 100, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 2, 1, 1_000))),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 10, 1, 1_000))),
 );
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 100, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 3, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 10, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
@@ -4845,6 +4845,31 @@ function imageErrorText(error: unknown) {
   return error instanceof Error ? error.message : String(error || 'Unknown image provider error');
 }
 
+// 与 image-provider-router 里的 errorCauseText 同理：undici 网络失败统一抛
+// "fetch failed"，真实 code/message 在 error.cause（ECONNRESET 等）。合并 status + cause
+// 后写入 generation_requests.error_detail，admin 后台才能看到根因而不是两个模糊字。
+function imageErrorDetail(error: unknown) {
+  const message = imageErrorText(error);
+  const cause = error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined;
+  const status = Number((error as { status?: unknown } | null)?.status);
+  const parts: string[] = [];
+  if (Number.isFinite(status) && status > 0) parts.push(`HTTP ${status}`);
+  let causeText = '';
+  if (cause instanceof Error) {
+    const code = (cause as { code?: string }).code;
+    causeText = code ? `${code}: ${cause.message}` : cause.message;
+  } else if (cause && typeof cause === 'object') {
+    const record = cause as Partial<Record<'code' | 'message', string>>;
+    if (record.code || record.message) causeText = `${record.code || ''} ${record.message || ''}`.trim();
+  } else if (cause != null) {
+    causeText = String(cause);
+  }
+  if (causeText) parts.push(causeText);
+  const suffix = parts.join('; ');
+  if (!suffix || message.toLowerCase().includes(suffix.toLowerCase())) return message;
+  return `${message} (${suffix})`;
+}
+
 async function recordImageChannelAttempt({
   traceId,
   input,
@@ -4870,7 +4895,7 @@ async function recordImageChannelAttempt({
     durationMs: Math.max(0, Date.now() - startedAt),
     success,
     failureReason: success ? undefined : safeToTryNextProvider(error) ? 'explicit_failure' : 'uncertain',
-    errorMessage: success ? undefined : imageErrorText(error),
+    errorMessage: success ? undefined : imageErrorDetail(error),
     sourceModel,
     prompt: input.prompt,
     requestContext: input.requestContext,

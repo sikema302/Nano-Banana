@@ -389,7 +389,7 @@ function getMaxReferenceMB(modelId: string) {
   return modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
 }
 const MAX_PROMPT_LENGTH = 8000;
-const MAX_BATCH_COUNT = 5;
+const MAX_BATCH_COUNT = 10;
 const ADMIN_STATS_TIME_ZONE = 'Asia/Shanghai';
 
 // 灶台阶段状态按标签页隔离地读写 sessionStorage（每个窗口独立，互不串扰）。
@@ -7129,11 +7129,11 @@ export default function App() {
 
             <button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(90deg,#6623ff_0%,#8d46ff_50%,#7a3cff_100%)] px-4 py-4 text-base font-semibold text-white shadow-[0_12px_36px_rgba(110,49,255,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={submittingGeneration || activeImageGenerations.length > 0 || !!healthError || !user || !hasEnoughCredits}
+              disabled={submittingGeneration || !!healthError || !user || !hasEnoughCredits}
               type="submit"
             >
               {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              {submittingGeneration ? '正在提交...' : activeImageGenerations.length > 0 ? `生成中 · ${activeImageGenerations.length} 个进行中` : user ? '生成' : '登录后生成'}
+              {submittingGeneration ? '正在提交...' : activeImageGenerations.length > 0 ? `再来一批 · 当前 ${activeImageGenerations.length} 个进行中` : user ? '生成' : '登录后生成'}
             </button>
           </div>
         </form>
@@ -7768,11 +7768,11 @@ export default function App() {
 
                 <button
                   className="btn-primary flex min-h-[56px] items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={submittingGeneration || activeImageGenerations.length > 0 || !!healthError || !user || !hasEnoughCredits}
+                  disabled={submittingGeneration || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
                   {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                  {submittingGeneration ? '\u6b63\u5728\u63d0\u4ea4...' : activeImageGenerations.length > 0 ? `\u751f\u6210\u4e2d \u00b7 ${activeImageGenerations.length} \u4e2a\u8fdb\u884c\u4e2d` : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
+                  {submittingGeneration ? '\u6b63\u5728\u63d0\u4ea4...' : activeImageGenerations.length > 0 ? `\u518d\u6765\u4e00\u6279 \u00b7 \u5f53\u524d ${activeImageGenerations.length} \u4e2a\u8fdb\u884c\u4e2d` : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
                 </button>
               </div>
             </form>
