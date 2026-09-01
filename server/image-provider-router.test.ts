@@ -206,6 +206,27 @@ test('falls through from Junliai gpt-image-2 to Firefly and keeps their circuits
   ]);
 });
 
+test('does not turn a diagnostic persistence failure into a generation failure', async () => {
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'fallback',
+    fetchImpl: async () => new Response(JSON.stringify({ data: [{ url: 'https://images.example/success.png' }] })),
+    onAttempt: async () => {
+      throw new Error('diagnostic store unavailable');
+    },
+  });
+
+  assert.equal(await router.generate(input), 'https://images.example/success.png');
+});
+
 test('falls through both Junliai models to Visionary after explicit failures', async () => {
   const store = createStore();
   const requestedModels: string[] = [];

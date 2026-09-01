@@ -1034,21 +1034,13 @@ async function reserveChatCredits(user: AuthUser) {
   }
   const credits = await getUserCreditDetails(user.userId);
   if (availableCreditsForBucket(credits.creditBalances, 'general') < CHAT_MESSAGE_CREDITS) return null;
-  const charged = await debitUserCredits(user.userId, 'general', CHAT_MESSAGE_CREDITS);
-  if (USE_SUPABASE) {
-    const db = await getSupabaseDb();
-    await db.syncInviteCodeBalanceForUser(user.userId);
-  } else {
-    await withWriteDb((db) => {
-      ensureSchema(db);
-      syncInviteCodeBalanceForUser(db, user.userId);
-    });
-  }
-  return charged.remainingCredits;
+  if (!reserveCreditFor(user.userId, 'general', CHAT_MESSAGE_CREDITS, credits.creditBalances)) return null;
+  creditAudit('reserve', user.userId, user.username, 'general', CHAT_MESSAGE_CREDITS, { chat: true });
+  return { remainingCredits: credits.remainingCredits, reservation: { bucket: 'general' as const, amount: CHAT_MESSAGE_CREDITS } };
 }
 
 async function refundChatCredits(userId: string) {
-  await refundUserCredits(userId, { gpt: 0, banana: 0, general: CHAT_MESSAGE_CREDITS });
+  await refundUserCreditsWithRetry(userId, { gpt: 0, banana: 0, general: CHAT_MESSAGE_CREDITS });
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await db.syncInviteCodeBalanceForUser(userId);
@@ -1475,6 +1467,17 @@ async function recordGenerationRequest(attempt: {
     requestId = lastInsertId(db);
   });
   return String(requestId);
+}
+
+// 请求日志和供应商指标属于诊断旁路，绝不能改变生图结果或触发渠道切换。
+// 数据库瞬时不可用时保留告警，主流程继续按真实的上游结果执行。
+async function tryRecordGenerationRequest(attempt: Parameters<typeof recordGenerationRequest>[0]) {
+  try {
+    return await recordGenerationRequest(attempt);
+  } catch (error) {
+    console.warn('[generation-request] failed to persist diagnostic record:', error);
+    return '';
+  }
 }
 
 async function updateGenerationRequestImage(requestId: string | undefined, imagePath: string) {
@@ -3635,6 +3638,20 @@ function refundPublicApiKeyCredits(keyId: string, credits: number, accountDebit?
   return withPublicApiKeyMutationLock(() => refundPublicApiKeyCreditsUnlocked(keyId, credits, accountDebit));
 }
 
+async function refundPublicApiKeyCreditsWithRetry(keyId: string, credits: number, accountDebit?: CreditDebit) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await refundPublicApiKeyCredits(keyId, credits, accountDebit);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('API key credit refund failed');
+}
+
 function getAdminApiCreditMapSqlite(db: SqlDatabase) {
   const fallback = defaultAdminApiCreditPools();
   const raw = getSetting(db, API_CREDIT_POOL_SETTING_KEY, serializeAllocationMap(fallback));
@@ -4114,6 +4131,19 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
     await flushSqliteNow();
     return result;
   });
+}
+
+async function refundUserCreditsWithRetry(userId: string, debit: CreditDebit) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await refundUserCredits(userId, debit);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Credit refund failed');
 }
 
 async function rechargeUserCreditPools(userId: string, additions: CreditBalances) {
@@ -4875,12 +4905,44 @@ async function recordImageChannelAttempt({
     prompt: input.prompt,
     requestContext: input.requestContext,
   };
-  const requestId = await recordGenerationRequest(attempt);
+  const requestId = await tryRecordGenerationRequest(attempt);
   if (success && requestId && input.requestContext) input.requestContext.successfulRequestId = requestId;
-  await Promise.all([
-    providerMetrics?.record(attempt),
-    providerRiskMonitor?.record(attempt),
-  ]);
+  await tryRecordProviderDiagnostics({
+    traceId: attempt.traceId,
+    modelId: attempt.modelId,
+    provider: attempt.provider,
+    configuration: attempt.configuration,
+    durationMs: attempt.durationMs,
+    success: attempt.success,
+    failureReason: attempt.failureReason,
+    errorMessage: attempt.errorMessage,
+    sourceModel: attempt.sourceModel,
+    prompt: attempt.prompt,
+    requestContext: attempt.requestContext,
+  });
+}
+
+type ProviderDiagnosticAttempt = {
+  traceId: string;
+  modelId: string;
+  provider: string;
+  configuration: string;
+  durationMs: number;
+  success: boolean;
+  failureReason?: string;
+  errorMessage?: string;
+  sourceModel: string;
+  prompt: string;
+  requestContext?: { userId: string; username: string; creditsUsed: number };
+};
+
+async function tryRecordProviderDiagnostics(attempt: ProviderDiagnosticAttempt) {
+  const tasks: Promise<unknown>[] = [];
+  if (providerMetrics) tasks.push(providerMetrics.record(attempt));
+  if (providerRiskMonitor) tasks.push(providerRiskMonitor.record(attempt));
+  await Promise.all(tasks.map((task) => task.catch((error) => {
+    console.warn('[provider-diagnostics] failed to persist attempt:', error);
+  })));
 }
 
 async function callMeasuredImageChannel(
@@ -6188,14 +6250,23 @@ async function start() {
     },
     fallback: callVisionaryGeneration,
     onAttempt: async (attempt) => {
-      const requestId = await recordGenerationRequest(attempt);
+      const requestId = await tryRecordGenerationRequest(attempt);
       if (attempt.success && requestId && attempt.requestContext) {
         attempt.requestContext.successfulRequestId = requestId;
       }
-      await Promise.all([
-        providerMetrics?.record(attempt),
-        providerRiskMonitor?.record(attempt),
-      ]);
+      await tryRecordProviderDiagnostics({
+        traceId: attempt.traceId,
+        modelId: attempt.modelId,
+        provider: attempt.provider,
+        configuration: attempt.configuration,
+        durationMs: attempt.durationMs,
+        success: attempt.success,
+        failureReason: attempt.failureReason,
+        errorMessage: attempt.errorMessage,
+        sourceModel: attempt.sourceModel,
+        prompt: attempt.prompt,
+        requestContext: attempt.requestContext,
+      });
     },
   });
   if (USE_SUPABASE && !IS_VERCEL) {
@@ -7065,7 +7136,8 @@ async function start() {
       res.status(503).json({ error: '对话模型尚未配置，请先设置 GEMINI_API_KEY' });
       return;
     }
-    let creditsReserved = false;
+    let chatCreditReservation: { bucket: CreditBucket; amount: number } | null = null;
+    let chatCreditDebit: CreditDebit | null = null;
     try {
       const conversations = await loadChatConversations(req.authUser!.userId);
       const conversation = conversations.find((item) => item.id === normalizeString(req.params.id));
@@ -7073,12 +7145,12 @@ async function start() {
         res.status(404).json({ error: '会话不存在' });
         return;
       }
-      const creditsRemaining = await reserveChatCredits(req.authUser!);
-      if (creditsRemaining === null) {
+      const creditHold = await reserveChatCredits(req.authUser!);
+      if (creditHold === null) {
         res.status(402).json({ error: `当前正式积分不足，本次对话需要 ${CHAT_MESSAGE_CREDITS} 积分。`, requiredCredits: CHAT_MESSAGE_CREDITS });
         return;
       }
-      creditsReserved = true;
+      chatCreditReservation = creditHold.reservation;
       const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content, createdAt: nowIso() };
       const history = [...conversation.messages, userMessage].slice(-40);
       const memory = await loadChatMemory(req.authUser!.userId);
@@ -7106,10 +7178,19 @@ async function start() {
       conversation.title = conversation.messages.find((message) => message.role === 'user')?.content.slice(0, 24) || '新对话';
       conversation.updatedAt = assistantMessage.createdAt;
       await saveChatConversations(req.authUser!.userId, [conversation, ...conversations.filter((item) => item.id !== conversation.id)]);
-      res.json({ conversation, creditsUsed: CHAT_MESSAGE_CREDITS, creditsRemaining });
+      const charged = await debitUserCredits(req.authUser!.userId, chatCreditReservation.bucket, chatCreditReservation.amount);
+      chatCreditDebit = charged.debit;
+      releaseCreditReservation(req.authUser!.userId, chatCreditReservation.bucket, chatCreditReservation.amount);
+      chatCreditReservation = null;
+      res.json({ conversation, creditsUsed: CHAT_MESSAGE_CREDITS, creditsRemaining: charged.remainingCredits });
     } catch (error) {
-      if (creditsReserved) {
+      if (chatCreditDebit) {
         await refundChatCredits(req.authUser!.userId).catch((refundError) => console.error('[chat-credit-refund]', refundError));
+        chatCreditDebit = null;
+      } else if (chatCreditReservation) {
+        releaseCreditReservation(req.authUser!.userId, chatCreditReservation.bucket, chatCreditReservation.amount);
+        creditAudit('release', req.authUser!.userId, req.authUser!.username, chatCreditReservation.bucket, chatCreditReservation.amount, { chat: true, error: imageErrorText(error) });
+        chatCreditReservation = null;
       }
       const message = error instanceof Error ? error.message : '消息发送失败';
       const lowerMessage = message.toLowerCase();
@@ -7227,7 +7308,9 @@ async function start() {
       });
     } catch (error) {
       if (reservedKey && creditsUsed > 0) {
-        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch(() => undefined);
+        await refundPublicApiKeyCreditsWithRetry(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch((refundError) => {
+          console.error('[public-generate] failed to refund reserved API key credits:', refundError);
+        });
       }
 
       console.error('[public-generate]', error);
@@ -7562,7 +7645,7 @@ async function start() {
       return updatePublicAsyncTask(taskId, apiKeyHash, async (current) => {
         if (current.status === 'failed' && current.refunded) return current;
         if (!current.refunded && current.creditsUsed > 0) {
-          await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed, current.accountDebit);
+          await refundPublicApiKeyCreditsWithRetry(current.apiKeyId, current.creditsUsed, current.accountDebit);
         }
         return {
           ...current,
@@ -7616,7 +7699,7 @@ async function start() {
     await updatePublicAsyncTask(task.id, task.apiKeyHash, async (current) => {
       if (current.status === 'succeeded' || (current.status === 'failed' && current.refunded)) return current;
       if (!current.refunded && current.creditsUsed > 0) {
-        await refundPublicApiKeyCredits(current.apiKeyId, current.creditsUsed, current.accountDebit);
+        await refundPublicApiKeyCreditsWithRetry(current.apiKeyId, current.creditsUsed, current.accountDebit);
       }
       return {
         ...current,
@@ -7867,7 +7950,9 @@ async function start() {
     } catch (error) {
       await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       if (reservedKey && creditsUsed > 0) {
-        await refundPublicApiKeyCredits(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch(() => undefined);
+        await refundPublicApiKeyCreditsWithRetry(reservedKey.id, creditsUsed, reservedKey.accountDebit).catch((refundError) => {
+          console.error('[async-generate] failed to refund reserved API key credits:', refundError);
+        });
       }
       console.error('[async-generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Async generation failed';
@@ -8258,6 +8343,7 @@ async function start() {
     videoPath?: string;
     error?: string;
     creditsRemaining?: number;
+    creditReservation?: { bucket: CreditBucket; amount: number };
     creditDebit?: CreditDebit;
     creditRefunded?: boolean;
   };
@@ -8266,7 +8352,10 @@ async function start() {
   const pruneVideoJobs = () => {
     const cutoff = Date.now() - 4 * 60 * 60_000;
     for (const [id, job] of videoJobs) {
-      if (new Date(job.updatedAt).getTime() < cutoff) videoJobs.delete(id);
+      // 活跃任务可能仍持有积分预留，不能因 TTL 清理后变成“无预留免费执行”。
+      if ((job.status === 'succeeded' || job.status === 'failed') && new Date(job.updatedAt).getTime() < cutoff) {
+        videoJobs.delete(id);
+      }
     }
   };
 
@@ -8328,56 +8417,86 @@ async function start() {
       const created = await createJunliaiVideoTask(job);
       update({ progress: 12 });
       const videoPath = await waitForJunliaiVideo(created.taskId, created.baseUrl, created.apiKey, (progress) => update({ progress }));
-      const creditsRemaining = (await getUserCreditDetails(job.userId)).remainingCredits;
-
       const apiRequestMs = Math.max(0, Date.now() - requestStartedAt);
+      // 历史落库是成功交付的一部分。先写历史，再提交扣款；落库失败时只释放预留，绝不扣分。
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.insertGeneration({
+          userId: job.userId,
+          username: job.username,
+          prompt: job.prompt,
+          modelId: job.modelId,
+          modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
+          dimensions: job.ratio,
+          imageSize: job.resolution,
+          imagePath: videoPath,
+          creditsUsed,
+          apiRequestMs,
+          referenceImages: [],
+          createdAt: job.createdAt,
+        });
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          db.run(
+            `
+              INSERT INTO generations (
+                user_id, username, prompt, model_id, model_name, dimensions,
+                image_size, image_path, credits_used, api_request_ms, reference_images, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+              job.userId,
+              job.username,
+              job.prompt,
+              job.modelId,
+              VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
+              job.ratio,
+              job.resolution,
+              videoPath,
+              creditsUsed,
+              apiRequestMs,
+              '[]',
+              job.createdAt,
+            ],
+          );
+        });
+      }
+
+      if (job.creditReservation) {
+        const charged = await debitUserCredits(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
+        job.creditDebit = charged.debit;
+        releaseCreditReservation(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
+        job.creditReservation = undefined;
+        creditAudit('debit', job.userId, job.username, creditBucketForModel(job.modelId), creditsUsed, { modelId: job.modelId, video: true });
+      }
+
+      // 统计为派生数据，失败时不影响已写入的成功历史和后续交付。
       try {
         if (USE_SUPABASE) {
           const db = await getSupabaseDb();
-          await db.insertGeneration({
-            userId: job.userId,
-            username: job.username,
-            prompt: job.prompt,
-            modelId: job.modelId,
-            modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
-            dimensions: job.ratio,
-            imageSize: job.resolution,
-            imagePath: videoPath,
-            creditsUsed,
-            apiRequestMs,
-            referenceImages: [],
-            createdAt: job.createdAt,
-          });
+          await db.incrementGenerationCount(job.userId, job.username, creditsUsed, job.createdAt);
         } else {
           await withWriteDb((db) => {
             ensureSchema(db);
             db.run(
               `
-                INSERT INTO generations (
-                  user_id, username, prompt, model_id, model_name, dimensions,
-                  image_size, image_path, credits_used, api_request_ms, reference_images, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  username = excluded.username,
+                  generations_total = generations_total + 1,
+                  credits_total = credits_total + excluded.credits_total,
+                  updated_at = excluded.updated_at
               `,
-              [
-                job.userId,
-                job.username,
-                job.prompt,
-                job.modelId,
-                VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
-                job.ratio,
-                job.resolution,
-                videoPath,
-                creditsUsed,
-                apiRequestMs,
-                '[]',
-                job.createdAt,
-              ],
+              [job.userId, job.username, creditsUsed, job.createdAt],
             );
           });
         }
-      } catch (historyError) {
-        console.warn('[video-generation] failed to save history:', historyError);
+      } catch (statsError) {
+        console.warn('[video-generation] failed to update generation stats:', statsError);
       }
+      const creditsRemaining = (await getUserCreditDetails(job.userId)).remainingCredits;
       void providerMetrics?.record({
         modelId: job.modelId,
         provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
@@ -8391,18 +8510,26 @@ async function start() {
       console.error('[video-generation]', error);
       let creditsRemaining: number | undefined;
       if (job.creditDebit && !job.creditRefunded) {
-        const refunded = await refundUserCredits(job.userId, job.creditDebit);
-        job.creditRefunded = true;
-        creditsRemaining = refunded.remainingCredits;
-        if (USE_SUPABASE) {
-          const db = await getSupabaseDb();
-          await db.syncInviteCodeBalanceForUser(job.userId);
-        } else {
-          await withWriteDb((db) => {
-            ensureSchema(db);
-            syncInviteCodeBalanceForUser(db, job.userId);
-          });
+        try {
+          const refunded = await refundUserCreditsWithRetry(job.userId, job.creditDebit);
+          job.creditRefunded = true;
+          creditsRemaining = refunded.remainingCredits;
+          if (USE_SUPABASE) {
+            const db = await getSupabaseDb();
+            await db.syncInviteCodeBalanceForUser(job.userId);
+          } else {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              syncInviteCodeBalanceForUser(db, job.userId);
+            });
+          }
+        } catch (refundError) {
+          console.error('[video-generation] failed to refund credits after task failure:', refundError);
         }
+      } else if (job.creditReservation) {
+        releaseCreditReservation(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
+        creditAudit('release', job.userId, job.username, job.creditReservation.bucket, job.creditReservation.amount, { modelId: job.modelId, video: true });
+        job.creditReservation = undefined;
       }
       const durationMs = Math.max(0, Date.now() - requestStartedAt);
       const errorMessage = sanitizeExternalErrorMessage(
@@ -8484,7 +8611,7 @@ async function start() {
       res.status(429).json({ error: 'Generation queue is busy. Please retry shortly.' });
       return;
     }
-    let reservedDebit: CreditDebit | undefined;
+    let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | undefined;
     try {
       const credits = await getUserCreditDetails(req.authUser!.userId);
       const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, modelId, resolution, seconds);
@@ -8492,17 +8619,11 @@ async function start() {
         res.status(402).json({ error: `当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分` });
         return;
       }
-      const charged = await debitUserCredits(req.authUser!.userId, 'general', creditsUsed);
-      reservedDebit = charged.debit;
-      if (USE_SUPABASE) {
-        const db = await getSupabaseDb();
-        await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
-      } else {
-        await withWriteDb((db) => {
-          ensureSchema(db);
-          syncInviteCodeBalanceForUser(db, req.authUser!.userId);
-        });
+      if (!reserveCreditFor(req.authUser!.userId, 'general', creditsUsed, credits.creditBalances)) {
+        throw new Error(`当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分`);
       }
+      reservedGenerationCredit = { bucket: 'general', amount: creditsUsed };
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, 'general', creditsUsed, { modelId, resolution, video: true });
       const now = nowIso();
       const job: VideoGenerationJob = {
         id: `video_${Date.now()}_${randomHex(6)}`,
@@ -8518,7 +8639,7 @@ async function start() {
         referenceImages,
         audioReferences: audioReferences.length > 0 ? audioReferences : undefined,
         realPerson: realPerson || undefined,
-        creditDebit: reservedDebit,
+        creditReservation: reservedGenerationCredit,
         createdAt: now,
         updatedAt: now,
       };
@@ -8528,18 +8649,26 @@ async function start() {
         if (!current) return;
         let creditsRemaining: number | undefined;
         if (current.creditDebit && !current.creditRefunded) {
-          const refunded = await refundUserCredits(current.userId, current.creditDebit);
-          current.creditRefunded = true;
-          creditsRemaining = refunded.remainingCredits;
-          if (USE_SUPABASE) {
-            const db = await getSupabaseDb();
-            await db.syncInviteCodeBalanceForUser(current.userId);
-          } else {
-            await withWriteDb((db) => {
-              ensureSchema(db);
-              syncInviteCodeBalanceForUser(db, current.userId);
-            });
+          try {
+            const refunded = await refundUserCreditsWithRetry(current.userId, current.creditDebit);
+            current.creditRefunded = true;
+            creditsRemaining = refunded.remainingCredits;
+            if (USE_SUPABASE) {
+              const db = await getSupabaseDb();
+              await db.syncInviteCodeBalanceForUser(current.userId);
+            } else {
+              await withWriteDb((db) => {
+                ensureSchema(db);
+                syncInviteCodeBalanceForUser(db, current.userId);
+              });
+            }
+          } catch (refundError) {
+            console.error('[video-generation] failed to refund queued task credits:', refundError);
           }
+        } else if (current.creditReservation) {
+          releaseCreditReservation(current.userId, current.creditReservation.bucket, current.creditReservation.amount);
+          creditAudit('release', current.userId, current.username, current.creditReservation.bucket, current.creditReservation.amount, { modelId: current.modelId, video: true, error: imageErrorText(error) });
+          current.creditReservation = undefined;
         }
         Object.assign(current, {
           status: 'failed',
@@ -8553,10 +8682,10 @@ async function start() {
       });
       res.status(202).json({ job: publicVideoJob(req, job) });
     } catch (error) {
-      if (reservedDebit) {
-        await refundUserCredits(req.authUser!.userId, reservedDebit).catch((refundError) => {
-          console.error('[video-generation] failed to refund reserved credits:', refundError);
-        });
+      if (reservedGenerationCredit) {
+        releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
+        creditAudit('release', req.authUser!.userId, req.authUser!.username, reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { modelId, video: true, error: imageErrorText(error) });
+        reservedGenerationCredit = undefined;
       }
       res.status(500).json({ error: error instanceof Error ? error.message : '创建视频任务失败' });
     }
@@ -8688,7 +8817,12 @@ async function start() {
         });
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
-        await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
+        try {
+          await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
+        } catch (error) {
+          // 诊断记录回写失败不应让已成功生成的图片变成失败任务。
+          console.warn('[generate] failed to attach image to diagnostic request:', error);
+        }
       } finally {
         await cleanupTemporaryReferenceImages(temporaryReferenceImages);
       }
@@ -8716,25 +8850,9 @@ async function start() {
       };
 
       try {
-      // 鎵ｉ櫎绉垚
-      if (creditsUsed > 0) {
-        if (USE_SUPABASE) {
-          const db = await getSupabaseDb();
-          await db.reclaimLowBalanceInviteCodes();
-          await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
-        } else {
-          await withWriteDb((db) => {
-            ensureSchema(db);
-            reclaimLowBalanceInviteCodes(db);
-            syncInviteCodeBalanceForUser(db, req.authUser!.userId);
-          });
-        }
-      }
-
       // 璁板綍鐢熸垚鍘嗗彶
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        await db.reclaimLowBalanceInviteCodes();
         await db.insertGeneration({
           userId: req.authUser!.userId,
           username: req.authUser!.username,
@@ -8749,11 +8867,14 @@ async function start() {
           referenceImages,
           createdAt,
         });
-        await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
+        try {
+          await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
+        } catch (statsError) {
+          console.warn('[generate] failed to update generation stats after history insert:', statsError);
+        }
       } else {
         await withWriteDb((db) => {
           ensureSchema(db);
-          reclaimLowBalanceInviteCodes(db);
           db.run(
             `
               INSERT INTO generations (
@@ -8786,32 +8907,59 @@ async function start() {
               createdAt,
             ],
           );
-          db.run(
-            `
-              INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-              VALUES (?, ?, 1, ?, ?)
-              ON CONFLICT(user_id) DO UPDATE SET
-                username = excluded.username,
-                generations_total = generations_total + 1,
-                credits_total = credits_total + excluded.credits_total,
-                updated_at = excluded.updated_at
-            `,
-            [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
-          );
         });
+        try {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            db.run(
+              `
+                INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  username = excluded.username,
+                  generations_total = generations_total + 1,
+                  credits_total = credits_total + excluded.credits_total,
+                  updated_at = excluded.updated_at
+              `,
+              [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
+            );
+          });
+        } catch (statsError) {
+          console.warn('[generate] failed to update generation stats after history insert:', statsError);
+        }
+      }
+
+      // 邀请码余额是派生数据，写入失败不能把已成功的生成判成失败。
+      if (creditsUsed > 0) {
+        try {
+          if (USE_SUPABASE) {
+            const db = await getSupabaseDb();
+            await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
+          } else {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+            });
+          }
+        } catch (syncError) {
+          console.warn('[generate] failed to sync invite balance after success:', syncError);
+        }
       }
       } catch (recordingError) {
         // 扣款与历史记录必须同进退：写历史/计数失败即退回本次积分并判定失败，绝不留下「扣了分却没有记录」的脏账。
         console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
+        let refundSucceeded = false;
         try {
-          await refundUserCredits(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
+          await refundUserCreditsWithRetry(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
+          refundSucceeded = true;
           creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
             { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` });
-          releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
         } catch (refundError) {
           console.error('[generate] refund after history recording failure failed:', refundError);
         }
-        const historyFailureMessage = '记录生成结果失败，本次积分已退回，请重试';
+        const historyFailureMessage = refundSucceeded
+          ? '记录生成结果失败，本次积分已退回，请重试'
+          : '记录生成结果失败，积分退款暂时未完成，请联系客服处理';
         setGenerationJobTerminal(queuedJobId, { status: 'failed', error: historyFailureMessage });
         res.status(500).json({ error: historyFailureMessage });
         return;
@@ -11371,6 +11519,3 @@ if (!IS_VERCEL) {
 
 // Vercel Serverless 瀵煎嚭
 export default serverPromise;
-
-
-
