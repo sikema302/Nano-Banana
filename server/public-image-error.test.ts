@@ -32,7 +32,8 @@ test('gives generic image generation failures a neutral, non-sensitive message',
 
 test('keeps reference image errors useful and specific', () => {
   assert.equal(publicImageErrorMessage('A maximum of 6 reference images is supported'), '最多支持 6 张参考图，请减少后重试');
-  assert.equal(publicImageErrorMessage('Each reference image must be 25 MB or smaller'), '参考图单张不能超过 25MB，请压缩后重试');
+  assert.equal(publicImageErrorMessage('Each reference image must be 25 MB or smaller'), '参考图尺寸或大小不符合要求，请调整后重试');
+  assert.equal(publicImageErrorMessage('HEIC format is not supported for reference image'), '参考图格式不支持，请使用 JPG/PNG 格式');
   assert.equal(publicImageErrorMessage('Invalid reference image data URL'), '参考图格式或数据无效，请更换后重试');
   assert.equal(publicImageErrorMessage('Unable to load reference image (404)'), '参考图读取失败，请检查图片或链接后重试');
 });
@@ -42,6 +43,7 @@ test('separates real service failures from congestion and hides routing', () => 
     publicImageErrorMessage('Database system is shutting down'),
     '图像服务暂时不可用，请稍后重试',
   );
+  assert.equal(publicImageErrorMessage('IMAGE_SERVICE_UNAVAILABLE'), '图片服务器暂时不可用，请稍后重试');
   assert.equal(publicImageErrorMessage('503 service unavailable from Visionary'), '当前模型太拥挤了，请稍后重试或试试其他模型');
   assert.equal(publicImageErrorMessage('504 Gateway Timeout'), '当前模型太拥挤了，请稍后重试或试试其他模型');
   assert.equal(publicImageErrorMessage('fetch failed: ECONNRESET'), '当前模型太拥挤了，请稍后重试或试试其他模型');

@@ -848,7 +848,7 @@ function StageCard({
                   onClick={() => onEdit(item)}
                 >
                   <MessageCircle size={12} />
-                  继续修改
+                  修改
                 </button>
               ) : null}
               <button

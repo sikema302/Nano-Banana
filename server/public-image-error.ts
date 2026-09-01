@@ -1,5 +1,9 @@
 export type PublicImageErrorCategory =
   | 'sensitive_prompt'
+  | 'reference_image_format'
+  | 'reference_image_size'
+  | 'reference_image_count'
+  | 'reference_image_load'
   | 'reference_image'
   | 'service_unavailable'
   | 'request'
@@ -62,17 +66,25 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     /base64.*image|image.*base64/,
     /参考图|参考图片/,
   ])) {
+    // 数量超限
     if (/maximum|too many|最多|数量|limit/.test(lower)) {
-      return { category: 'reference_image', message: '最多支持 6 张参考图，请减少后重试' };
+      return { category: 'reference_image_count', message: '最多支持 6 张参考图，请减少后重试' };
     }
-    if (/25\s*mb|too large|size|smaller|超过|大小/.test(lower)) {
-      return { category: 'reference_image', message: '参考图单张不能超过 25MB，请压缩后重试' };
+    // 尺寸/大小问题（文件太大、分辨率不符合要求等）
+    if (/25\s*mb|too large|too small|size|smaller|超过|大小|尺寸|resolution/.test(lower)) {
+      return { category: 'reference_image_size', message: '参考图尺寸或大小不符合要求，请调整后重试' };
     }
+    // 图片类型/格式不支持（HEIC、GIF、TIFF、WebP、SVG、BMP 等）
+    if (/heic|gif|tiff|webp|svg|bmp|unsupported.*(?:image|format|type)|格式不支持|不支持的图片格式/.test(lower)) {
+      return { category: 'reference_image_format', message: '参考图格式不支持，请使用 JPG/PNG 格式' };
+    }
+    // 通用格式/数据无效
     if (/invalid|format|mime|data url|supported image|格式|无效/.test(lower)) {
-      return { category: 'reference_image', message: '参考图格式或数据无效，请更换后重试' };
+      return { category: 'reference_image_format', message: '参考图格式或数据无效，请更换后重试' };
     }
+    // 读取/下载失败
     if (/load|download|fetch|http|https|url|hosting|app_url|读取|下载|链接|上传/.test(lower)) {
-      return { category: 'reference_image', message: '参考图读取失败，请检查图片或链接后重试' };
+      return { category: 'reference_image_load', message: '参考图读取失败，请检查图片或链接后重试' };
     }
     return { category: 'reference_image', message: '参考图处理失败，请检查图片后重试' };
   }
@@ -83,8 +95,12 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     return { category: 'service_unavailable', message: '图像服务暂时不可用，请稍后重试' };
   }
 
+  // 所有渠道全部失败后的兜底：真正的图片服务器问题
+  if (/image_service_unavailable/.test(lower)) {
+    return { category: 'service_unavailable', message: '图片服务器暂时不可用，请稍后重试' };
+  }
+
   if (containsAny(lower, [
-    /image_service_unavailable/,
     /(?:502|503|504)(?:\s|\b)/,
     /bad gateway|gateway time-?out|service unavailable/,
     /timed?\s*out|timeout|abort(?:ed|error)/,

@@ -5144,7 +5144,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
       if (publicError.category === 'sensitive_prompt') {
         throw new Error(publicError.message);
       }
-      if (publicError.category === 'reference_image') {
+      if (publicError.category.startsWith('reference_image')) {
         // 参考图错误是本渠道不支持/处理不了该参考图，换成支持参考图的渠道仍可能成功，
         // 因此不立即报错，继续尝试下一个渠道（更有利于客户）；这类错误并非渠道健康问题，
         // 不将该渠道计入冷却，避免误伤其他用户的请求。
