@@ -479,12 +479,12 @@ const boundedEnvNumber = (name: string, fallback: number, minimum: number, maxim
 const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 100, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 2, 1, 1_000))),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 10, 1, 1_000))),
 );
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 100, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 3, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 10, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
@@ -2651,6 +2651,10 @@ function ensureSchema(db: SqlDatabase) {
   if (!generationColumns.has('api_request_ms')) {
     db.run('ALTER TABLE generations ADD COLUMN api_request_ms INTEGER NOT NULL DEFAULT 0');
   }
+  if (!generationColumns.has('request_id')) {
+    db.run("ALTER TABLE generations ADD COLUMN request_id TEXT NOT NULL DEFAULT ''");
+  }
+  db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_generations_request_id ON generations(request_id) WHERE request_id != ''");
 
   const inviteCodeColumns = new Set(
     runQuery<Record<string, unknown>>(db, 'PRAGMA table_info(invite_codes)').map((row) => String(row.name || '')),
@@ -4064,6 +4068,7 @@ function creditAudit(
   bucket: CreditBucket,
   amount: number,
   extra: Record<string, unknown> = {},
+  requestId = '',
 ) {
   console.log(JSON.stringify({
     type: 'credit-audit',
@@ -4073,6 +4078,7 @@ function creditAudit(
     bucket,
     amount,
     ts: nowIso(),
+    requestId,
     ...extra,
   }));
 }
@@ -4875,6 +4881,31 @@ function imageErrorText(error: unknown) {
   return error instanceof Error ? error.message : String(error || 'Unknown image provider error');
 }
 
+// 与 image-provider-router 里的 errorCauseText 同理：undici 网络失败统一抛
+// "fetch failed"，真实 code/message 在 error.cause（ECONNRESET 等）。合并 status + cause
+// 后写入 generation_requests.error_detail，admin 后台才能看到根因而不是两个模糊字。
+function imageErrorDetail(error: unknown) {
+  const message = imageErrorText(error);
+  const cause = error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined;
+  const status = Number((error as { status?: unknown } | null)?.status);
+  const parts: string[] = [];
+  if (Number.isFinite(status) && status > 0) parts.push(`HTTP ${status}`);
+  let causeText = '';
+  if (cause instanceof Error) {
+    const code = (cause as { code?: string }).code;
+    causeText = code ? `${code}: ${cause.message}` : cause.message;
+  } else if (cause && typeof cause === 'object') {
+    const record = cause as Partial<Record<'code' | 'message', string>>;
+    if (record.code || record.message) causeText = `${record.code || ''} ${record.message || ''}`.trim();
+  } else if (cause != null) {
+    causeText = String(cause);
+  }
+  if (causeText) parts.push(causeText);
+  const suffix = parts.join('; ');
+  if (!suffix || message.toLowerCase().includes(suffix.toLowerCase())) return message;
+  return `${message} (${suffix})`;
+}
+
 async function recordImageChannelAttempt({
   traceId,
   input,
@@ -4900,7 +4931,7 @@ async function recordImageChannelAttempt({
     durationMs: Math.max(0, Date.now() - startedAt),
     success,
     failureReason: success ? undefined : safeToTryNextProvider(error) ? 'explicit_failure' : 'uncertain',
-    errorMessage: success ? undefined : imageErrorText(error),
+    errorMessage: success ? undefined : imageErrorDetail(error),
     sourceModel,
     prompt: input.prompt,
     requestContext: input.requestContext,
@@ -5181,7 +5212,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
       if (publicError.category === 'sensitive_prompt') {
         throw new Error(publicError.message);
       }
-      if (publicError.category === 'reference_image') {
+      if (publicError.category.startsWith('reference_image')) {
         // 参考图错误是本渠道不支持/处理不了该参考图，换成支持参考图的渠道仍可能成功，
         // 因此不立即报错，继续尝试下一个渠道（更有利于客户）；这类错误并非渠道健康问题，
         // 不将该渠道计入冷却，避免误伤其他用户的请求。
@@ -8100,6 +8131,23 @@ async function start() {
   const generationSubmissionRegistry = new IdempotencyRegistry(generationJobTtlMs);
   const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
 
+  // 数据库级幂等查询：按 request_id 查 generations 表，服务重启后仍能命中
+  async function findGenerationByRequestId(requestId: string, userId: string) {
+    if (!requestId) return null;
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      return db.findGenerationByRequestId(requestId, userId);
+    }
+    return withReadDb((db) => {
+      ensureSchema(db);
+      return getOne<Record<string, unknown>>(
+        db,
+        'SELECT * FROM generations WHERE request_id = ? AND user_id = ? LIMIT 1',
+        [requestId, userId],
+      );
+    });
+  }
+
   function publicGenerationJob(job: AuthenticatedGenerationJob) {
     const elapsedMs = job.startedAt ? Math.max(0, Date.now() - new Date(job.startedAt).getTime()) : 0;
     const simulatedProgress =
@@ -8228,6 +8276,42 @@ async function start() {
       return;
     }
     const submissionKey = submissionId ? `${req.authUser!.userId}:${submissionId}` : '';
+
+    // 数据库级幂等：服务重启后仍能命中已完成的记录，避免重复扣费
+    if (submissionKey) {
+      const existing = await findGenerationByRequestId(submissionKey, req.authUser!.userId).catch(() => null);
+      if (existing) {
+        const existingImagePath = normalizeString(existing.image_path);
+        if (existingImagePath) {
+          res.json({
+            job: {
+              id: `cached_${existing.id}`,
+              status: 'succeeded',
+              progress: 100,
+              image: {
+                prompt: normalizeString(existing.prompt),
+                modelName: normalizeString(existing.model_name),
+                dimensions: normalizeString(existing.dimensions),
+                imageSize: normalizeString(existing.image_size),
+                imagePath: existingImagePath,
+                referenceImages: parseReferenceImages(existing.reference_images),
+                createdAt: normalizeString(existing.created_at),
+              },
+              createdAt: normalizeString(existing.created_at),
+              updatedAt: normalizeString(existing.created_at),
+            },
+            reused: true,
+          });
+          return;
+        }
+        res.status(500).json({
+          error: normalizeString(existing.result_message) || '生成失败',
+          reused: true,
+        });
+        return;
+      }
+    }
+
     try {
       const modelId = normalizeModelId(normalizeString(req.body?.model));
       const imageSize = await normalizeRoutedImageSize(normalizeString(req.body?.imageSize), modelId);
@@ -8292,7 +8376,10 @@ async function start() {
       username: req.authUser!.username,
       status: 'queued',
       progress: 5,
-      requestBody: req.body,
+      requestBody: {
+        ...(typeof req.body === 'object' && req.body !== null ? req.body as Record<string, unknown> : {}),
+        _requestId: submissionKey,
+      },
       authHeader,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -8722,6 +8809,8 @@ async function start() {
     const referenceImagesInput = Array.isArray(req.body?.reference_images)
       ? (req.body.reference_images as ReferenceUploadInput[])
       : [];
+    // 内部字段：/api/generate/jobs 透传过来的幂等键，用于写 generations.request_id 和 creditAudit 关联
+    const requestId = normalizeString((req.body as Record<string, unknown>)?._requestId || '');
 
     if (!prompt) {
       res.status(400).json({ error: 'Prompt is required' });
@@ -8772,7 +8861,7 @@ async function start() {
         throw new Error(`当前可用于该模型的积分不足，需要 ${creditsUsed}，可用 ${Math.max(0, availableModelCredits - reservedCreditAmount(req.authUser!.userId, creditBucket))}`);
       }
       reservedGenerationCredit = { bucket: creditBucket, amount: creditsUsed };
-      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize });
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize }, requestId);
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
@@ -8866,6 +8955,7 @@ async function start() {
           apiRequestMs,
           referenceImages,
           createdAt,
+          requestId,
         });
         try {
           await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
@@ -8890,7 +8980,7 @@ async function start() {
                 api_request_ms,
                 reference_images,
                 created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
               req.authUser!.userId,
@@ -8905,6 +8995,7 @@ async function start() {
               apiRequestMs,
               serializeReferenceImages(referenceImages),
               createdAt,
+              requestId,
             ],
           );
         });
@@ -8954,6 +9045,7 @@ async function start() {
           refundSucceeded = true;
           creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
             { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` });
+          releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
         } catch (refundError) {
           console.error('[generate] refund after history recording failure failed:', refundError);
         }
@@ -8972,7 +9064,7 @@ async function start() {
       // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
       if (reservedGenerationCredit) {
         creditAudit('release', req.authUser!.userId, req.authUser!.username,
-          reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined });
+          reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined }, requestId);
         releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
         reservedGenerationCredit = null;
       }

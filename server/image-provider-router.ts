@@ -230,6 +230,20 @@ export function createImageProviderRouter(options: RouterOptions) {
     return String(cause);
   }
 
+  // undici 的笼统 "fetch failed" 本身没有定位价值，真正的底层原因在 error.cause
+  // （如 ECONNRESET / UND_ERR_SOCKET）。把 status + cause 拼起来，admin 后台和日志才能直接看到根因。
+  function errorDetailText(error: unknown) {
+    const message = errorText(error);
+    const cause = errorCauseText(error);
+    const status = Number((error as { status?: unknown } | null)?.status);
+    const parts: string[] = [];
+    if (Number.isFinite(status) && status > 0) parts.push(`HTTP ${status}`);
+    if (cause) parts.push(cause);
+    const suffix = parts.join('; ');
+    if (!suffix || message.toLowerCase().includes(suffix.toLowerCase())) return message;
+    return `${message} (${suffix})`;
+  }
+
   function configuration(input: ImageGenerationInput) {
     return `${input.imageSize || 'STANDARD'} / ${input.quality || 'default'} / ${input.ratio || '1:1'}`;
   }
@@ -270,7 +284,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       await reportAttempt(traceId, input, 'Visionary', startedAt, true);
       return result;
     } catch (error) {
-      await reportAttempt(traceId, input, 'Visionary', startedAt, false, 'explicit_failure', errorText(error));
+      await reportAttempt(traceId, input, 'Visionary', startedAt, false, 'explicit_failure', errorDetailText(error));
       throw error;
     }
   }
@@ -478,7 +492,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           primaryStartedAt,
           false,
           failure.safeToFallback ? failure.kind : 'uncertain',
-          errorText(error),
+          errorDetailText(error),
           upstreamModel,
         );
         if (!failure.safeToFallback) {
