@@ -999,6 +999,7 @@ export async function insertGeneration(record: {
   apiRequestMs?: number;
   referenceImages: string[];
   createdAt: string;
+  requestId?: string;
 }): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const id = await getNextNumericId('generations');
@@ -1017,6 +1018,7 @@ export async function insertGeneration(record: {
       api_request_ms: apiRequestMs,
       reference_images: JSON.stringify(record.referenceImages),
       created_at: record.createdAt,
+      request_id: record.requestId || '',
     };
     const { error } = await getSupabase().from('generations').insert(insertPayload);
 
@@ -1084,6 +1086,19 @@ export async function getUserGenerations(userId: string): Promise<GenerationRow[
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
   return hydrateGenerationApiRequestMs((data || []).map((row) => toGenerationRow(row as Record<string, unknown>)));
+}
+
+export async function findGenerationByRequestId(requestId: string, userId: string): Promise<GenerationRow | null> {
+  if (!requestId) return null;
+  const { data, error } = await getSupabase()
+    .from('generations')
+    .select('*')
+    .eq('request_id', requestId)
+    .eq('user_id', userId)
+    .limit(1)
+    .single();
+  if (error || !data) return null;
+  return toGenerationRow(data as Record<string, unknown>);
 }
 
 export async function insertGenerationRequest(record: {

@@ -2648,6 +2648,10 @@ function ensureSchema(db: SqlDatabase) {
   if (!generationColumns.has('api_request_ms')) {
     db.run('ALTER TABLE generations ADD COLUMN api_request_ms INTEGER NOT NULL DEFAULT 0');
   }
+  if (!generationColumns.has('request_id')) {
+    db.run("ALTER TABLE generations ADD COLUMN request_id TEXT NOT NULL DEFAULT ''");
+  }
+  db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_generations_request_id ON generations(request_id) WHERE request_id != ''");
 
   const inviteCodeColumns = new Set(
     runQuery<Record<string, unknown>>(db, 'PRAGMA table_info(invite_codes)').map((row) => String(row.name || '')),
@@ -4047,6 +4051,7 @@ function creditAudit(
   bucket: CreditBucket,
   amount: number,
   extra: Record<string, unknown> = {},
+  requestId = '',
 ) {
   console.log(JSON.stringify({
     type: 'credit-audit',
@@ -4056,6 +4061,7 @@ function creditAudit(
     bucket,
     amount,
     ts: nowIso(),
+    requestId,
     ...extra,
   }));
 }
@@ -8040,6 +8046,23 @@ async function start() {
   const generationSubmissionRegistry = new IdempotencyRegistry(generationJobTtlMs);
   const internalApiOrigin = `http://127.0.0.1:${Number(process.env.PORT || DEFAULT_PORT)}`;
 
+  // 数据库级幂等查询：按 request_id 查 generations 表，服务重启后仍能命中
+  async function findGenerationByRequestId(requestId: string, userId: string) {
+    if (!requestId) return null;
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      return db.findGenerationByRequestId(requestId, userId);
+    }
+    return withReadDb((db) => {
+      ensureSchema(db);
+      return getOne<Record<string, unknown>>(
+        db,
+        'SELECT * FROM generations WHERE request_id = ? AND user_id = ? LIMIT 1',
+        [requestId, userId],
+      );
+    });
+  }
+
   function publicGenerationJob(job: AuthenticatedGenerationJob) {
     const elapsedMs = job.startedAt ? Math.max(0, Date.now() - new Date(job.startedAt).getTime()) : 0;
     const simulatedProgress =
@@ -8168,6 +8191,42 @@ async function start() {
       return;
     }
     const submissionKey = submissionId ? `${req.authUser!.userId}:${submissionId}` : '';
+
+    // 数据库级幂等：服务重启后仍能命中已完成的记录，避免重复扣费
+    if (submissionKey) {
+      const existing = await findGenerationByRequestId(submissionKey, req.authUser!.userId).catch(() => null);
+      if (existing) {
+        const existingImagePath = normalizeString(existing.image_path);
+        if (existingImagePath) {
+          res.json({
+            job: {
+              id: `cached_${existing.id}`,
+              status: 'succeeded',
+              progress: 100,
+              image: {
+                prompt: normalizeString(existing.prompt),
+                modelName: normalizeString(existing.model_name),
+                dimensions: normalizeString(existing.dimensions),
+                imageSize: normalizeString(existing.image_size),
+                imagePath: existingImagePath,
+                referenceImages: parseReferenceImages(existing.reference_images),
+                createdAt: normalizeString(existing.created_at),
+              },
+              createdAt: normalizeString(existing.created_at),
+              updatedAt: normalizeString(existing.created_at),
+            },
+            reused: true,
+          });
+          return;
+        }
+        res.status(500).json({
+          error: normalizeString(existing.result_message) || '生成失败',
+          reused: true,
+        });
+        return;
+      }
+    }
+
     try {
       const modelId = normalizeModelId(normalizeString(req.body?.model));
       const imageSize = await normalizeRoutedImageSize(normalizeString(req.body?.imageSize), modelId);
@@ -8232,7 +8291,10 @@ async function start() {
       username: req.authUser!.username,
       status: 'queued',
       progress: 5,
-      requestBody: req.body,
+      requestBody: {
+        ...(typeof req.body === 'object' && req.body !== null ? req.body as Record<string, unknown> : {}),
+        _requestId: submissionKey,
+      },
       authHeader,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -8618,6 +8680,8 @@ async function start() {
     const referenceImagesInput = Array.isArray(req.body?.reference_images)
       ? (req.body.reference_images as ReferenceUploadInput[])
       : [];
+    // 内部字段：/api/generate/jobs 透传过来的幂等键，用于写 generations.request_id 和 creditAudit 关联
+    const requestId = normalizeString((req.body as Record<string, unknown>)?._requestId || '');
 
     if (!prompt) {
       res.status(400).json({ error: 'Prompt is required' });
@@ -8668,7 +8732,7 @@ async function start() {
         throw new Error(`当前可用于该模型的积分不足，需要 ${creditsUsed}，可用 ${Math.max(0, availableModelCredits - reservedCreditAmount(req.authUser!.userId, creditBucket))}`);
       }
       reservedGenerationCredit = { bucket: creditBucket, amount: creditsUsed };
-      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize });
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize }, requestId);
 
       const referenceImages = await persistReferenceImages(referenceImagesInput);
       const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
@@ -8773,6 +8837,7 @@ async function start() {
           apiRequestMs,
           referenceImages,
           createdAt,
+          requestId,
         });
         await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
       } else {
@@ -8794,7 +8859,7 @@ async function start() {
                 api_request_ms,
                 reference_images,
                 created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
               req.authUser!.userId,
@@ -8809,6 +8874,7 @@ async function start() {
               apiRequestMs,
               serializeReferenceImages(referenceImages),
               createdAt,
+              requestId,
             ],
           );
           db.run(
@@ -8831,7 +8897,7 @@ async function start() {
         try {
           await refundUserCredits(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
           creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
-            { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` });
+            { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` }, requestId);
           releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
         } catch (refundError) {
           console.error('[generate] refund after history recording failure failed:', refundError);
@@ -8849,7 +8915,7 @@ async function start() {
       // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
       if (reservedGenerationCredit) {
         creditAudit('release', req.authUser!.userId, req.authUser!.username,
-          reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined });
+          reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined }, requestId);
         releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
         reservedGenerationCredit = null;
       }
