@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS generations (
   image_path TEXT NOT NULL,
   credits_used INTEGER NOT NULL DEFAULT 0,
   reference_images TEXT NOT NULL DEFAULT '[]',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  request_id TEXT NOT NULL DEFAULT ''
 );
 
 -- 上游图片接口请求日志：成功和失败均记录，供管理员排查路由和报错。
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS generation_requests (
   result_message TEXT NOT NULL DEFAULT '',
   error_detail TEXT NOT NULL DEFAULT '',
   reference_image_types TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  request_id TEXT NOT NULL DEFAULT ''
 );
 
 -- 4. 用户保存的图片表
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- 创建索引优化查询
 CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id);
 CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations(created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generations_request_id ON generations(request_id) WHERE request_id != '';
 CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requests(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id);
 CREATE INDEX IF NOT EXISTS idx_images_category ON images(user_id, category);

@@ -8979,7 +8979,8 @@ async function start() {
                 credits_used,
                 api_request_ms,
                 reference_images,
-                created_at
+                created_at,
+                request_id
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
