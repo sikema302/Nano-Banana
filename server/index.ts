@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns';
 import fs from 'node:fs/promises';
-import { writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -11579,13 +11578,16 @@ async function start() {
     }
     setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
-  const shutdown = () => {
-    // 退出前同步落盘：避免去抖窗口(≤40ms)内的已成功写因正常退出而丢失。
+  const shutdown = async () => {
+    // 退出前落盘：先等在途 flush 完成，再做最后一次落盘。两者用同一个
+    // `<DB_FILE>.<pid>.tmp` 路径写后 rename，若并发执行会让后一个 rename 扑空，
+    // 抛出无害的 ENOENT 噪音（数据实际已被前一个落盘）。先在队列等待避免撞车。
     try {
+      await writeQueue.catch(() => undefined);
       if (residentDb && dbDirty) {
         const temporaryPath = `${DB_FILE}.${process.pid}.tmp`;
-        writeFileSync(temporaryPath, residentDb.export(), { mode: 0o600 });
-        renameSync(temporaryPath, DB_FILE);
+        await fs.writeFile(temporaryPath, residentDb.export(), { mode: 0o600 });
+        await fs.rename(temporaryPath, DB_FILE);
         dbDirty = false;
       }
     } catch (error) {
