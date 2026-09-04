@@ -33,6 +33,7 @@ import {
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
+import { isConnectionTerminatedError, shouldFastFailover } from './pooled-fetch.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
@@ -5228,6 +5229,12 @@ async function callImageGeneration(input: ImageGenerationInput) {
       }
       if (!safeToTryNextProvider(error)) {
         throw new Error('IMAGE_MODEL_BUSY');
+      }
+      // 连接被对端断开（UND_ERR_SOCKET/terminated）时快速失败，
+      // 不重试当前渠道、不等待冷却，立即尝试下一个渠道。
+      if (isConnectionTerminatedError(error)) {
+        imageChannelFailover.markFailure(routeKey, channelId);
+        continue;
       }
     }
   }

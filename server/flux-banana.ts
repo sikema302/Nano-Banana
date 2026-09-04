@@ -1,4 +1,5 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
+import { pooledFetch, shouldFastFailover, isConnectionTerminatedError } from './pooled-fetch.js';
 
 export type FluxBananaInput = {
   prompt: string;
@@ -164,7 +165,10 @@ async function fetchTaskPayload(
   options: FluxBananaOptions,
   signal: AbortSignal,
 ) {
-  const response = await (options.fetchImpl || fetch)(url, {
+  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
+    pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
+  const response = await fetchImpl(url, {
     headers: { 'x-goog-api-key': options.apiKey },
     signal,
   });
@@ -191,7 +195,10 @@ async function materializeImage(
     throw providerError('Flux image provider returned an invalid asset URL', false);
   }
   const headers = url.origin === base.origin ? { 'x-goog-api-key': options.apiKey } : undefined;
-  const response = await (options.fetchImpl || fetch)(url, {
+  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
+    pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
+  const response = await fetchImpl(url.toString(), {
     headers,
     signal,
   });
@@ -216,7 +223,9 @@ function taskUrl(payload: GeminiPayload) {
 }
 
 export async function generateFluxBanana(input: FluxBananaInput, options: FluxBananaOptions) {
-  const fetchImpl = options.fetchImpl || fetch;
+  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  const fetchImpl = options.fetchImpl || ((url: string, init?: RequestInit) =>
+    pooledFetch(url, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15 * 60_000);
   const model = input.model || selectFluxBananaModel(input.imageSize);
@@ -228,7 +237,6 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, controller.signal, fetchImpl)),
     ));
     requestSent = true;
-    const baseUrl = options.baseUrl.replace(/\/+$/, '');
     const response = await fetchImpl(
       `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
@@ -252,9 +260,15 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
     );
     const { payload: initialPayload, raw } = await parsePayload(response);
     if (!response.ok) {
+      const upstreamMessage = payloadError(initialPayload)
+        || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
+      // gemini 400 多为提示词/参考图内容审核或参数被拒；这类错误换渠道重试无意义，
+      // 标记为不 fallback，并交由 classifyPublicImageError 归入 sensitive_prompt 统一提示。
+      const isModeration = response.status === 400
+        && /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i.test(upstreamMessage);
       throw providerError(
-        payloadError(initialPayload) || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`,
-        true,
+        isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
+        !isModeration,
         response.status,
       );
     }
@@ -310,6 +324,14 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       } catch (error) {
         if (controller.signal.aborted) throw error;
         if (error && typeof error === 'object' && 'safeToFallback' in error) throw error;
+        // 连接被对端断开（UND_ERR_SOCKET/terminated/fetch failed）时快速失败，
+        // 让调用方立即 fallback 到其他渠道，而不是在这里空轮询耗尽 15 分钟。
+        if (isConnectionTerminatedError(error)) {
+          throw providerError(
+            `Flux connection terminated: ${(error as Error).message || 'socket closed'}`,
+            true,
+          );
+        }
         consecutivePollErrors += 1;
         if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) throw error;
         polls += 1;

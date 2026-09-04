@@ -41,9 +41,11 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     /prompt.*(?:blocked|rejected|violation)/,
     /adobe\s+content\s+rejected/,
     /image_unsafe/,
+    /gemini\s+upstream\s+error/,
+    /content\s+moderation\s+rejected/,
     /敏感|违规|违禁|不合规|色情|涉黄|暴力|审核未通过/,
   ])) {
-    return { category: 'sensitive_prompt', message: '注意提示词或图片敏感信息，请修改重试哦～' };
+    return { category: 'sensitive_prompt', message: '提示词或参考图未通过内容审核，请修改后重试' };
   }
 
   if (containsAny(lower, [
