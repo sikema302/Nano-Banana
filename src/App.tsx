@@ -184,6 +184,11 @@ interface ActiveImageGeneration {
   images: DisplayImage[];
 }
 
+const HIDDEN_IMAGE_MODEL_IDS: ReadonlySet<string> = new Set(['Seedream_4']);
+function visibleImageModels(models: ModelInfo[]): ModelInfo[] {
+  return models.filter((item) => !HIDDEN_IMAGE_MODEL_IDS.has(item.id));
+}
+
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
@@ -5290,6 +5295,13 @@ export default function App() {
   const [modelCreditPricing, setModelCreditPricing] = useState<ModelCreditPricing>(DEFAULT_MODEL_CREDIT_PRICING);
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
+
+  useEffect(() => {
+    if (HIDDEN_IMAGE_MODEL_IDS.has(selectedModel)) {
+      const fallback = visibleImageModels(models)[0]?.id || 'gpt-image-2';
+      setSelectedModel(fallback);
+    }
+  }, [selectedModel, models]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
@@ -7043,7 +7055,7 @@ export default function App() {
                 value={selectedModel}
                 onChange={(event) => handleModelSelect(event.target.value)}
               >
-                {models.map((item) => (
+                {visibleImageModels(models).map((item) => (
                   <option key={item.id} value={item.id} className="bg-[#111111]">
                     {item.name}
                   </option>
@@ -7545,7 +7557,7 @@ export default function App() {
                   ) : null}
                   {modelMenuOpen ? (
                     <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-white/10 bg-[#111111] p-1 shadow-2xl" role="listbox">
-                      {models.map((item) => (
+                      {visibleImageModels(models).map((item) => (
                         <button
                           key={item.id}
                           type="button"

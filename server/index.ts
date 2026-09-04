@@ -65,7 +65,7 @@ import {
   createImageProviderRouter,
   type ImageGenerationInput,
 } from './image-provider-router.js';
-import { FLUX_BANANA_FLASH_MODEL, generateFluxBanana } from './flux-banana.js';
+import { FLUX_BANANA_FLASH_MODEL, generateFluxBanana, selectFluxBananaModel } from './flux-banana.js';
 import { generateSchatImage } from './schat-image.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
@@ -5039,11 +5039,14 @@ async function callConfiguredImageChannel(
         });
         return selected.source;
       } catch (error) {
+        const fallbackModel = channelId === 'flux-flash'
+          ? FLUX_BANANA_FLASH_MODEL
+          : selectFluxBananaModel(input.imageSize);
         await recordImageChannelAttempt({
           traceId,
           input,
-          provider: 'Flux',
-          sourceModel: (error as { sourceModel?: string })?.sourceModel || 'gemini-image',
+          provider: `Flux · ${fallbackModel}`,
+          sourceModel: (error as { sourceModel?: string })?.sourceModel || fallbackModel,
           startedAt,
           success: false,
           error,

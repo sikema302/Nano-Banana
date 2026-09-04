@@ -361,7 +361,7 @@ export default function BatchCreateView({
   onGenerationComplete,
 }: BatchCreateViewProps) {
   const availableModels = useMemo(
-    () => models.filter((item) => item.id === 'gpt-image-2' || item.id === 'Nano_Banana_Pro' || item.id === 'Seedream_4'),
+    () => models.filter((item) => item.id === 'gpt-image-2' || item.id === 'Nano_Banana_Pro'),
     [models],
   );
   const [mode, setMode] = useState<BatchMode>('unified');
