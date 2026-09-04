@@ -9659,10 +9659,30 @@ async function start() {
     }
   });
 
-  app.get('/api/admin/api-keys', requireAuth, requireAdmin, async (_req, res) => {
+  app.get('/api/admin/api-keys', requireAuth, requireAdmin, async (req, res) => {
     try {
+      const page = parsePaginationValue(req.query.page, 1, 1, 100000);
+      const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);
+      const search = normalizeString(req.query.search).toLowerCase();
+
       const keys = await readPublicApiKeyRecords();
-      res.json({ keys: await publicApiKeyRecordsForAdmin(keys) });
+      const filtered = keys.filter((item) => {
+        if (!search) return true;
+        return (
+          item.name.toLowerCase().includes(search) ||
+          item.id.toLowerCase().includes(search) ||
+          item.keyPreview.toLowerCase().includes(search) ||
+          (item.ownerUsername || '').toLowerCase().includes(search)
+        );
+      });
+      const offset = (page - 1) * pageSize;
+      const paged = filtered.slice(offset, offset + pageSize);
+
+      res.json({
+        keys: await publicApiKeyRecordsForAdmin(paged),
+        total: filtered.length,
+        page: toPagination(page, pageSize, filtered.length),
+      });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch API keys failed' });
     }
@@ -10571,10 +10591,43 @@ async function start() {
         ensureSchema(db);
         const where = ["username != 'demo'"];
         const params: unknown[] = [];
+
+        // 预读 API Key 记录，用于解析 API Key 请求的归属人
+        const apiKeys = normalizeApiKeyRecords(
+          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+        );
+        const apiKeyByUserId = new Map<string, { name: string; ownerUsername: string }>();
+        for (const key of apiKeys) {
+          const uid = `api-key:${key.id}`;
+          const displayName = key.ownerUsername || key.name;
+          if (displayName) {
+            apiKeyByUserId.set(uid, { name: key.name, ownerUsername: key.ownerUsername || '' });
+          }
+        }
+
+        // 搜索扩展：若匹配到某条 API Key 的归属人/名称，一并搜出该 key 的请求
+        const extendedSearchIds: string[] = [];
+        if (options.search) {
+          const searchLower = options.search.toLowerCase();
+          for (const key of apiKeys) {
+            if (
+              key.name.toLowerCase().includes(searchLower) ||
+              (key.ownerUsername || '').toLowerCase().includes(searchLower) ||
+              key.id.toLowerCase().includes(searchLower)
+            ) {
+              extendedSearchIds.push(`api-key:${key.id}`);
+            }
+          }
+        }
+
         if (options.search) {
           where.push('(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)');
           const keyword = `%${options.search}%`;
           params.push(keyword, keyword, keyword);
+          if (extendedSearchIds.length > 0) {
+            where.push(`user_id IN (${extendedSearchIds.map(() => '?').join(',')})`);
+            params.push(...extendedSearchIds);
+          }
         }
         if (options.model && options.model !== 'all') {
           where.push('model_name = ?');
@@ -10595,7 +10648,19 @@ async function start() {
           db,
           `SELECT * FROM generation_requests ${clause} ORDER BY datetime(created_at) DESC, id DESC LIMIT ? OFFSET ?`,
           [...params, pageSize, (page - 1) * pageSize],
-        ).map(toGeneration);
+        ).map(toGeneration).map((record) => {
+          // API Key 请求：把不可读的 api-xxxx 展示名替换为归属人/Key 名称
+          const resolved = apiKeyByUserId.get(record.userId);
+          if (resolved) {
+            return {
+              ...record,
+              username: resolved.ownerUsername
+                ? `${resolved.ownerUsername}${resolved.name && resolved.name !== resolved.ownerUsername ? ` / ${resolved.name}` : ''}`
+                : resolved.name || record.username,
+            };
+          }
+          return record;
+        });
         const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT model_name, dimensions, image_size FROM generation_requests WHERE username != 'demo'");
         return {
           records,

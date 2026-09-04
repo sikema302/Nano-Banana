@@ -140,6 +140,7 @@ export interface AdminUserSummary {
   remainingCredits: number;
   creditBalances?: CreditBalances;
   apiKeyId?: string;
+  keyName?: string;
   quotaSource?: 'key' | 'account';
   ownerUserId?: string;
   ownerUsername?: string;
@@ -1211,8 +1212,20 @@ export async function fetchAdminRecords(params: {
   };
 }
 
-export async function fetchPublicApiKeys() {
-  return request<{ keys: PublicApiKeyInfo[] }>('/api/admin/api-keys', {}, true);
+export async function fetchPublicApiKeys(
+  params: { page?: number; pageSize?: number; search?: string } = {},
+) {
+  const query = new URLSearchParams();
+  appendOptionalParam(query, 'page', params.page);
+  appendOptionalParam(query, 'pageSize', params.pageSize);
+  appendOptionalParam(query, 'search', params.search);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  return request<{
+    keys: PublicApiKeyInfo[];
+    total: number;
+    page: PaginationInfo;
+  }>(`/api/admin/api-keys${suffix}`, {}, true);
 }
 
 export async function fetchUserApiKeys() {

@@ -113,7 +113,7 @@ test('SQLite admin users query returns migrated users with credits, invites, usa
   const result = buildSqliteAdminUsersPage({
     rows,
     trendRows,
-    apiKeys: [{ id: 'key-1', totalCredits: 50, usedCredits: 10 }],
+    apiKeys: [{ id: 'key-1', name: 'partner-1', totalCredits: 50, usedCredits: 10 }],
     search: 'code-old',
     sort: 'recent-desc',
     page: 1,
@@ -134,7 +134,7 @@ test('SQLite admin users query returns migrated users with credits, invites, usa
   const apiKeyResult = buildSqliteAdminUsersPage({
     rows,
     trendRows,
-    apiKeys: [{ id: 'key-1', totalCredits: 50, usedCredits: 10 }],
+    apiKeys: [{ id: 'key-1', name: 'partner-1', totalCredits: 50, usedCredits: 10 }],
     search: 'api-key:key-1',
     sort: 'recent-desc',
     page: 1,

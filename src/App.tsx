@@ -2748,14 +2748,33 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
   const [deductingKeyId, setDeductingKeyId] = useState('');
   const [rechargingKeyId, setRechargingKeyId] = useState('');
   const [copiedText, setCopiedText] = useState('');
+  const [keySearchDraft, setKeySearchDraft] = useState('');
+  const [keySearch, setKeySearch] = useState('');
+  const [keyPage, setKeyPage] = useState(1);
+  const [keyTotal, setKeyTotal] = useState(0);
+  const [keyTotalPages, setKeyTotalPages] = useState(1);
+  const [keyReloadFlag, setKeyReloadFlag] = useState(0);
+  const keyPageSize = 10;
 
   useEffect(() => {
+    let cancelled = false;
     setLoadingKeys(true);
-    fetchPublicApiKeys()
-      .then((payload) => setApiKeys(payload.keys))
-      .catch((error) => onNotice(error instanceof Error ? error.message : 'API Key 加载失败'))
-      .finally(() => setLoadingKeys(false));
-  }, [onNotice]);
+    fetchPublicApiKeys({ page: keyPage, pageSize: keyPageSize, search: keySearch || undefined })
+      .then((payload) => {
+        if (cancelled) return;
+        setApiKeys(payload.keys);
+        setKeyTotal(payload.total);
+        setKeyTotalPages(payload.page.totalPages);
+        setKeyPage(payload.page.page);
+      })
+      .catch((error) => {
+        if (!cancelled) onNotice(error instanceof Error ? error.message : 'API Key 加载失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingKeys(false);
+      });
+    return () => { cancelled = true; };
+  }, [keySearch, keyPage, keyPageSize, keyReloadFlag, onNotice]);
 
   async function copyText(value: string, label: string) {
     try {
@@ -2784,15 +2803,12 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
   }
 
   async function refreshKeys() {
-    setLoadingKeys(true);
-    try {
-      const payload = await fetchPublicApiKeys();
-      setApiKeys(payload.keys);
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : 'API Key 加载失败');
-    } finally {
-      setLoadingKeys(false);
-    }
+    setKeyReloadFlag((current) => current + 1);
+  }
+
+  function commitKeySearch() {
+    setKeySearch(keySearchDraft.trim());
+    setKeyPage(1);
   }
 
   async function handleCreateApiKey() {
@@ -2804,6 +2820,9 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
       });
       setGeneratedKey(payload.apiKey);
       setKeyName('');
+      setKeySearchDraft('');
+      setKeySearch('');
+      setKeyPage(1);
       await refreshKeys();
       onNotice('API Key 已生成，请及时复制完整 Key');
     } catch (error) {
@@ -2938,13 +2957,27 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
         </div>
       ) : null}
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
-        <table className="min-w-[900px] w-full text-left text-xs">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <input
+          className="w-full max-w-xs rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-zinc-500"
+          placeholder="搜索名称 / Key ID / 归属人"
+          value={keySearchDraft}
+          onChange={(event) => setKeySearchDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commitKeySearch();
+          }}
+        />
+        <div className="text-xs text-zinc-500">共 {keyTotal} 个 Key</div>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-2xl border border-white/8">
+        <table className="min-w-[1000px] w-full text-left text-xs">
           <thead className="bg-white/[0.04] text-zinc-500">
             <tr>
               <th className="px-3 py-2 font-medium">名称</th>
               <th className="px-3 py-2 font-medium">Key ID</th>
               <th className="px-3 py-2 font-medium">Key</th>
+              <th className="px-3 py-2 font-medium">归属</th>
               <th className="px-3 py-2 font-medium">额度</th>
               <th className="px-3 py-2 font-medium">状态</th>
               <th className="px-3 py-2 text-right font-medium">操作</th>
@@ -2967,6 +3000,18 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
                 <td className="px-3 py-3 font-mono text-zinc-500">
                   <div>{item.keyPreview}</div>
                   {!item.copyable ? <div className="mt-1 text-[11px] text-amber-300/80">旧 Key 暂不可复制</div> : null}
+                </td>
+                <td className="px-3 py-3">
+                  {item.ownerUsername ? (
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="font-medium text-emerald-200">{item.ownerUsername}</span>
+                      <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 text-[10px] text-emerald-300/80">
+                        {item.billingMode === 'account' ? '账户绑定' : '独立'}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-zinc-500">{item.billingMode === 'account' ? '无归属' : '独立 Key'}</span>
+                  )}
                 </td>
                 <td className="px-3 py-3">
                   <div>
@@ -3028,12 +3073,36 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
               </tr>
             )) : (
               <tr>
-                <td className="px-3 py-8 text-center text-zinc-500" colSpan={5}>暂无 API Key</td>
+                <td className="px-3 py-8 text-center text-zinc-500" colSpan={6}>暂无 API Key</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {keyTotalPages > 1 ? (
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2 text-xs text-zinc-500">
+          <button
+            className="rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 transition hover:border-white/20 hover:text-white disabled:opacity-40"
+            type="button"
+            disabled={keyPage <= 1 || loadingKeys}
+            onClick={() => setKeyPage((current) => Math.max(1, current - 1))}
+          >
+            上一页
+          </button>
+          <span>
+            {keyPage} / {keyTotalPages}
+          </span>
+          <button
+            className="rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 transition hover:border-white/20 hover:text-white disabled:opacity-40"
+            type="button"
+            disabled={keyPage >= keyTotalPages || loadingKeys}
+            onClick={() => setKeyPage((current) => Math.min(keyTotalPages, current + 1))}
+          >
+            下一页
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4746,7 +4815,22 @@ function AdminView({
                           const inviteCode = item.inviteCode || invitePrefixesByUserId[item.userId]?.[0] || '';
                           return (
                             <tr key={item.userId} className="text-zinc-300">
-                              <td className="px-2.5 py-2.5 font-semibold text-white">{item.username}</td>
+                              <td className="px-2.5 py-2.5 font-semibold text-white">
+                                <div className="flex items-center gap-2">
+                                  <span>{item.username}</span>
+                                  {item.apiKeyId ? (
+                                    <span
+                                      className="rounded bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-200"
+                                      title={item.keyName ? `${item.keyName} · ${item.apiKeyId}` : item.apiKeyId}
+                                    >
+                                      API Key
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {item.apiKeyId && item.keyName ? (
+                                  <div className="mt-0.5 text-[11px] font-normal text-zinc-500">{item.keyName}</div>
+                                ) : null}
+                              </td>
                               <td className="truncate px-2.5 py-2.5 text-zinc-500">{item.userId}</td>
                               <td className="truncate px-2.5 py-2.5 font-mono text-zinc-400">{inviteCode || '-'}</td>
                               <td className="px-2.5 py-2.5">{item.generations}</td>

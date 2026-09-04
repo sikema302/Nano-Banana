@@ -136,6 +136,7 @@ export function buildSqliteInviteCodeListQuery(options: SqliteInviteCodeListOpti
 
 type AdminApiKey = {
   id: string;
+  name: string;
   totalCredits: number;
   usedCredits: number;
   billingMode?: 'legacy' | 'account';
@@ -153,6 +154,7 @@ export type SqliteAdminUserSummary = {
   usedCredits: number;
   remainingCredits: number;
   apiKeyId?: string;
+  keyName?: string;
   quotaSource?: 'key' | 'account';
   ownerUserId?: string;
   ownerUsername?: string;
@@ -207,9 +209,13 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
             apiKey.ownerUserId ? creditsByUserId.get(apiKey.ownerUserId) : undefined,
           )
         : undefined;
+      // API Key 伪用户行：用归属人/Key 名称作为展示名，避免显示不可读的 `api-xxxx` 前缀
+      const displayName = apiKey
+        ? (apiKey.ownerUsername || apiKey.name || String(row.username || '')).trim()
+        : String(row.username || '');
       const user: SqliteAdminUserSummary = {
         userId,
-        username: String(row.username || ''),
+        username: displayName,
         inviteCode: String(row.invite_code || ''),
         generations: Number(row.generations || 0),
         creditsUsed: Number(row.credits_used || 0),
@@ -217,6 +223,7 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
         usedCredits: apiKeyCredits?.usedCredits ?? usedCredits,
         remainingCredits: apiKeyCredits?.remainingCredits ?? Math.max(0, totalCredits - usedCredits),
         apiKeyId: apiKey?.id,
+        keyName: apiKey?.name,
         quotaSource: apiKeyCredits?.quotaSource,
         ownerUserId: apiKey?.ownerUserId,
         ownerUsername: apiKey?.ownerUsername,
@@ -230,7 +237,9 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
       return (
         user.username.toLowerCase().includes(search) ||
         user.userId.toLowerCase().includes(search) ||
-        inviteCodes.includes(search)
+        inviteCodes.includes(search) ||
+        (user.ownerUsername || '').toLowerCase().includes(search) ||
+        (user.keyName || '').toLowerCase().includes(search)
       );
     })
     .sort((left, right) => {
