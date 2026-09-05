@@ -845,35 +845,35 @@ function StageCard({
             </p>
           </div>
           {showActions ? (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-nowrap gap-1">
               {onEdit ? (
                 <button
-                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-100 transition hover:bg-sky-500/20"
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-1.5 py-1 text-[10px] text-sky-100 transition hover:bg-sky-500/20"
                   type="button"
                   onClick={() => onEdit(item)}
                 >
-                  <MessageCircle size={12} />
+                  <MessageCircle size={11} />
                   修改
                 </button>
               ) : null}
               <button
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-100 transition hover:bg-emerald-500/20"
+                className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-1 text-[10px] text-emerald-100 transition hover:bg-emerald-500/20"
                 type="button"
                 onClick={() => onSave?.('favorite')}
               >
-                <Star size={12} />
+                <Star size={11} />
                 满意
               </button>
               <button
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-pink-400/25 bg-pink-500/10 px-2 py-1 text-[11px] text-pink-100 transition hover:bg-pink-500/20"
+                className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-pink-400/25 bg-pink-500/10 px-1.5 py-1 text-[10px] text-pink-100 transition hover:bg-pink-500/20"
                 type="button"
                 onClick={() => onSave?.('backup')}
               >
-                <Bookmark size={12} />
+                <Bookmark size={11} />
                 备份
               </button>
               <button
-                className={`inline-flex w-[74px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] text-zinc-200 transition ${
+                className={`inline-flex shrink-0 items-center justify-center gap-0.5 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-1.5 py-1 text-[10px] text-zinc-200 transition ${
                   downloading
                     ? 'cursor-wait opacity-60'
                     : 'hover:border-white/20 hover:text-white'
@@ -882,15 +882,15 @@ function StageCard({
                 onClick={onDownload}
                 disabled={downloading}
               >
-                <Download size={12} className={downloading ? 'animate-spin' : ''} />
+                <Download size={11} className={downloading ? 'animate-spin' : ''} />
                 {downloading ? '下载中…' : '下载'}
               </button>
               <button
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-400/25 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-100 transition hover:bg-rose-500/20"
+                className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-rose-400/25 bg-rose-500/10 px-1.5 py-1 text-[10px] text-rose-100 transition hover:bg-rose-500/20"
                 type="button"
                 onClick={onDelete}
               >
-                <Trash2 size={12} />
+                <Trash2 size={11} />
                 删除
               </button>
             </div>
@@ -944,7 +944,7 @@ function ContinuousEditPanel({
   ];
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/8 bg-black/25 lg:h-full">
+    <div className="flex min-h-0 flex-col rounded-[20px] border border-white/8 bg-black/25 lg:h-full">
       <div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3.5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -960,7 +960,7 @@ function ContinuousEditPanel({
         </button>
       </div>
 
-      <div className="custom-scrollbar min-h-[180px] flex-1 space-y-3 overflow-y-auto px-3 py-3">
+      <div className="custom-scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3">
         <div className="rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-[11px] leading-5 text-zinc-400">
           图片已准备好。你不需要下载或重新上传，告诉我下一步想改什么即可。
         </div>
@@ -970,10 +970,8 @@ function ContinuousEditPanel({
             <div className="mt-1 text-[10px] text-zinc-500">已生成 V{index + 2}</div>
           </div>
         ))}
-      </div>
 
-      <div className="border-t border-white/8 px-3 py-3">
-        <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+        <div className="mb-2 flex gap-2 overflow-x-auto pb-1 pt-3">
           {versions.map((item, index) => {
             const active = item.imageUrl === currentImage.imageUrl;
             return (
@@ -7997,7 +7995,7 @@ export default function App() {
             />
           )}
 
-          <aside className={activeTab === 'create' && creationMode === 'image' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
+          <aside className={activeTab === 'create' && creationMode === 'image' ? 'overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
             {editVersions.length > 0 && currentImage ? (
               <ContinuousEditPanel
                 versions={editVersions}
