@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { Readable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
 
 import bcrypt from 'bcryptjs';
@@ -6116,51 +6117,34 @@ async function findOwnedAssetSource(req: Request, requestedSource: string) {
     .find((item) => storedAssetMatchesRequest(req, item, requestedSource)) || '';
 }
 
-async function readOwnedAsset(req: Request, storedSource: string) {
-  const source = normalizeString(storedSource);
-  const inlineMatch = source.match(/^data:((?:image|video)\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
-  if (inlineMatch) {
-    return {
-      contentType: inlineMatch[1],
-      buffer: Buffer.from(inlineMatch[2].replace(/\s+/g, ''), 'base64'),
-    };
-  }
+function parseInlineDataAsset(source: string) {
+  const inlineMatch = normalizeString(source).match(/^data:((?:image|video)\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (!inlineMatch) return null;
+  return {
+    contentType: inlineMatch[1],
+    buffer: Buffer.from(inlineMatch[2].replace(/\s+/g, ''), 'base64'),
+  };
+}
 
+function resolveLocalAssetPath(req: Request, source: string) {
   const publicUrl = toPublicAssetUrl(req, source) || source;
-  let localPath = '';
   try {
     const pathname = /^https?:\/\//i.test(publicUrl) ? new URL(publicUrl).pathname : source;
     const resolved = path.resolve(ROOT_DIR, decodeURIComponent(pathname).replace(/^\/+/, ''));
     const uploadsPrefix = `${path.resolve(UPLOADS_DIR)}${path.sep}`;
-    if (resolved.startsWith(uploadsPrefix)) localPath = resolved;
+    if (resolved.startsWith(uploadsPrefix)) return resolved;
   } catch {
-    localPath = '';
+    return '';
   }
+  return '';
+}
 
-  if (localPath) {
-    const buffer = await fs.readFile(localPath).catch(() => null);
-    if (buffer) {
-      const extension = path.extname(localPath).toLowerCase();
-      const contentType = extension === '.mp4'
-        ? 'video/mp4'
-        : extension === '.webm'
-          ? 'video/webm'
-          : mimeTypeFromImagePath(localPath);
-      return { buffer, contentType };
-    }
-  }
-
+function resolveRemoteAssetUrl(req: Request, source: string) {
   const objectKey = legacyAssetObjectKey(source);
-  const remoteUrl = R2_STORAGE && objectKey ? R2_STORAGE.publicUrl(objectKey) : publicUrl;
-  if (!/^https?:\/\//i.test(remoteUrl)) return null;
-  const response = await fetch(remoteUrl);
-  if (!response.ok) return null;
-  const responseType = normalizeString(response.headers.get('content-type')).split(';')[0].toLowerCase();
-  const contentType = /^(?:image|video)\//.test(responseType)
-    ? responseType
-    : mimeTypeFromImagePath(remoteUrl);
-  if (!/^(?:image|video)\//.test(contentType)) return null;
-  return { buffer: Buffer.from(await response.arrayBuffer()), contentType };
+  const remoteUrl = R2_STORAGE && objectKey
+    ? R2_STORAGE.publicUrl(objectKey)
+    : toPublicAssetUrl(req, source) || source;
+  return /^https?:\/\//i.test(remoteUrl) ? remoteUrl : '';
 }
 
 async function toGeminiGenerateContentResponse(req: Request, result: PublicGenerateResult) {
@@ -9277,6 +9261,17 @@ async function start() {
     }
 
     const startedAt = Date.now();
+    const logTiming = (bytes: number, lookupMs: number, readMs: number, ok: boolean) => {
+      recordDownloadTiming({
+        userId: req.authUser?.userId ?? '',
+        bytes,
+        lookupMs,
+        readMs,
+        totalMs: Date.now() - startedAt,
+        ok,
+      });
+    };
+
     try {
       const storedSource = await findOwnedAssetSource(req, requestedSource);
       if (!storedSource) {
@@ -9284,45 +9279,80 @@ async function start() {
         return;
       }
       const lookupMs = Date.now() - startedAt;
+      const downloadBaseName = `pixory-${Date.now()}`;
 
-      const asset = await readOwnedAsset(req, storedSource);
-      if (!asset?.buffer.length) {
+      // data: 内联资源：量小，直接解码发送
+      const inlineAsset = parseInlineDataAsset(storedSource);
+      if (inlineAsset) {
+        const extension = inlineAsset.contentType.startsWith('video/')
+          ? inlineAsset.contentType === 'video/webm' ? 'webm' : 'mp4'
+          : fileExtensionFromMimeType(inlineAsset.contentType);
+        res.setHeader('Content-Type', inlineAsset.contentType);
+        res.setHeader('Content-Length', String(inlineAsset.buffer.length));
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadBaseName}.${extension}"`);
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.send(inlineAsset.buffer);
+        logTiming(inlineAsset.buffer.length, lookupMs, Date.now() - startedAt - lookupMs, true);
+        return;
+      }
+
+      // 本地文件：res.download 走 sendfile 流式发送，不读进内存
+      const localPath = resolveLocalAssetPath(req, storedSource);
+      if (localPath) {
+        const stats = await fs.stat(localPath).catch(() => null);
+        if (stats?.isFile()) {
+          const readMs = Date.now() - startedAt - lookupMs;
+          res.on('finish', () => logTiming(stats.size, lookupMs, readMs, true));
+          res.on('close', () => {
+            if (!res.writableFinished) logTiming(0, lookupMs, readMs, false);
+          });
+          res.download(localPath, `${downloadBaseName}${path.extname(localPath)}`, (error) => {
+            if (!error) return;
+            console.error('[asset-download] local send failed:', error);
+            if (!res.headersSent) res.status(502).json({ error: '下载失败，请稍后重试' });
+          });
+          return;
+        }
+      }
+
+      // 远程对象（R2）：流式转发，上游边下边发，不再整图读进内存
+      const remoteUrl = resolveRemoteAssetUrl(req, storedSource);
+      if (!remoteUrl) {
         res.status(404).json({ error: '文件不存在或已过期' });
         return;
       }
+      const upstream = await fetch(remoteUrl);
       const readMs = Date.now() - startedAt - lookupMs;
-
-      const extension = asset.contentType.startsWith('video/')
-        ? asset.contentType === 'video/webm' ? 'webm' : 'mp4'
-        : fileExtensionFromMimeType(asset.contentType);
-      res.setHeader('Content-Type', asset.contentType);
-      res.setHeader('Content-Length', String(asset.buffer.length));
-      res.setHeader('Content-Disposition', `attachment; filename="pixory-${Date.now()}.${extension}"`);
+      const upstreamType = normalizeString(upstream.headers.get('content-type')).split(';')[0].toLowerCase();
+      const contentType = /^(?:image|video)\//.test(upstreamType) ? upstreamType : mimeTypeFromImagePath(remoteUrl);
+      if (!upstream.ok || !upstream.body || !/^(?:image|video)\//.test(contentType)) {
+        res.status(404).json({ error: '文件不存在或已过期' });
+        return;
+      }
+      const bytes = Number(upstream.headers.get('content-length')) || 0;
+      const extension = contentType.startsWith('video/')
+        ? contentType === 'video/webm' ? 'webm' : 'mp4'
+        : fileExtensionFromMimeType(contentType);
+      res.setHeader('Content-Type', contentType);
+      if (bytes > 0) res.setHeader('Content-Length', String(bytes));
+      res.setHeader('Content-Disposition', `attachment; filename="${downloadBaseName}.${extension}"`);
       res.setHeader('Cache-Control', 'private, no-store');
-      res.send(asset.buffer);
-      const totalMs = Date.now() - startedAt;
-      recordDownloadTiming({
-        userId: req.authUser?.userId ?? '',
-        bytes: asset.buffer.length,
-        lookupMs,
-        readMs,
-        totalMs,
-        ok: true,
+      res.on('finish', () => logTiming(bytes, lookupMs, readMs, true));
+      res.on('close', () => {
+        if (!res.writableFinished) logTiming(bytes, lookupMs, readMs, false);
       });
       console.log(
-        `[asset-download] userId=${req.authUser?.userId ?? ''} bytes=${asset.buffer.length} lookup=${lookupMs}ms read=${readMs}ms total=${totalMs}ms`,
+        `[asset-download] stream userId=${req.authUser?.userId ?? ''} bytes=${bytes} lookup=${lookupMs}ms headers=${readMs}ms`,
       );
+      Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream).pipe(res);
     } catch (error) {
       console.error('[asset-download]', error);
-      recordDownloadTiming({
-        userId: req.authUser?.userId ?? '',
-        bytes: 0,
-        lookupMs: 0,
-        readMs: 0,
-        totalMs: Date.now() - startedAt,
-        ok: false,
-      });
-      res.status(502).json({ error: '下载失败，请稍后重试' });
+      logTiming(0, 0, 0, false);
+      if (!res.headersSent) {
+        res.status(502).json({ error: '下载失败，请稍后重试' });
+      } else {
+        res.destroy();
+      }
     }
   });
 

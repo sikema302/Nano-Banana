@@ -15,6 +15,7 @@
     "restore:data": "tsx scripts/restore-business-data.ts",
     "storage:r2:verify": "tsx scripts/verify-r2-storage.ts",
     "storage:r2:migrate": "tsx scripts/migrate-uploads-to-r2.ts",
+    "storage:r2:cors": "tsx scripts/setup-r2-cors.ts",
     "test:server": "tsx --test server/*.test.ts src/lib/*.test.ts",
     "build": "vite build",
     "preview": "vite preview",

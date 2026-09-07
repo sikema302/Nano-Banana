@@ -432,6 +432,15 @@ async function downloadViaServer(source: string): Promise<Blob> {
   return response.blob();
 }
 
+async function fetchDirectBlob(source: string): Promise<Blob> {
+  // force-cache：图片展示时已按 immutable 缓存进浏览器，命中则近乎即时
+  const response = await fetchWithTimeout(source, { cache: 'force-cache' });
+  if (!response.ok) {
+    throw new Error(`直接下载失败 (${response.status})`);
+  }
+  return response.blob();
+}
+
 export async function downloadAsset(
   source: string,
   suggestedName = 'pixory-image',
@@ -445,24 +454,19 @@ export async function downloadAsset(
     // 同步转换 data URL 为 Blob，避免 fetch 的 async 导致浏览器拦截下载
     blob = dataURLToBlob(source);
   } else {
-    // 先尝试通过服务端下载（验证用户拥有该资源）
+    // 优先直连（CDN / 同源静态资源），不绕服务器；失败再回退服务器中转保证可用
     try {
-      blob = await downloadViaServer(source);
-    } catch (serverError) {
-      if (serverError instanceof Error && serverError.name === 'AbortError') {
+      blob = await fetchDirectBlob(source);
+    } catch (directError) {
+      if (directError instanceof Error && directError.name === 'AbortError') {
         throw new Error('下载超时，图片较大或网络较慢，请重试');
       }
-      console.warn('[downloadAsset] 服务端下载失败，尝试直接 fetch 图片:', serverError);
-      // 回退：直接 fetch 图片 URL（同源或支持 CORS 的图片）
+      console.warn('[downloadAsset] 直连下载失败，尝试服务器中转:', directError);
       try {
-        const directResponse = await fetchWithTimeout(source);
-        if (!directResponse.ok) {
-          throw new Error(`直接下载失败 (${directResponse.status})`);
-        }
-        blob = await directResponse.blob();
-      } catch (directError) {
-        console.error('[downloadAsset] 直接 fetch 也失败:', directError);
-        if (!save) throw directError;
+        blob = await downloadViaServer(source);
+      } catch (serverError) {
+        console.error('[downloadAsset] 服务器中转也失败:', serverError);
+        if (!save) throw serverError;
         throw new Error('下载失败：图片资源无法访问，请稍后重试');
       }
     }
