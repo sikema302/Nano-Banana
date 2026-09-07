@@ -1493,6 +1493,48 @@ async function updateGenerationRequestImage(requestId: string | undefined, image
   });
 }
 
+// 历史记录写入失败的代价很高（要走退款+判失败路径），网络抖动类瞬时错误值得有限重试；
+// 缺列、唯一约束冲突等持续性错误重试无意义，直接抛出走既有失败处理。
+function isTransientRecordingError(message: string) {
+  return /fetch failed|terminated|econnreset|econnrefused|etimedout|socket|network|timed?\s*out|502|503|504|gateway|service unavailable/i.test(message);
+}
+
+async function withRecordingRetry(task: () => Promise<void>) {
+  const delaysMs = [0, 600, 1800];
+  for (let attempt = 0; attempt < delaysMs.length; attempt += 1) {
+    if (delaysMs[attempt] > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    }
+    try {
+      await task();
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isTransientRecordingError(message) || attempt === delaysMs.length - 1) throw error;
+      console.warn(`[generate] history recording hit transient error, retry ${attempt + 1}/${delaysMs.length - 1}:`, message);
+    }
+  }
+}
+
+// 上游出图成功后诊断记录已写入 success；后续环节失败时同步修正为 failed，保持与 generations 表口径一致。
+async function markGenerationRequestFailed(requestId: string | undefined, message: string) {
+  if (!requestId) return;
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.markGenerationRequestFailed(requestId, message);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    db.run(
+      `UPDATE generation_requests
+       SET result_status = 'failed', result_message = ?, error_detail = ?, credits_used = 0
+       WHERE id = ?`,
+      [message, message, requestId],
+    );
+  });
+}
+
 function toPublicReferenceImages(req: Request, referenceImages: string[]) {
   return referenceImages.map((item) => toPublicAssetUrl(req, item) || item);
 }
@@ -6309,6 +6351,21 @@ async function start() {
       });
     },
   });
+  if (USE_SUPABASE) {
+    // 启动即探测 Supabase 表结构完整性：缺列会让写历史等操作每次都失败，
+    // 必须在启动日志里第一时间暴露，而不是等用户报错后再排查。
+    void getSupabaseDb()
+      .then((db) => db.verifySchemaHealth())
+      .then((issues) => {
+        if (issues.length === 0) return;
+        console.error(
+          '[schema] Supabase 表结构不完整，生成历史/请求记录等写入会持续失败！'
+          + '请在 Supabase Dashboard → SQL Editor 按 supabase-schema.sql 补齐后重启服务：\n'
+          + issues.map((issue) => `  - ${issue}`).join('\n'),
+        );
+      })
+      .catch((error) => console.warn('[schema] startup schema health check failed:', error));
+  }
   if (USE_SUPABASE && !IS_VERCEL) {
     startBusinessDataBackupScheduler();
   } else if (!IS_VERCEL) {
@@ -8827,6 +8884,9 @@ async function start() {
     }
 
     let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | null = null;
+    // 提升到外层 try 之外：上游一旦出图成功就会立刻写入 success 诊断记录（见 onAttempt），
+    // 后续任何环节（转存/扣款/写历史）失败时，catch 里需要访问 successfulRequestId 同步修正该记录。
+    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
     try {
       let modelId = normalizeModelId(model);
       validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
@@ -8895,7 +8955,7 @@ async function start() {
       const createdAt = nowIso();
       let imagePath = '';
       let apiRequestMs = 0;
-      const requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } = {
+      requestContext = {
         userId: req.authUser!.userId,
         username: req.authUser!.username,
         creditsUsed,
@@ -8951,7 +9011,7 @@ async function start() {
       // 璁板綍鐢熸垚鍘嗗彶
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        await db.insertGeneration({
+        await withRecordingRetry(() => db.insertGeneration({
           userId: req.authUser!.userId,
           username: req.authUser!.username,
           prompt,
@@ -8965,14 +9025,14 @@ async function start() {
           referenceImages,
           createdAt,
           requestId,
-        });
+        }));
         try {
           await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
         } catch (statsError) {
           console.warn('[generate] failed to update generation stats after history insert:', statsError);
         }
       } else {
-        await withWriteDb((db) => {
+        await withRecordingRetry(() => withWriteDb((db) => {
           ensureSchema(db);
           db.run(
             `
@@ -9008,7 +9068,7 @@ async function start() {
               requestId,
             ],
           );
-        });
+        }));
         try {
           await withWriteDb((db) => {
             ensureSchema(db);
@@ -9048,6 +9108,7 @@ async function start() {
       }
       } catch (recordingError) {
         // 扣款与历史记录必须同进退：写历史/计数失败即退回本次积分并判定失败，绝不留下「扣了分却没有记录」的脏账。
+        // 同时把 generation_requests 里的成功记录标记为失败，保持两张表状态一致。
         console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
         let refundSucceeded = false;
         try {
@@ -9058,6 +9119,16 @@ async function start() {
           releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
         } catch (refundError) {
           console.error('[generate] refund after history recording failure failed:', refundError);
+        }
+        // 同步修正 generation_requests 中已记录的成功状态，避免后台显示成功但用户实际失败。
+        const recordedRequestId = requestContext?.successfulRequestId;
+        if (recordedRequestId) {
+          try {
+            await markGenerationRequestFailed(recordedRequestId,
+              '历史记录写入失败，已退款');
+          } catch (markError) {
+            console.warn('[generate] failed to mark request as failed:', markError);
+          }
         }
         const historyFailureMessage = refundSucceeded
           ? '记录生成结果失败，本次积分已退回，请重试'
@@ -9077,6 +9148,16 @@ async function start() {
           reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { error: imageErrorText(error) || undefined }, requestId);
         releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
         reservedGenerationCredit = null;
+      }
+      // 上游已出图（generation_requests 已写入 success）但结果落地前失败，例如图片转存下载失败、扣款异常：
+      // 同步把该记录标记为失败，否则后台显示成功、用户历史却没有记录。
+      const orphanRequestId = requestContext?.successfulRequestId;
+      if (orphanRequestId) {
+        try {
+          await markGenerationRequestFailed(orphanRequestId, '生成结果处理失败，未扣取积分');
+        } catch (markError) {
+          console.warn('[generate] failed to mark orphaned request as failed:', markError);
+        }
       }
       console.error('[generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';

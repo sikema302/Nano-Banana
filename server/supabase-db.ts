@@ -1185,6 +1185,51 @@ export async function updateGenerationRequestImage(requestId: string, imagePath:
   if (error) throw new Error(`Update generation request image failed: ${error.message}`);
 }
 
+// 上游出图成功后会先写入 success 记录；若后续环节（转存/扣款/写历史）失败，必须同步把该记录标记为失败，
+// 否则后台显示成功但用户侧没有历史记录。credits_used 归零与失败口径一致（未扣费或已退款）。
+export async function markGenerationRequestFailed(requestId: string, message: string): Promise<void> {
+  if (!requestId) return;
+  const { error } = await getSupabase()
+    .from('generation_requests')
+    .update({ result_status: 'failed', result_message: message, error_detail: message, credits_used: 0 })
+    .eq('id', requestId);
+  if (!error) return;
+  // 生产表未迁移 error_detail 列时降级更新，保证状态修正不被 schema 差异阻断。
+  if (/column[^:]*error_detail/.test(error.message || '')) {
+    const legacy = await getSupabase()
+      .from('generation_requests')
+      .update({ result_status: 'failed', result_message: message, credits_used: 0 })
+      .eq('id', requestId);
+    if (!legacy.error) return;
+    throw new Error(`Mark generation request failed failed: ${legacy.error.message}`);
+  }
+  throw new Error(`Mark generation request failed failed: ${error.message}`);
+}
+
+// Supabase 表结构不会随代码自动迁移（DDL 只能在 Dashboard 执行），缺列会让写入每次都失败且难以排查。
+// 启动时探测关键表的关键列，缺失则以启动日志形式暴露，附修复参照（supabase-schema.sql）。
+const REQUIRED_TABLE_COLUMNS: Record<string, string[]> = {
+  generations: [
+    'id', 'user_id', 'username', 'prompt', 'model_id', 'model_name', 'dimensions',
+    'image_size', 'image_path', 'credits_used', 'api_request_ms', 'reference_images', 'created_at', 'request_id',
+  ],
+  generation_requests: [
+    'id', 'user_id', 'username', 'model_id', 'model_name', 'dimensions', 'image_size', 'image_path',
+    'credits_used', 'api_request_ms', 'result_status', 'result_message', 'error_detail', 'reference_image_types', 'created_at',
+  ],
+  user_credits: ['user_id', 'username', 'total_credits', 'used_credits', 'created_at', 'updated_at'],
+  user_generation_stats: ['user_id', 'username', 'generations_total', 'credits_total', 'updated_at'],
+};
+
+export async function verifySchemaHealth(): Promise<string[]> {
+  const issues: string[] = [];
+  for (const [table, columns] of Object.entries(REQUIRED_TABLE_COLUMNS)) {
+    const { error } = await getSupabase().from(table).select(columns.join(',')).limit(1);
+    if (error) issues.push(`${table}: ${error.message}`);
+  }
+  return issues;
+}
+
 export async function getGenerationRequests(
   page: number,
   pageSize: number,
