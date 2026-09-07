@@ -2297,10 +2297,24 @@ async function openDatabase() {
   }
 }
 
+// 落盘串行链：enqueueDb 的深度直通允许两个 flush 并发执行，共用 tmp 路径会让后一个 rename 扑空
+// （ENOENT）；即使各自唯一路径，先启动的旧快照也必须先落盘，否则新快照会被旧快照覆盖。
+let saveChain: Promise<unknown> = Promise.resolve();
+
 async function saveDatabase(db: SqlDatabase) {
-  const temporaryPath = `${DB_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(temporaryPath, db.export(), { mode: 0o600 });
-  await fs.rename(temporaryPath, DB_FILE);
+  const bytes = db.export();
+  const temporaryPath = `${DB_FILE}.${process.pid}.${Date.now()}.${randomHex(4)}.tmp`;
+  const run = saveChain.then(async () => {
+    try {
+      await fs.writeFile(temporaryPath, bytes, { mode: 0o600 });
+      await fs.rename(temporaryPath, DB_FILE);
+    } catch (error) {
+      await fs.unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+  });
+  saveChain = run.catch(() => undefined);
+  return run;
 }
 
 function isSupabasePersistenceEnabled() {
@@ -2447,6 +2461,7 @@ let dbOpDepth = 0;
 let activeWriteTransaction = false;
 
 const SQLITE_FLUSH_DEBOUNCE_MS = 40;
+const SQLITE_FLUSH_RETRY_DELAY_MS = 1_000;
 
 async function getResidentDb(): Promise<SqlDatabase> {
   if (!residentDb) residentDb = await openDatabase();
@@ -2477,11 +2492,18 @@ function enqueueDb<T>(op: () => Promise<T> | T): Promise<T> {
 async function flushSqlite(): Promise<void> {
   if (!residentDb || !dbDirty) return;
   dbDirty = false;
-  await saveDatabase(residentDb);
-  await syncSqliteToSupabase(residentDb);
+  try {
+    await saveDatabase(residentDb);
+    await syncSqliteToSupabase(residentDb);
+  } catch (error) {
+    // 落盘失败必须恢复脏标记并延迟重试，否则本次写入会滞留内存、进程一掉就丢。
+    dbDirty = true;
+    scheduleFlush(SQLITE_FLUSH_RETRY_DELAY_MS);
+    throw error;
+  }
 }
 
-function scheduleFlush() {
+function scheduleFlush(delayMs = SQLITE_FLUSH_DEBOUNCE_MS) {
   dbDirty = true;
   if (flushScheduled) return;
   flushScheduled = true;
@@ -2489,7 +2511,7 @@ function scheduleFlush() {
     flushTimer = null;
     flushScheduled = false;
     void enqueueDb(() => flushSqlite()).catch((error) => console.error('[sqlite-flush]', error));
-  }, SQLITE_FLUSH_DEBOUNCE_MS);
+  }, delayMs);
 }
 
 async function flushSqliteNow(): Promise<void> {
@@ -2498,7 +2520,13 @@ async function flushSqliteNow(): Promise<void> {
     flushTimer = null;
     flushScheduled = false;
   }
-  await enqueueDb(() => flushSqlite());
+  // 调用方（扣款/退款/充值）此刻已在内存库提交；落盘瞬时失败由 flushSqlite 的脏标记重试兜底，
+  // 不能让 IO 抖动把已生效的账判成失败（曾导致「图已生成却被标记失败」）。
+  try {
+    await enqueueDb(() => flushSqlite());
+  } catch (error) {
+    console.error('[sqlite-flush-now] flush failed; dirty data will retry in background:', error);
+  }
 }
 
 async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
@@ -11735,15 +11763,11 @@ async function start() {
     setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   const shutdown = async () => {
-    // 退出前落盘：先等在途 flush 完成，再做最后一次落盘。两者用同一个
-    // `<DB_FILE>.<pid>.tmp` 路径写后 rename，若并发执行会让后一个 rename 扑空，
-    // 抛出无害的 ENOENT 噪音（数据实际已被前一个落盘）。先在队列等待避免撞车。
+    // 退出前落盘：先等在途 flush 完成，再经 saveChain 做最后一次落盘（串行链保证不撞车）。
     try {
       await writeQueue.catch(() => undefined);
       if (residentDb && dbDirty) {
-        const temporaryPath = `${DB_FILE}.${process.pid}.tmp`;
-        await fs.writeFile(temporaryPath, residentDb.export(), { mode: 0o600 });
-        await fs.rename(temporaryPath, DB_FILE);
+        await saveDatabase(residentDb);
         dbDirty = false;
       }
     } catch (error) {

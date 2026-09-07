@@ -71,17 +71,100 @@ test('verifies the uploaded object size before returning its public URL', async 
 });
 
 test('rejects an upload when the remote object size does not match', async () => {
+  let putAttempts = 0;
   const client: R2CommandClient = {
     async send(command) {
+      if (command instanceof PutObjectCommand) putAttempts += 1;
       return command instanceof HeadObjectCommand ? { ContentLength: 2 } : {};
     },
   };
   const storage = createR2ObjectStorage(env, client);
   assert.ok(storage);
   await assert.rejects(
-    storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3])),
+    storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3]), undefined, [0, 1, 1]),
     /R2 verification failed/,
   );
+  assert.equal(putAttempts, 3);
+});
+
+test('recovers from a transient verification mismatch because re-putting is idempotent', async () => {
+  let headAttempts = 0;
+  const client: R2CommandClient = {
+    async send(command) {
+      if (command instanceof HeadObjectCommand) {
+        headAttempts += 1;
+        return { ContentLength: headAttempts === 1 ? 2 : 3 };
+      }
+      return {};
+    },
+  };
+  const storage = createR2ObjectStorage(env, client);
+  assert.ok(storage);
+  const url = await storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3]), undefined, [0, 1]);
+  assert.equal(url, 'https://img.example.com/generated/test.png');
+  assert.equal(headAttempts, 2);
+});
+
+test('retries transient network failures before succeeding', async () => {
+  let putAttempts = 0;
+  const client: R2CommandClient = {
+    async send(command) {
+      if (command instanceof PutObjectCommand) {
+        putAttempts += 1;
+        if (putAttempts < 3) {
+          const error = new Error('read ECONNRESET') as Error & { $metadata?: Record<string, unknown> };
+          error.$metadata = { httpStatusCode: 500 };
+          throw error;
+        }
+      }
+      return command instanceof HeadObjectCommand ? { ContentLength: 3 } : {};
+    },
+  };
+  const storage = createR2ObjectStorage(env, client);
+  assert.ok(storage);
+  const url = await storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3]), undefined, [0, 1, 1]);
+  assert.equal(url, 'https://img.example.com/generated/test.png');
+  assert.equal(putAttempts, 3);
+});
+
+test('gives up after exhausting retries on persistent network failures', async () => {
+  let putAttempts = 0;
+  const client: R2CommandClient = {
+    async send(command) {
+      if (command instanceof PutObjectCommand) putAttempts += 1;
+      throw new Error('other side closed');
+    },
+  };
+  const storage = createR2ObjectStorage(env, client);
+  assert.ok(storage);
+  await assert.rejects(
+    storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3]), undefined, [0, 1, 1]),
+    /other side closed/,
+  );
+  assert.equal(putAttempts, 3);
+});
+
+test('does not retry permanent failures like access denied', async () => {
+  let putAttempts = 0;
+  const client: R2CommandClient = {
+    async send(command) {
+      if (command instanceof PutObjectCommand) {
+        putAttempts += 1;
+        const error = new Error('Access Denied') as Error & { $metadata?: Record<string, unknown> };
+        error.name = 'AccessDenied';
+        error.$metadata = { httpStatusCode: 403 };
+        throw error;
+      }
+      return { ContentLength: 3 };
+    },
+  };
+  const storage = createR2ObjectStorage(env, client);
+  assert.ok(storage);
+  await assert.rejects(
+    storage.putVerifiedObject('generated/test.png', Buffer.from([1, 2, 3]), undefined, [0, 1, 1]),
+    /Access Denied/,
+  );
+  assert.equal(putAttempts, 1);
 });
 
 test('lists existing object sizes across paginated prefixes for resumable migration', async () => {

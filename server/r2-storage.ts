@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
   DeleteObjectCommand,
@@ -116,6 +117,26 @@ export function thumbnailUrlForImage(imagePath: string, publicBaseUrl: string) {
   }
 }
 
+const R2_PUT_RETRY_DELAYS_MS = [0, 1_000, 3_000, 8_000];
+
+function isPermanentR2Error(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as Record<string, unknown>;
+  const metadata = record.$metadata as Record<string, unknown> | undefined;
+  const status = Number(metadata?.httpStatusCode);
+  if ([400, 401, 403, 404].includes(status)) return true;
+
+  const signature = `${String(record.name || '')} ${String(record.code || '')} ${String(record.message || '')}`.toLowerCase();
+  return (
+    signature.includes('invalidaccesskeyid') ||
+    signature.includes('signaturedoesnotmatch') ||
+    signature.includes('accessdenied') ||
+    signature.includes('access denied') ||
+    signature.includes('nosuchbucket') ||
+    signature.includes('invalidbucketname')
+  );
+}
+
 export class R2ObjectStorage {
   constructor(
     readonly config: R2Config,
@@ -126,7 +147,32 @@ export class R2ObjectStorage {
     return `${this.config.publicBaseUrl}/${key.replace(/^\/+/, '')}`;
   }
 
-  async putVerifiedObject(key: string, body: Buffer, contentType = contentTypeForObjectKey(key)) {
+  async putVerifiedObject(
+    key: string,
+    body: Buffer,
+    contentType = contentTypeForObjectKey(key),
+    retryDelaysMs: readonly number[] = R2_PUT_RETRY_DELAYS_MS,
+  ) {
+    let lastError: unknown = new Error(`R2 upload failed for ${key}`);
+
+    for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
+      const delay = retryDelaysMs[attempt];
+      if (delay > 0) await sleep(delay);
+
+      try {
+        return await this.putAndVerifyObject(key, body, contentType);
+      } catch (error) {
+        lastError = error;
+        if (isPermanentR2Error(error) || attempt === retryDelaysMs.length - 1) break;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[r2-upload] retry ${attempt + 2}/${retryDelaysMs.length} for ${key}: ${message}`);
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async putAndVerifyObject(key: string, body: Buffer, contentType: string) {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.config.bucketName,
@@ -146,6 +192,7 @@ export class R2ObjectStorage {
     );
     const remoteSize = Number(head.ContentLength);
     if (!Number.isFinite(remoteSize) || remoteSize !== body.byteLength) {
+      // Same key + same body, so re-putting is idempotent and a stale HEAD can recover on retry.
       throw new Error(`R2 verification failed for ${key}: expected ${body.byteLength}, received ${remoteSize}`);
     }
 
