@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import dns from 'node:dns';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -2458,11 +2459,15 @@ let residentDb: SqlDatabase | null = null;
 let dbDirty = false;
 let flushTimer: NodeJS.Timeout | null = null;
 let flushScheduled = false;
-let dbOpDepth = 0;
 let activeWriteTransaction = false;
 
 const SQLITE_FLUSH_DEBOUNCE_MS = 40;
 const SQLITE_FLUSH_RETRY_DELAY_MS = 1_000;
+
+// 「是否在数据库操作内部」必须用 AsyncLocalStorage 按异步上下文判定，不能用全局计数器：
+// 全局计数无法区分真正的嵌套延续与恰好并发的其它请求，后者会在写事务未提交时直通执行，
+// 把不相关的读写串进别人的事务（线上表现为 cannot commit - no transaction is active）。
+const dbExecutionContext = new AsyncLocalStorage<{ nested: true }>();
 
 async function getResidentDb(): Promise<SqlDatabase> {
   if (!residentDb) residentDb = await openDatabase();
@@ -2470,18 +2475,11 @@ async function getResidentDb(): Promise<SqlDatabase> {
 }
 
 function enqueueDb<T>(op: () => Promise<T> | T): Promise<T> {
-  if (dbOpDepth > 0) {
-    // 已在数据库操作内部（例如写事务中嵌套读写），直接执行，避免在串行队列中等待自身而死锁。
+  if (dbExecutionContext.getStore()) {
+    // 同一逻辑操作的嵌套延续（例如写事务中嵌套读写），直接执行，避免在串行队列中等待自身而死锁。
     return Promise.resolve().then(op);
   }
-  const run = async () => {
-    dbOpDepth++;
-    try {
-      return await op();
-    } finally {
-      dbOpDepth--;
-    }
-  };
+  const run = () => dbExecutionContext.run({ nested: true }, op);
   const result = writeQueue.then(run, run);
   writeQueue = result.then(
     () => undefined,
@@ -2492,6 +2490,11 @@ function enqueueDb<T>(op: () => Promise<T> | T): Promise<T> {
 
 async function flushSqlite(): Promise<void> {
   if (!residentDb || !dbDirty) return;
+  if (activeWriteTransaction) {
+    // 写事务未提交时落盘会把未提交的数据写进库文件；保持脏标记，延后到事务结束再合并落盘。
+    scheduleFlush(SQLITE_FLUSH_RETRY_DELAY_MS);
+    return;
+  }
   dbDirty = false;
   try {
     await saveDatabase(residentDb);
@@ -2511,7 +2514,11 @@ function scheduleFlush(delayMs = SQLITE_FLUSH_DEBOUNCE_MS) {
   flushTimer = setTimeout(() => {
     flushTimer = null;
     flushScheduled = false;
-    void enqueueDb(() => flushSqlite()).catch((error) => console.error('[sqlite-flush]', error));
+    // 定时器在事务内被调度时会继承事务的异步上下文，必须显式脱离，
+    // 否则 flush 会被误判为嵌套操作而直通，在事务未提交时导出数据库。
+    dbExecutionContext.exit(() => {
+      void enqueueDb(() => flushSqlite()).catch((error) => console.error('[sqlite-flush]', error));
+    });
   }, delayMs);
 }
 
@@ -4647,7 +4654,9 @@ async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RE
 }
 
 async function ensureRuntimeSchema() {
-  await withWriteDb(async (db) => {
+  // bcrypt 哈希按事件循环分片执行，必须在事务外完成；进程每次启动只算一次，开销可忽略。
+  const adminPasswordHash = await bcrypt.hash('admin654', 10);
+  await withWriteDb((db) => {
     ensureSchema(db);
 
     const adminUsername = 'admin';
@@ -4656,17 +4665,16 @@ async function ensureRuntimeSchema() {
     ]);
 
     if (!adminUser) {
-      const passwordHash = await bcrypt.hash('admin654', 10);
       db.run('INSERT INTO users (username, password_hash, email, created_at) VALUES (?, ?, ?, ?)', [
         adminUsername,
-        passwordHash,
+        adminPasswordHash,
         'admin@example.com',
         nowIso(),
       ]);
       adminUser = { id: lastInsertId(db), username: adminUsername };
     }
 
-    const adminUserId = await resolveExternalUserId(db, adminUser.id, adminUsername);
+    const adminUserId = resolveExternalUserId(db, adminUser.id, adminUsername);
     ensureUserCredits(db, adminUserId, adminUsername, 0);
     const adminCredits = getUserCredits(db, adminUserId);
     if (adminCredits.totalCredits === 0 && adminCredits.usedCredits === 0) {
@@ -4692,7 +4700,8 @@ async function ensureRuntimeSchema() {
   });
 }
 
-async function resolveExternalUserId(db: SqlDatabase, legacyUserId: number, username: string) {
+// 纯同步函数：写事务内禁止出现真正的异步等待（其它操作会趁隙串入未提交的事务）。
+function resolveExternalUserId(db: SqlDatabase, legacyUserId: number, username: string) {
   const existing = getOne<{ supabase_user_id: string }>(
     db,
     'SELECT supabase_user_id FROM user_migrations WHERE legacy_user_id = ?',
@@ -6786,8 +6795,10 @@ async function start() {
         return;
       }
 
-      // SQLite 妯″紡
-      const result = await withWriteDb(async (db) => {
+      // SQLite 模式：bcrypt 哈希耗时约百毫秒且按事件循环分片执行，必须在事务外完成，
+      // 否则写锁窗口期内其它请求会串入这个未提交的事务。
+      const passwordHash = await bcrypt.hash(password, 10);
+      const result = await withWriteDb((db) => {
         ensureSchema(db);
 
         const existing = getOne<{ id: number }>(db, 'SELECT id FROM users WHERE username = ?', [username]);
@@ -6795,13 +6806,12 @@ async function start() {
           return null;
         }
 
-        const passwordHash = await bcrypt.hash(password, 10);
         db.run(
           'INSERT INTO users (username, password_hash, email, created_at) VALUES (?, ?, ?, ?)',
           [username, passwordHash, email, nowIso()],
         );
         const legacyUserId = lastInsertId(db);
-        const externalUserId = await resolveExternalUserId(db, legacyUserId, username);
+        const externalUserId = resolveExternalUserId(db, legacyUserId, username);
         ensureUserCredits(db, externalUserId, username, 0);
         return { authUser: { userId: externalUserId, username } };
       });
@@ -6902,9 +6912,9 @@ async function start() {
       const user = readUser && readUser.externalUserId && readUser.hasCredits
         ? { id: readUser.externalUserId, username: readUser.username }
         : readUser
-          ? await withWriteDb(async (db) => {
+          ? await withWriteDb((db) => {
               ensureSchema(db);
-              const externalUserId = await resolveExternalUserId(db, readUser.legacyUserId, readUser.username);
+              const externalUserId = resolveExternalUserId(db, readUser.legacyUserId, readUser.username);
               ensureUserCredits(db, externalUserId, readUser.username, 0);
               return { id: externalUserId, username: readUser.username };
             })
