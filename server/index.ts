@@ -9018,6 +9018,9 @@ async function start() {
         referenceImages,
         createdAt,
       };
+      // 同一幂等键的并发重复提交命中 UNIQUE 索引时，这里装入已存在的历史记录，
+      // 后续退回本次重复扣款并直接交付该记录（用户只付一次、看到的是成功）。
+      let adoptedExistingGeneration: Record<string, unknown> | null = null;
 
       try {
       // 璁板綍鐢熸垚鍘嗗彶
@@ -9044,62 +9047,96 @@ async function start() {
           console.warn('[generate] failed to update generation stats after history insert:', statsError);
         }
       } else {
+        let adopted: Record<string, unknown> | null = null;
         await withRecordingRetry(() => withWriteDb((db) => {
           ensureSchema(db);
-          db.run(
-            `
-              INSERT INTO generations (
-                user_id,
-                username,
-                prompt,
-                model_id,
-                model_name,
-                dimensions,
-                image_size,
-                image_path,
-                credits_used,
-                api_request_ms,
-                reference_images,
-                created_at,
-                request_id
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `,
-            [
-              req.authUser!.userId,
-              req.authUser!.username,
-              prompt,
-              modelId,
-              modelName,
-              ratio,
-              imageSize,
-              imagePath,
-              creditsUsed,
-              apiRequestMs,
-              serializeReferenceImages(referenceImages),
-              createdAt,
-              requestId,
-            ],
-          );
-        }));
-        try {
-          await withWriteDb((db) => {
-            ensureSchema(db);
+          try {
             db.run(
               `
-                INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-                VALUES (?, ?, 1, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                  username = excluded.username,
-                  generations_total = generations_total + 1,
-                  credits_total = credits_total + excluded.credits_total,
-                  updated_at = excluded.updated_at
+                INSERT INTO generations (
+                  user_id,
+                  username,
+                  prompt,
+                  model_id,
+                  model_name,
+                  dimensions,
+                  image_size,
+                  image_path,
+                  credits_used,
+                  api_request_ms,
+                  reference_images,
+                  created_at,
+                  request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               `,
-              [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
+              [
+                req.authUser!.userId,
+                req.authUser!.username,
+                prompt,
+                modelId,
+                modelName,
+                ratio,
+                imageSize,
+                imagePath,
+                creditsUsed,
+                apiRequestMs,
+                serializeReferenceImages(referenceImages),
+                createdAt,
+                requestId,
+              ],
             );
-          });
-        } catch (statsError) {
-          console.warn('[generate] failed to update generation stats after history insert:', statsError);
+          } catch (insertError) {
+            const insertMessage = insertError instanceof Error ? insertError.message : String(insertError);
+            // 同一幂等键的并发重复提交：另一条请求已抢先写入历史。复用该记录继续交付，
+            // 由下方统一退回本次重复扣款——用户拿到图、只付一次，而不是看到「历史记录写入失败」。
+            if (!requestId || !/UNIQUE constraint failed:.*request_id/i.test(insertMessage)) {
+              throw insertError;
+            }
+            adopted = getOne<Record<string, unknown>>(
+              db,
+              'SELECT * FROM generations WHERE request_id = ? AND user_id = ? LIMIT 1',
+              [requestId, req.authUser!.userId],
+            ) ?? null;
+            if (!adopted) throw insertError;
+          }
+        }));
+        adoptedExistingGeneration = adopted;
+        if (!adopted) {
+          try {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              db.run(
+                `
+                  INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+                  VALUES (?, ?, 1, ?, ?)
+                  ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    generations_total = generations_total + 1,
+                    credits_total = credits_total + excluded.credits_total,
+                    updated_at = excluded.updated_at
+                `,
+                [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
+              );
+            });
+          } catch (statsError) {
+            console.warn('[generate] failed to update generation stats after history insert:', statsError);
+          }
         }
+      }
+
+      // 并发重复提交被幂等键拦截：本次扣款属于重复收费，退回并直接交付已存在的生成结果。
+      if (adoptedExistingGeneration) {
+        await refundUserCreditsWithRetry(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
+        creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
+          { modelId, imageSize, reason: 'duplicate-submission-adopted' }, requestId);
+        payload.prompt = normalizeString(adoptedExistingGeneration.prompt) || payload.prompt;
+        payload.modelName = normalizeString(adoptedExistingGeneration.model_name) || payload.modelName;
+        payload.dimensions = normalizeString(adoptedExistingGeneration.dimensions) || payload.dimensions;
+        payload.imageSize = normalizeString(adoptedExistingGeneration.image_size) || payload.imageSize;
+        payload.imagePath = normalizeString(adoptedExistingGeneration.image_path) || payload.imagePath;
+        payload.createdAt = normalizeString(adoptedExistingGeneration.created_at) || payload.createdAt;
+        payload.referenceImages = parseReferenceImages(adoptedExistingGeneration.reference_images);
+        console.warn('[generate] duplicate submission adopted existing history, duplicate charge refunded:', requestId);
       }
 
       // 邀请码余额是派生数据，写入失败不能把已成功的生成判成失败。
