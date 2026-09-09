@@ -236,12 +236,14 @@ function TaskCard({
   selected = false,
   onSelect,
   onDownload,
+  downloading = false,
   compact = false,
 }: {
   task: BatchTask;
   selected?: boolean;
   onSelect?: () => void;
   onDownload?: () => void;
+  downloading?: boolean;
   compact?: boolean;
 }) {
   const imageUrl = task.image?.thumbnailPath || task.image?.imagePath;
@@ -260,11 +262,12 @@ function TaskCard({
       ) : null}
       {imageUrl && compact ? (
         <button
-          className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-black/70 text-zinc-300 transition hover:text-white"
+          className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-black/70 text-zinc-300 transition hover:text-white disabled:cursor-wait disabled:opacity-70"
           type="button"
           onClick={onDownload}
+          disabled={downloading}
         >
-          <Download size={12} />
+          {downloading ? <LoaderCircle size={12} className="animate-spin" /> : <Download size={12} />}
         </button>
       ) : null}
       <div className="aspect-square">
@@ -289,11 +292,12 @@ function TaskCard({
           <span className="truncate text-[11px] font-bold text-zinc-300">{task.sourceLabel}</span>
           {imageUrl ? (
             <button
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-400 transition hover:text-white"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-400 transition hover:text-white disabled:cursor-wait disabled:opacity-70"
               type="button"
               onClick={onDownload}
+              disabled={downloading}
             >
-              <Download size={13} />
+              {downloading ? <LoaderCircle size={13} className="animate-spin" /> : <Download size={13} />}
             </button>
           ) : null}
         </div>
@@ -314,12 +318,14 @@ function UnifiedPair({
   selected,
   onSelect,
   onDownload,
+  downloading = false,
 }: {
   source: UploadItem;
   task?: BatchTask;
   selected: boolean;
   onSelect: () => void;
   onDownload?: () => void;
+  downloading?: boolean;
 }) {
   const placeholderTask: BatchTask = task || {
     id: `placeholder-${source.id}`,
@@ -344,6 +350,7 @@ function UnifiedPair({
         selected={selected}
         onSelect={task?.image ? onSelect : undefined}
         onDownload={onDownload}
+        downloading={downloading}
       />
     </div>
   );
@@ -380,6 +387,8 @@ export default function BatchCreateView({
   const [thumbnailScale, setThumbnailScale] = useState(100);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState('');
+  const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
+  const [batchDownloading, setBatchDownloading] = useState(false);
 
   const model = availableModels.find((item) => item.id === selectedModel) || availableModels[0];
   const isNano = model?.id === 'Nano_Banana_Pro';
@@ -491,18 +500,28 @@ export default function BatchCreateView({
 
   async function downloadTask(task: BatchTask, index = 0) {
     const url = task.image?.imagePath;
-    if (!url) return;
+    if (!url || downloadingTaskId === task.id) return;
+    setDownloadingTaskId(task.id);
     try {
       await downloadAsset(url, `pixory-batch-${index + 1}`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '下载失败');
+    } finally {
+      setDownloadingTaskId((current) => (current === task.id ? null : current));
     }
   }
 
   async function downloadSelectedTasks() {
+    if (batchDownloading) return;
     const selected = succeededTasks.filter((task) => selectedTaskIds.includes(task.id));
-    for (let index = 0; index < selected.length; index += 1) {
-      await downloadTask(selected[index], index);
+    if (selected.length === 0) return;
+    setBatchDownloading(true);
+    try {
+      for (let index = 0; index < selected.length; index += 1) {
+        await downloadTask(selected[index], index);
+      }
+    } finally {
+      setBatchDownloading(false);
     }
   }
 
@@ -660,13 +679,13 @@ export default function BatchCreateView({
                     已选：{selectedTaskIds.length}
                   </span>
                   <button
-                    className="btn-ghost min-h-0 gap-1 px-2.5 py-1.5 text-[11px] text-zinc-400"
+                    className="btn-ghost min-h-0 inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] text-zinc-400 disabled:opacity-50"
                     type="button"
-                    disabled={selectedTaskIds.length === 0}
-                    onClick={downloadSelectedTasks}
+                    disabled={selectedTaskIds.length === 0 || batchDownloading}
+                    onClick={() => void downloadSelectedTasks()}
                   >
-                    <Download size={13} />
-                    批量下载
+                    {batchDownloading ? <LoaderCircle size={13} className="animate-spin" /> : <Download size={13} />}
+                    {batchDownloading ? '下载中…' : '批量下载'}
                   </button>
                   <label className="flex items-center gap-2 rounded-lg border border-white/8 px-2 py-1 text-[10px] font-black text-zinc-500">
                     <ZoomIn size={13} />
@@ -723,6 +742,7 @@ export default function BatchCreateView({
                             selected={Boolean(task && selectedTaskIds.includes(task.id))}
                             onSelect={() => task && toggleTaskSelection(task.id)}
                             onDownload={task ? () => void downloadTask(task) : undefined}
+                            downloading={Boolean(task && downloadingTaskId === task.id)}
                           />
                         </div>
                       );
@@ -807,7 +827,7 @@ export default function BatchCreateView({
                           </div>
                         </div>
                         {task ? (
-                          <TaskCard task={task} compact onDownload={() => void downloadTask(task)} />
+                          <TaskCard task={task} compact onDownload={() => void downloadTask(task)} downloading={downloadingTaskId === task.id} />
                         ) : (
                           <div className="flex min-h-[92px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 text-zinc-600">
                             <Sparkles size={17} />

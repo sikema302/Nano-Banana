@@ -79,6 +79,7 @@ import {
   markNotificationPopupShown,
   markNotificationRead,
   moveImage,
+  onDownloadError,
   rechargeAdminUserCredits,
   rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
   rechargePublicApiKeyCredits,
@@ -882,7 +883,7 @@ function StageCard({
                 onClick={onDownload}
                 disabled={downloading}
               >
-                <Download size={11} className={downloading ? 'animate-spin' : ''} />
+                {downloading ? <LoaderCircle size={11} className="animate-spin" /> : <Download size={11} />}
                 {downloading ? '下载中…' : '下载'}
               </button>
               <button
@@ -1067,6 +1068,7 @@ function SidePanel({
   emptyText,
   actionLabel,
   onAction,
+  actionLoading,
   onMove,
   onDelete,
   loggedIn,
@@ -1078,6 +1080,7 @@ function SidePanel({
   emptyText: string;
   actionLabel?: string;
   onAction?: () => void;
+  actionLoading?: boolean;
   onMove?: (item: SavedImage) => void;
   onDelete?: (item: SavedImage) => void;
   loggedIn: boolean;
@@ -1095,10 +1098,12 @@ function SidePanel({
 
         {actionLabel && onAction ? (
           <button
-            className="btn-secondary min-h-0 px-3 py-1.5 text-xs"
+            className="btn-secondary inline-flex min-h-0 items-center gap-1.5 px-3 py-1.5 text-xs disabled:cursor-wait disabled:opacity-60"
             type="button"
             onClick={onAction}
+            disabled={actionLoading}
           >
+            {actionLoading ? <LoaderCircle size={13} className="animate-spin" /> : null}
             {actionLabel}
           </button>
         ) : null}
@@ -1182,6 +1187,7 @@ function VideoCreateView({
   const [recentVideos, setRecentVideos] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
   const pollingRunRef = useRef(0);
 
   useEffect(() => () => {
@@ -1588,14 +1594,21 @@ function VideoCreateView({
             </div>
             {videoUrl ? (
               <button
-                className="btn-secondary min-h-0 px-3 py-2 text-[12px] font-bold"
+                className="btn-secondary inline-flex min-h-0 items-center gap-1.5 px-3 py-2 text-[12px] font-bold disabled:cursor-wait disabled:opacity-60"
                 type="button"
-                onClick={() => void downloadAsset(videoUrl, 'pixory-video').catch((downloadError) => {
-                  setError(downloadError instanceof Error ? downloadError.message : '下载失败');
-                })}
+                disabled={downloadingVideo}
+                onClick={() => {
+                  if (downloadingVideo) return;
+                  setDownloadingVideo(true);
+                  void downloadAsset(videoUrl, 'pixory-video')
+                    .catch((downloadError) => {
+                      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+                    })
+                    .finally(() => setDownloadingVideo(false));
+                }}
               >
-                <Download size={14} />
-                下载
+                {downloadingVideo ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
+                {downloadingVideo ? '下载中…' : '下载'}
               </button>
             ) : null}
           </div>
@@ -5358,6 +5371,7 @@ export default function App() {
   const [healthText, setHealthText] = useState('正在检查本地服务...');
   const [healthError, setHealthError] = useState('');
   const [notice, setNotice] = useState('');
+  useEffect(() => onDownloadError((message) => setNotice(message)), []);
   const [generationError, setGenerationError] = useState('');
   const [wechatCopied, setWechatCopied] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -7266,6 +7280,7 @@ export default function App() {
                 void downloadDisplayImage(target);
               }
             }}
+            actionLoading={Boolean(sideFavoriteItems[0] && downloadingUrl === sideFavoriteItems[0].imageUrl)}
             items={sideFavoriteItems}
             emptyText="看到满意的图，就把它放进这里。"
             onMove={moveSavedImageToMain}
@@ -8030,6 +8045,7 @@ export default function App() {
                   void downloadDisplayImage(target);
                 }
               }}
+              actionLoading={Boolean(sideFavoriteItems[0] && downloadingUrl === sideFavoriteItems[0].imageUrl)}
               items={sideFavoriteItems}
               emptyText="看到满意的图，就把它放进这里。"
               onMove={moveSavedImageToMain}
@@ -8138,15 +8154,23 @@ export default function App() {
                 <button
                   className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                   type="button"
-                  disabled={isOriginalImageExpired(previewImage.createdAt)}
+                  disabled={isOriginalImageExpired(previewImage.createdAt) || downloadingUrl === previewImage.imageUrl}
                   onClick={() => {
                     if (!isOriginalImageExpired(previewImage.createdAt)) {
                       void downloadDisplayImage(previewImage);
                     }
                   }}
                 >
-                  <Download size={14} />
-                  {isOriginalImageExpired(previewImage.createdAt) ? '原图已过期' : '原图'}
+                  {downloadingUrl === previewImage.imageUrl ? (
+                    <LoaderCircle size={14} className="animate-spin" />
+                  ) : (
+                    <Download size={14} />
+                  )}
+                  {isOriginalImageExpired(previewImage.createdAt)
+                    ? '原图已过期'
+                    : downloadingUrl === previewImage.imageUrl
+                      ? '下载中…'
+                      : '原图'}
                 </button>
                 <button
                   className="rounded-xl border border-white/10 p-2 text-zinc-400 transition hover:text-white"

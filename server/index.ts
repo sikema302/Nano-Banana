@@ -2111,6 +2111,74 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function verifyAuthToken(token: string): AuthUser | null {
+  try {
+    const payload = jwt.verify(token, tokenSecret) as AuthUser;
+    if (!normalizeString(payload.userId) || !normalizeString(payload.sessionId)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// 下载接口同时支持两种鉴权来源：常规 API 的 Authorization 头，以及浏览器原生下载
+// （<form> 提交）时放在 body 里的 token——避免把 token 暴露到地址栏 / 服务器访问日志。
+async function requireDownloadAuth(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  let token = '';
+  if (header?.startsWith('Bearer ')) {
+    token = header.slice(7);
+  } else {
+    token = normalizeString(req.body?.token) || normalizeString(req.query?.token);
+  }
+  if (!token) {
+    sendDownloadFailure(req, res, 401, '登录已失效，请重新登录后再下载');
+    return;
+  }
+
+  const payload = verifyAuthToken(token);
+  if (!payload) {
+    sendDownloadFailure(req, res, 401, '登录已失效，请重新登录后再下载');
+    return;
+  }
+
+  const userId = String(payload.userId);
+  const sessionId = normalizeString(payload.sessionId);
+  if (!ALLOW_MULTI_DEVICE_LOGIN) {
+    try {
+      if ((await getActiveAuthSession(userId)) !== sessionId) {
+        sendDownloadFailure(req, res, 401, '账号已在其他设备登录，请重新登录');
+        return;
+      }
+    } catch (error) {
+      console.error('[auth] session lookup failed:', error);
+      sendDownloadFailure(req, res, 503, '鉴权服务暂不可用，请稍后重试');
+      return;
+    }
+  }
+
+  req.authUser = { userId, username: String(payload.username), sessionId };
+  next();
+}
+
+// 下载接口的错误出口：浏览器原生下载（viaForm）无法读取 JSON 响应，
+// 这里通过 postMessage 把错误回传给发起下载的父页面，其余场景保持 JSON 兼容。
+function sendDownloadFailure(req: Request, res: Response, status: number, message: string) {
+  const viaForm = normalizeString(req.body?.viaForm) === '1' || normalizeString(req.query?.viaForm) === '1';
+  if (viaForm) {
+    res
+      .status(status)
+      .type('html')
+      .send(
+        '<!doctype html><html><head><meta charset="utf-8"></head><body><script>'
+        + `try{window.parent.postMessage(${JSON.stringify({ type: 'pixory-download-error', message })},'*');}catch(e){}`
+        + '</script></body></html>',
+      );
+    return;
+  }
+  res.status(status).json({ error: message });
+}
+
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.authUser || !isAdminUser(req.authUser)) {
     res.status(403).json({ error: 'Admin access required' });
@@ -6469,6 +6537,7 @@ async function start() {
   );
 
   app.use(express.json({ limit: `${MAX_IMAGE_REQUEST_BODY_MB}mb` }));
+  app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
   const generationLoadControlPayload = () => {
     const pressure = generationResourceMonitor.status();
@@ -9300,10 +9369,10 @@ async function start() {
     }
   }
 
-  app.post('/api/user/assets/download', requireAuth, async (req, res) => {
-    const requestedSource = normalizeString(req.body?.source);
+  app.post('/api/user/assets/download', requireDownloadAuth, async (req, res) => {
+    const requestedSource = normalizeString(req.body?.source) || normalizeString(req.query?.source);
     if (!requestedSource) {
-      res.status(400).json({ error: '下载地址无效' });
+      sendDownloadFailure(req, res, 400, '下载地址无效');
       return;
     }
 
@@ -9322,11 +9391,13 @@ async function start() {
     try {
       const storedSource = await findOwnedAssetSource(req, requestedSource);
       if (!storedSource) {
-        res.status(404).json({ error: '文件不存在或已过期' });
+        sendDownloadFailure(req, res, 404, '文件不存在或已过期');
         return;
       }
       const lookupMs = Date.now() - startedAt;
-      const downloadBaseName = `pixory-${Date.now()}`;
+      const requestedName = normalizeString(req.body?.suggestedName) || normalizeString(req.query?.suggestedName);
+      const downloadBaseName =
+        requestedName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^\.+|\.+$/g, '').slice(0, 120) || `pixory-${Date.now()}`;
 
       // data: 内联资源：量小，直接解码发送
       const inlineAsset = parseInlineDataAsset(storedSource);
@@ -9356,7 +9427,7 @@ async function start() {
           res.download(localPath, `${downloadBaseName}${path.extname(localPath)}`, (error) => {
             if (!error) return;
             console.error('[asset-download] local send failed:', error);
-            if (!res.headersSent) res.status(502).json({ error: '下载失败，请稍后重试' });
+            if (!res.headersSent) sendDownloadFailure(req, res, 502, '下载失败，请稍后重试');
           });
           return;
         }
@@ -9365,7 +9436,7 @@ async function start() {
       // 远程对象（R2）：流式转发，上游边下边发，不再整图读进内存
       const remoteUrl = resolveRemoteAssetUrl(req, storedSource);
       if (!remoteUrl) {
-        res.status(404).json({ error: '文件不存在或已过期' });
+        sendDownloadFailure(req, res, 404, '文件不存在或已过期');
         return;
       }
       const upstream = await fetch(remoteUrl);
@@ -9373,7 +9444,7 @@ async function start() {
       const upstreamType = normalizeString(upstream.headers.get('content-type')).split(';')[0].toLowerCase();
       const contentType = /^(?:image|video)\//.test(upstreamType) ? upstreamType : mimeTypeFromImagePath(remoteUrl);
       if (!upstream.ok || !upstream.body || !/^(?:image|video)\//.test(contentType)) {
-        res.status(404).json({ error: '文件不存在或已过期' });
+        sendDownloadFailure(req, res, 404, '文件不存在或已过期');
         return;
       }
       const bytes = Number(upstream.headers.get('content-length')) || 0;
@@ -9396,7 +9467,7 @@ async function start() {
       console.error('[asset-download]', error);
       logTiming(0, 0, 0, false);
       if (!res.headersSent) {
-        res.status(502).json({ error: '下载失败，请稍后重试' });
+        sendDownloadFailure(req, res, 502, '下载失败，请稍后重试');
       } else {
         res.destroy();
       }

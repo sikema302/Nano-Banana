@@ -441,40 +441,25 @@ async function fetchDirectBlob(source: string): Promise<Blob> {
   return response.blob();
 }
 
-export async function downloadAsset(
-  source: string,
-  suggestedName = 'pixory-image',
-  options: { save?: boolean } = {},
-): Promise<Blob> {
-  if (!source) throw new Error('下载地址无效');
-
-  const { save = true } = options;
-  let blob: Blob;
-  if (source.startsWith('data:')) {
-    // 同步转换 data URL 为 Blob，避免 fetch 的 async 导致浏览器拦截下载
-    blob = dataURLToBlob(source);
-  } else {
-    // 优先直连（CDN / 同源静态资源），不绕服务器；失败再回退服务器中转保证可用
+// 直连拉取，失败时回退服务器中转（用于需要拿到 Blob 的场景，或未登录时的兜底下载）
+async function fetchDirectBlobWithFallback(source: string): Promise<Blob> {
+  try {
+    return await fetchDirectBlob(source);
+  } catch (directError) {
+    if (directError instanceof Error && directError.name === 'AbortError') {
+      throw new Error('下载超时，图片较大或网络较慢，请重试');
+    }
+    console.warn('[downloadAsset] 直连下载失败，尝试服务器中转:', directError);
     try {
-      blob = await fetchDirectBlob(source);
-    } catch (directError) {
-      if (directError instanceof Error && directError.name === 'AbortError') {
-        throw new Error('下载超时，图片较大或网络较慢，请重试');
-      }
-      console.warn('[downloadAsset] 直连下载失败，尝试服务器中转:', directError);
-      try {
-        blob = await downloadViaServer(source);
-      } catch (serverError) {
-        console.error('[downloadAsset] 服务器中转也失败:', serverError);
-        if (!save) throw serverError;
-        throw new Error('下载失败：图片资源无法访问，请稍后重试');
-      }
+      return await downloadViaServer(source);
+    } catch (serverError) {
+      console.error('[downloadAsset] 服务器中转也失败:', serverError);
+      throw new Error('下载失败：图片资源无法访问，请稍后重试');
     }
   }
+}
 
-  console.log('[downloadAsset] blob 大小:', blob.size, '类型:', blob.type);
-  if (!save) return blob;
-
+function triggerBlobDownload(source: string, blob: Blob, suggestedName: string): void {
   const extension = fileExtensionForDownload(source, blob.type);
   const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
   const objectUrl = URL.createObjectURL(blob);
@@ -484,12 +469,115 @@ export async function downloadAsset(
   link.style.display = 'none';
   document.body.appendChild(link);
   link.click();
-  console.log('[downloadAsset] 下载触发完成:', link.download);
   // 延迟移除，避免浏览器在下载触发前就清理了元素
   window.setTimeout(() => {
     link.remove();
     URL.revokeObjectURL(objectUrl);
   }, 100);
+}
+
+// 下载错误回调注册（供 UI 层接收「浏览器原生下载」的失败信息）
+const downloadErrorHandlers = new Set<(message: string) => void>();
+let downloadMessageListenerAttached = false;
+
+function ensureDownloadMessageListener() {
+  if (downloadMessageListenerAttached || typeof window === 'undefined') return;
+  downloadMessageListenerAttached = true;
+  window.addEventListener('message', (event) => {
+    const data = event.data as { type?: string; message?: string } | null;
+    if (data && typeof data === 'object' && data.type === 'pixory-download-error' && typeof data.message === 'string') {
+      downloadErrorHandlers.forEach((handler) => handler(data.message as string));
+    }
+  });
+}
+
+export function onDownloadError(handler: (message: string) => void): () => void {
+  ensureDownloadMessageListener();
+  downloadErrorHandlers.add(handler);
+  return () => {
+    downloadErrorHandlers.delete(handler);
+  };
+}
+
+// 浏览器原生下载：<form> 提交（token 放 body，不暴露到地址栏 / 访问日志），
+// 服务端以 Content-Disposition: attachment 流式返回，浏览器自带进度条、按块写盘。
+function nativeFormDownload(source: string, suggestedName: string): void {
+  const token = getToken();
+  if (!token) throw new Error('登录已失效，请重新登录后再下载');
+
+  const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-') || 'pixory-image';
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = toApiUrl('/api/user/assets/download');
+  form.style.display = 'none';
+
+  const appendField = (name: string, value: string) => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  };
+  appendField('token', token);
+  appendField('source', source);
+  appendField('suggestedName', baseName);
+  appendField('viaForm', '1');
+
+  const iframe = document.createElement('iframe');
+  iframe.name = `pixory-download-${Date.now()}`;
+  iframe.style.display = 'none';
+  document.body.appendChild(iframe);
+  form.target = iframe.name;
+
+  document.body.appendChild(form);
+  form.submit();
+
+  window.setTimeout(() => {
+    form.remove();
+    iframe.remove();
+  }, 60_000);
+}
+
+// 原生下载没有「完成」回调，留一个短暂窗口让按钮的 loading 圆环可见，
+// 之后由浏览器下载进度条接管反馈。
+function downloadHandoffDelay(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 1200));
+}
+
+export async function downloadAsset(
+  source: string,
+  suggestedName = 'pixory-image',
+  options: { save?: boolean } = {},
+): Promise<Blob> {
+  if (!source) throw new Error('下载地址无效');
+
+  const { save = true } = options;
+
+  // data URL 已是本地字节，直接同步转 Blob，避免 fetch 的异步导致浏览器拦截下载
+  if (source.startsWith('data:')) {
+    const blob = dataURLToBlob(source);
+    if (!save) return blob;
+    triggerBlobDownload(source, blob, suggestedName);
+    return blob;
+  }
+
+  // 需要拿到 Blob 的场景（如编辑/去背景）：保持 fetch 拉取，不触发浏览器保存
+  if (!save) {
+    return fetchDirectBlobWithFallback(source);
+  }
+
+  // 保存到本地：登录用户走浏览器原生流式下载（进度条 + 流式写盘，大图体感更快）；
+  // 未登录用户无 token，回退到直连拉取后保存
+  if (getToken()) {
+    ensureDownloadMessageListener();
+    nativeFormDownload(source, suggestedName);
+    await downloadHandoffDelay();
+    return new Blob();
+  }
+
+  const blob = await fetchDirectBlobWithFallback(source);
+  triggerBlobDownload(source, blob, suggestedName);
   return blob;
 }
 
