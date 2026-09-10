@@ -57,6 +57,8 @@ function getAgent(baseUrl: string): Agent {
       keepAliveMaxTimeout: 600_000,  // 最长 10 分钟
       connections: 50,               // 每个 origin 最多 50 个连接
       pipelining: 1,                 // 禁用 HTTP pipelining（避免兼容性问题）
+      headersTimeout: 300_000,       // 首字节（响应头）最长等 5 分钟，避免死等故障上游
+      bodyTimeout: 600_000,          // 流式响应 chunk 间隔最长容忍 10 分钟
       connect: {
         timeout: 30_000,             // 连接超时 30 秒（比默认 10s 宽松，减少高负载时超时）
       },

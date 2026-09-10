@@ -43,7 +43,7 @@ test('calls the native Gemini image endpoint and reads inlineData', async () => 
 
   assert.equal(
     requestUrl,
-    `https://api.ai-media.vip/v1beta/models/${FLUX_BANANA_FLASH_MODEL}:generateContent`,
+    `https://api.ai-media.vip/v1beta/models/${FLUX_BANANA_FLASH_MODEL}:streamGenerateContent?alt=sse`,
   );
   assert.equal((requestInit?.headers as Record<string, string>)['x-goog-api-key'], 'secret');
   assert.deepEqual(JSON.parse(String(requestInit?.body)), {
@@ -79,6 +79,88 @@ test('marks explicit Flux HTTP errors as safe for the next configured channel', 
       },
     ),
     (error: unknown) => Boolean((error as { safeToFallback?: unknown })?.safeToFallback),
+  );
+});
+
+test('reads the generated image from an SSE stream response', async () => {
+  let requestUrl = '';
+  const sse = [
+    'data: {"candidates":[{"content":{"parts":[{"text":"working on it"}]}}]}',
+    '',
+    'data: {"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"cmVzdWx0"}}]}}]}',
+    '',
+    '',
+  ].join('\n');
+
+  const result = await generateFluxBanana(
+    { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      fetchImpl: async (url) => {
+        requestUrl = String(url);
+        return new Response(sse, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    },
+  );
+
+  assert.equal(
+    requestUrl,
+    `https://api.ai-media.vip/v1beta/models/${FLUX_BANANA_FLASH_MODEL}:streamGenerateContent?alt=sse`,
+  );
+  assert.deepEqual(result, {
+    source: 'data:image/png;base64,cmVzdWx0',
+    model: FLUX_BANANA_FLASH_MODEL,
+  });
+});
+
+test('falls back to the sync endpoint when the stream endpoint is missing', async () => {
+  const urls: string[] = [];
+  const result = await generateFluxBanana(
+    { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      fetchImpl: async (url) => {
+        urls.push(String(url));
+        if (urls.length === 1) return new Response('not found', { status: 404 });
+        return new Response(JSON.stringify({
+          candidates: [{
+            content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'cmVzdWx0' } }] },
+          }],
+        }));
+      },
+    },
+  );
+
+  assert.deepEqual(urls, [
+    `https://api.ai-media.vip/v1beta/models/${FLUX_BANANA_FLASH_MODEL}:streamGenerateContent?alt=sse`,
+    `https://api.ai-media.vip/v1beta/models/${FLUX_BANANA_FLASH_MODEL}:generateContent`,
+  ]);
+  assert.deepEqual(result, {
+    source: 'data:image/png;base64,cmVzdWx0',
+    model: FLUX_BANANA_FLASH_MODEL,
+  });
+});
+
+test('treats moderation errors inside the SSE stream as non-fallback failures', async () => {
+  await assert.rejects(
+    () => generateFluxBanana(
+      { prompt: 'Poster', ratio: '1:1', imageSize: '1K', images: [] },
+      {
+        baseUrl: 'https://api.ai-media.vip',
+        apiKey: 'secret',
+        fetchImpl: async () => new Response(
+          'data: {"error":{"message":"Content blocked by safety policy"}}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+      },
+    ),
+    (error: unknown) => {
+      const tagged = error as { safeToFallback?: unknown; message?: unknown };
+      return tagged.safeToFallback === false
+        && String(tagged.message || '').includes('Content moderation rejected');
+    },
   );
 });
 

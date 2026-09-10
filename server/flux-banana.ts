@@ -160,6 +160,64 @@ async function parsePayload(response: Response) {
   return { payload, raw };
 }
 
+/**
+ * 读取 SSE（text/event-stream）响应并逐个解析 data: 事件里的 JSON chunk。
+ * 同步等待上游出图要 1~2 分钟，nginx 类网关 60 秒无字节就会断连（UND_ERR_SOCKET），
+ * 流式端点持续推 chunk，可以避免「上游已出图扣费、我们这侧连接被掐断」的问题。
+ * raw 仅保留开头一小段用于错误诊断，避免把 base64 图片全量留在内存里。
+ */
+async function readSsePayloads(response: Response) {
+  const reader = response.body?.getReader();
+  if (!reader) return { payloads: [] as GeminiPayload[], raw: '' };
+  const decoder = new TextDecoder();
+  let lineBuffer = '';
+  let raw = '';
+  const payloads: GeminiPayload[] = [];
+
+  const flushEvent = (eventText: string) => {
+    if (!eventText.trim()) return;
+    const data = eventText
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') return;
+    if (raw.length < 4_096) raw = `${raw}${data}\n`.slice(0, 4_096);
+    try {
+      payloads.push(JSON.parse(data) as GeminiPayload);
+    } catch {
+      // 非 JSON 的心跳/注释帧直接忽略。
+    }
+  };
+
+  let eventBuffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuffer += decoder.decode(value, { stream: true });
+      let newlineIndex = lineBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = lineBuffer.slice(0, newlineIndex).replace(/\r$/, '');
+        lineBuffer = lineBuffer.slice(newlineIndex + 1);
+        if (line === '') {
+          flushEvent(eventBuffer);
+          eventBuffer = '';
+        } else {
+          eventBuffer += `${line}\n`;
+        }
+        newlineIndex = lineBuffer.indexOf('\n');
+      }
+    }
+    if (lineBuffer.trim()) eventBuffer += `${lineBuffer.replace(/\r$/, '')}\n`;
+    flushEvent(eventBuffer);
+  } finally {
+    reader.releaseLock();
+  }
+  return { payloads, raw };
+}
+
 async function fetchTaskPayload(
   url: string,
   options: FluxBananaOptions,
@@ -237,29 +295,39 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, controller.signal, fetchImpl)),
     ));
     requestSent = true;
-    const response = await fetchImpl(
-      `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: 'POST',
-        headers: {
-          'x-goog-api-key': options.apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts }],
-          generationConfig: {
-            responseModalities: ['TEXT', 'IMAGE'],
-            imageConfig: {
-              aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
-              imageSize: normalizeImageSize(input.imageSize),
-            },
-          },
-        }),
-        signal: controller.signal,
+    const requestInit: RequestInit = {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': options.apiKey,
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
+            imageSize: normalizeImageSize(input.imageSize),
+          },
+        },
+      }),
+      signal: controller.signal,
+    };
+    // 优先走流式端点：出图期间持续有字节流动，避免 nginx 类网关 60s 空闲断连
+    // （上游已完成并扣费、我们这侧 UND_ERR_SOCKET 的丢图问题）。个别聚合端
+    // 不支持该端点时退回同步 generateContent。
+    let response = await fetchImpl(
+      `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+      requestInit,
     );
-    const { payload: initialPayload, raw } = await parsePayload(response);
+    if (response.status === 404) {
+      response = await fetchImpl(
+        `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        requestInit,
+      );
+    }
     if (!response.ok) {
+      const { payload: initialPayload, raw } = await parsePayload(response);
       const upstreamMessage = payloadError(initialPayload)
         || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
       // gemini 400 多为提示词/参考图内容审核或参数被拒；这类错误换渠道重试无意义，
@@ -273,8 +341,31 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       );
     }
 
-    let payload = initialPayload;
-    let source = generatedImage(payload);
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    let payload: GeminiPayload = {};
+    let raw = '';
+    let source = '';
+    if (contentType.includes('text/event-stream')) {
+      const streamed = await readSsePayloads(response);
+      raw = streamed.raw;
+      for (const chunk of streamed.payloads) {
+        if (chunk.error) {
+          const upstreamMessage = payloadError(chunk) || 'Flux stream returned an error';
+          const isModeration = /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i.test(upstreamMessage);
+          throw providerError(
+            isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
+            !isModeration,
+          );
+        }
+        if (!source) source = generatedImage(chunk);
+        payload = chunk;
+      }
+    } else {
+      const parsed = await parsePayload(response);
+      payload = parsed.payload;
+      raw = parsed.raw;
+      source = generatedImage(payload);
+    }
     if (source) {
       return { source: await materializeImage(source, options, controller.signal), model };
     }
