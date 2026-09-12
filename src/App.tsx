@@ -192,11 +192,13 @@ function visibleImageModels(models: ModelInfo[]): ModelInfo[] {
 
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
+  { id: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u66f4\u5feb\u8fed\u4ee3' },
+  { id: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Seedream_4', name: 'Seedream 4', description: '\u5373\u68a6 Seedream 4 \u751f\u56fe\u6a21\u578b' },
 ];
 
-type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9';
+type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9' | '5:4' | '4:5' | '3:1' | '1:4';
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'batchCreate' | 'chat' | 'history' | 'apiDocs' | 'admin';
@@ -428,6 +430,22 @@ const dimensionOptions: Array<{ value: DimensionOption; label: string }> = [
   { value: '3:4', label: '3:4' },
   { value: '2:3', label: '2:3' },
 ];
+
+// GPT-image-2.5 各档位支持的比例如下（源自 junliai 文档模型目录）
+// Flare：1K 走 junliai（网页反代），2K/4K 走 firefly（adobe 渠道）
+// Sunburst：1K 走 junliai，2K/4K 走 firefly
+const GPT_IMAGE_2_5_RATIO_OPTIONS: Record<string, Record<string, DimensionOption[]>> = {
+  'GPT-image-2.5-Flare': {
+    '1K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
+    '2K': ['1:1', '16:9', '9:16', '4:3', '3:2', '3:4', '2:3'],
+    '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '3:4', '2:3'],
+  },
+  'GPT-image-2.5-Sunburst': {
+    '1K': ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
+    '2K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
+    '4K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
+  },
+};
 
 const gptImageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: string }> = [
   { value: 'STANDARD', label: '\u6807\u51c6', hint: '' },
@@ -672,6 +690,9 @@ function getModelCredits(
   if (model.id === 'gpt-image-2') {
     return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || 'STANDARD', options?.quality || 'auto');
   }
+  if (model.id === 'GPT-image-2.5-Flare' || model.id === 'GPT-image-2.5-Sunburst') {
+    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '1K', options?.quality || 'auto');
+  }
   if (model.id === 'Nano_Banana_Pro') {
     const baseCredits = getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
     const enhancementCredits = options?.optimizeChineseText
@@ -690,8 +711,10 @@ function getModelCredits(
 
 function getModelSortOrder(modelId: string) {
   if (modelId === 'gpt-image-2') return 0;
-  if (modelId === 'Nano_Banana_Pro') return 1;
-  if (modelId === 'Seedream_4') return 2;
+  if (modelId === 'GPT-image-2.5-Flare') return 1;
+  if (modelId === 'GPT-image-2.5-Sunburst') return 2;
+  if (modelId === 'Nano_Banana_Pro') return 3;
+  if (modelId === 'Seedream_4') return 4;
   return 99;
 }
 
@@ -703,7 +726,9 @@ function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana'
 }
 
 function getModelSuccessRate(modelId: string) {
-  if (modelId === 'gpt-image-2') return '99%成功率';
+  if (modelId === 'gpt-image-2'
+    || modelId === 'GPT-image-2.5-Flare'
+    || modelId === 'GPT-image-2.5-Sunburst') return '99%成功率';
   return '';
 }
 
@@ -3276,6 +3301,12 @@ function AdminModelCreditPanel({
   const setGrokImage = (key: keyof ModelCreditPricing['grokImage'], value: number) => {
     setDraft((current) => ({ ...current, grokImage: { ...current.grokImage, [key]: value } }));
   };
+  const setGpt25Flare = (key: keyof ModelCreditPricing['gptImage25Flare'], value: number) => {
+    setDraft((current) => ({ ...current, gptImage25Flare: { ...current.gptImage25Flare, [key]: value } }));
+  };
+  const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
+    setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
+  };
   const setVideo = (modelId: VideoModelId, key: string, value: number) => {
     setDraft((current) => ({
       ...current,
@@ -3333,6 +3364,30 @@ function AdminModelCreditPanel({
             {row('2K 高质量', 'quality=high', creditInput(draft.gptImage2.twoKHigh, (value) => setGpt('twoKHigh', value)))}
             {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage2.fourK, (value) => setGpt('fourK', value)))}
             {row('4K 高质量', 'quality=high', creditInput(draft.gptImage2.fourKHigh, (value) => setGpt('fourKHigh', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-fuchsia-100">GPT-image-2.5 Flare</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 GPT 专用积分；1K 走 junliai，2K/4K 走 firefly。</p>
+          <div className="mt-3">
+            {row('1K', '标准档位（junliai）', creditInput(draft.gptImage25Flare.standard, (value) => setGpt25Flare('standard', value)))}
+            {row('2K 普通', 'auto / low / medium', creditInput(draft.gptImage25Flare.twoK, (value) => setGpt25Flare('twoK', value)))}
+            {row('2K 高质量', 'quality=high', creditInput(draft.gptImage25Flare.twoKHigh, (value) => setGpt25Flare('twoKHigh', value)))}
+            {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage25Flare.fourK, (value) => setGpt25Flare('fourK', value)))}
+            {row('4K 高质量', 'quality=high', creditInput(draft.gptImage25Flare.fourKHigh, (value) => setGpt25Flare('fourKHigh', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-indigo-100">GPT-image-2.5 Sunburst</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 GPT 专用积分；1K 走 junliai，2K/4K 走 firefly。</p>
+          <div className="mt-3">
+            {row('1K', '标准档位（junliai）', creditInput(draft.gptImage25Sunburst.standard, (value) => setGpt25Sunburst('standard', value)))}
+            {row('2K 普通', 'auto / low / medium', creditInput(draft.gptImage25Sunburst.twoK, (value) => setGpt25Sunburst('twoK', value)))}
+            {row('2K 高质量', 'quality=high', creditInput(draft.gptImage25Sunburst.twoKHigh, (value) => setGpt25Sunburst('twoKHigh', value)))}
+            {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage25Sunburst.fourK, (value) => setGpt25Sunburst('fourK', value)))}
+            {row('4K 高质量', 'quality=high', creditInput(draft.gptImage25Sunburst.fourKHigh, (value) => setGpt25Sunburst('fourKHigh', value)))}
           </div>
         </section>
 
@@ -4347,13 +4402,13 @@ function AdminView({
                     { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
                     { key: 'schatSeedance25', title: 'Schat · Seedance 2.5' },
                     { key: 'junliaiSd2Fast', title: 'seedance 2.0 fast' },
-                  ] as const).map((route, index) => {
+                  ] as const).map((route) => {
                     const enabled = providerRouting[route.key];
                     const updating = updatingProviderRoute === route.key;
                     return (
                       <article key={route.key} className="flex items-center justify-between rounded-[16px] border border-white/8 bg-black/25 p-3">
                         <div>
-                          <div className="text-xs font-bold text-white">{`视频接口 ${index + 1}`}</div>
+                          <div className="text-xs font-bold text-white">{route.title}</div>
                           <div className="mt-1 text-[10px] text-zinc-500">{enabled ? '已启用' : '已停用'}</div>
                         </div>
                         <button
@@ -5402,9 +5457,11 @@ export default function App() {
   const sideBackupItems = user ? backup : [];
   const sideDiscardedItems = user ? discarded : [];
   const isNanoBananaPro = selectedModel === 'Nano_Banana_Pro';
+  const isGptImage2_5 = selectedModel === 'GPT-image-2.5-Flare' || selectedModel === 'GPT-image-2.5-Sunburst';
   const effectiveOptimizeChineseText = isNanoBananaPro && optimizeChineseText;
-  const showGptQuality = selectedModel === 'gpt-image-2';
-  const disableGptQuality = showGptQuality && imageSize === 'STANDARD';
+  const showGptQuality = selectedModel === 'gpt-image-2' || isGptImage2_5;
+  // GPT-image-2 的 STANDARD、GPT-image-2.5 的 1K 都是上游"标准"档，不支持 quality
+  const disableGptQuality = showGptQuality && (imageSize === 'STANDARD' || (isGptImage2_5 && imageSize === '1K'));
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
   const selectedModelCredits = getModelCredits(selectedModelInfo, {
     imageSize,
@@ -5413,17 +5470,25 @@ export default function App() {
     pricing: gptImagePricing,
     modelCreditPricing,
   });
-  const selectedResolutionOptions = isNanoBananaPro ? imageSizeOptions : gptImageSizeOptions;
+  const selectedResolutionOptions = isNanoBananaPro || isGptImage2_5 ? imageSizeOptions : gptImageSizeOptions;
   const visibleResolutionOptions = selectedModel === 'Seedream_4'
     ? gptImageSizeOptions.filter((item) => item.value === '2K' || item.value === '4K')
     : selectedModel === 'Grok_Image'
       ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
       : selectedResolutionOptions;
-  const visibleDimensionOptions = selectedModel === 'Grok_Image'
-    ? dimensionOptions.filter((item) => item.value !== '21:9')
-    : dimensionOptions;
+  const visibleDimensionOptions = isGptImage2_5
+    ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
+    : selectedModel === 'Grok_Image'
+      ? dimensionOptions.filter((item) => item.value !== '21:9')
+      : dimensionOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
-  const selectedCreditBucket = selectedModel === 'gpt-image-2' ? 'gpt' : selectedModel === 'Nano_Banana_Pro' ? 'banana' : 'general';
+  const selectedCreditBucket = selectedModel === 'gpt-image-2'
+    || selectedModel === 'GPT-image-2.5-Flare'
+    || selectedModel === 'GPT-image-2.5-Sunburst'
+    ? 'gpt'
+    : selectedModel === 'Nano_Banana_Pro'
+      ? 'banana'
+      : 'general';
   const selectedAvailableCredits = getAvailableUserCredits(user, selectedCreditBucket);
   const hasEnoughCredits = user ? selectedAvailableCredits >= selectedModelCredits * batchCount : true;
   const promoCouponExpiresAtMs = new Date(promoCoupon?.expiresAt || '').getTime();
@@ -5711,6 +5776,12 @@ export default function App() {
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
       setImageSize('STANDARD');
+      setGptQuality('auto');
+      setOptimizeChineseText(false);
+      return;
+    }
+    if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+      setImageSize('1K');
       setGptQuality('auto');
       setOptimizeChineseText(false);
       return;
@@ -7742,6 +7813,12 @@ export default function App() {
                             setImageSize(item.value);
                             if (selectedModel === 'gpt-image-2' && item.value === 'STANDARD') {
                               setGptQuality('auto');
+                            }
+                            // GPT-image-2.5 切换清晰度后，若当前比例不在新档位支持列表内，回退到 1:1
+                            if (isGptImage2_5) {
+                              const allowed = GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[item.value] || [];
+                              setDimensions((current) => (allowed as DimensionOption[]).includes(current) ? current : '1:1');
+                              if (item.value === '1K') setGptQuality('auto');
                             }
                           }}
                         >

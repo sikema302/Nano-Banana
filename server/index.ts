@@ -926,6 +926,18 @@ const models = [
     creditsCost: 20,
   },
   {
+    id: 'GPT-image-2.5-Flare',
+    name: 'GPT-image-2.5 Flare',
+    description: 'OpenAI最新生图模型 · 更快迭代',
+    creditsCost: 20,
+  },
+  {
+    id: 'GPT-image-2.5-Sunburst',
+    name: 'GPT-image-2.5 Sunburst',
+    description: 'OpenAI最新生图模型 · 思考更久',
+    creditsCost: 20,
+  },
+  {
     id: 'Nano_Banana_Pro',
     name: 'Nano Banana Pro',
     description: '谷歌最强生图模型！',
@@ -2025,6 +2037,11 @@ function shouldEnhanceNanoBanana(modelId: string, imageSize: string, requested: 
 }
 
 function normalizeImageSize(value: string, modelId: string) {
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    // GPT-image-2.5 不支持 STANDARD，上游仅 1K / 2K / 4K；统一把 STANDARD/1K 视作 1K
+    if (value === '2K' || value === '4K') return value;
+    return '1K';
+  }
   if (modelId === 'gpt-image-2') {
     if (value === '2K' || value === '4K') return value;
     return 'STANDARD';
@@ -5798,7 +5815,6 @@ async function createGeneratedThumbnail(buffer: Buffer, fileName: string) {
 
 // Upload verified bytes to R2, then read the public URL before reporting success.
 async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
-  if (!R2_STORAGE) throw new Error('Image storage is not configured');
   const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
   let thumbnailBuffer: Buffer | null = null;
   try {
@@ -5809,6 +5825,21 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
       .toBuffer();
   } catch (error) {
     console.warn(`[thumbnail] failed for ${fileName}:`, error);
+  }
+
+  // 本地开发兜底：未配置 R2 时写入本地 uploads 目录，经 /uploads 静态服务访问
+  if (!R2_STORAGE) {
+    const localPath = path.join(GENERATED_DIR, fileName);
+    await fs.writeFile(localPath, buffer);
+    if (thumbnailBuffer) {
+      const thumbnailName = `${fileName.replace(/\.[^.]+$/, '')}.webp`;
+      try {
+        await fs.writeFile(path.join(THUMBNAILS_DIR, thumbnailName), thumbnailBuffer);
+      } catch (error) {
+        console.warn(`[local-upload] thumbnail failed for ${fileName}:`, error);
+      }
+    }
+    return `/uploads/generated/${fileName}`;
   }
 
   const imageUrl = await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer);
@@ -6259,7 +6290,7 @@ async function start() {
     await ensureRuntimeDirectories();
   }
 
-  if (!R2_STORAGE) {
+  if (!R2_STORAGE && IS_VERCEL) {
     throw new Error(
       'R2 image storage is required. Configure R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, and R2_PUBLIC_BASE_URL before starting the server.',
     );
@@ -6341,10 +6372,14 @@ async function start() {
     primaryModels: {
       'gpt-image-2': JUNLIAI_MODEL,
       Nano_Banana_Pro: 'nano-banana-pro',
+      'GPT-image-2.5-Flare': 'gpt-image-2.5-flare',
+      'GPT-image-2.5-Sunburst': 'gpt-image-2.5-sunburst',
     },
     primaryModelChains: {
       'gpt-image-2': [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL, JUNLIAI_MODEL],
       Nano_Banana_Pro: ['nano-banana-pro', 'nano-banana-2'],
+      'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'firefly-gpt-image-2.5-flare'],
+      'GPT-image-2.5-Sunburst': ['gpt-image-2.5-sunburst', 'firefly-gpt-image-2.5-sunburst'],
     },
     primaryModelCapabilities: {
       [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL]: {
@@ -6356,6 +6391,26 @@ async function start() {
         imageSizes: ['STANDARD', '1K', '2K', '4K'],
         ratios: ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'],
         maxImages: 6,
+      },
+      'gpt-image-2.5-flare': {
+        imageSizes: ['1K'],
+        ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
+        maxImages: 15,
+      },
+      'firefly-gpt-image-2.5-flare': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '3:4', '2:3'],
+        maxImages: 10,
+      },
+      'gpt-image-2.5-sunburst': {
+        imageSizes: ['1K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
+        maxImages: 15,
+      },
+      'firefly-gpt-image-2.5-sunburst': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
+        maxImages: 10,
       },
       'grok-image': {
         imageSizes: ['1K', '2K'],
@@ -6385,9 +6440,11 @@ async function start() {
       if (input.modelId === 'Grok_Image') {
         return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
-      return upstreamModel === JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
-        ? isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
-        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
+      // GPT-image-2 / GPT-image-2.5-* 系列：firefly-* 上游走 junliai-firefly，其余走 junliai-economy
+      if (upstreamModel.startsWith('firefly-gpt-image-2')) {
+        return isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
+      }
+      return isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy');
     },
     timeoutMs: JUNLIAI_TIMEOUT_MS,
     failureThreshold: JUNLIAI_FAILURE_THRESHOLD,
@@ -6587,7 +6644,7 @@ async function start() {
       ok: true,
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
-      imageStorageProvider: 'r2',
+      imageStorageProvider: R2_STORAGE ? 'r2' : 'local-filesystem',
       loadControl: generationLoadControlPayload(),
     });
   });
@@ -6605,7 +6662,7 @@ async function start() {
       res.json({
         ok: true,
         databaseProvider: DATABASE_PROVIDER,
-        imageStorageProvider: 'r2',
+        imageStorageProvider: R2_STORAGE ? 'r2' : 'local-filesystem',
         loadControl: generationLoadControlPayload(),
       });
     } catch (error) {
@@ -11908,7 +11965,7 @@ async function start() {
 
   const httpServer = app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
-    console.log(`[image-storage] provider=r2 bucket=${R2_STORAGE!.config.bucketName}`);
+    console.log(`[image-storage] provider=${R2_STORAGE ? `r2 bucket=${R2_STORAGE.config.bucketName}` : 'local-filesystem'}`);
     if (typeof process.send === 'function') {
       process.send('ready');
     }

@@ -26,6 +26,8 @@ export type VideoCreditPricing = Record<VideoModelId, Partial<Record<`${VideoRes
 
 export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
+  gptImage25Flare: GptImagePricing;
+  gptImage25Sunburst: GptImagePricing;
   nanoBanana: NanoBananaCreditPricing;
   seedream: SeedreamCreditPricing;
   grokImage: GrokImageCreditPricing;
@@ -35,6 +37,14 @@ export type ModelCreditPricing = {
 
 export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
   gptImage2: { ...DEFAULT_GPT_IMAGE_PRICING },
+  gptImage25Flare: { ...DEFAULT_GPT_IMAGE_PRICING },
+  gptImage25Sunburst: {
+    standard: 20,
+    twoK: 34,
+    twoKHigh: 48,
+    fourK: 40,
+    fourKHigh: 48,
+  },
   nanoBanana: {
     oneK: 20,
     twoK: 24,
@@ -114,6 +124,8 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
 
   return {
     gptImage2: normalizeGptImagePricing(source.gptImage2),
+    gptImage25Flare: normalizeGptImagePricing(source.gptImage25Flare),
+    gptImage25Sunburst: normalizeGptImagePricing(source.gptImage25Sunburst),
     nanoBanana: {
       oneK: positiveCredit(banana.oneK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.oneK),
       twoK: positiveCredit(banana.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.twoK),
@@ -144,11 +156,16 @@ export function getConfiguredImageCredits(
   imageSize: string,
   quality = '',
 ) {
-  if (modelId === 'gpt-image-2') {
+  if (modelId === 'gpt-image-2' || modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    const gptPricing = modelId === 'GPT-image-2.5-Flare'
+      ? pricing.gptImage25Flare
+      : modelId === 'GPT-image-2.5-Sunburst'
+        ? pricing.gptImage25Sunburst
+        : pricing.gptImage2;
     const normalizedQuality = String(quality).toLowerCase();
-    if (imageSize === '2K') return normalizedQuality === 'high' ? pricing.gptImage2.twoKHigh : pricing.gptImage2.twoK;
-    if (imageSize === '4K') return normalizedQuality === 'high' ? pricing.gptImage2.fourKHigh : pricing.gptImage2.fourK;
-    return pricing.gptImage2.standard;
+    if (imageSize === '2K') return normalizedQuality === 'high' ? gptPricing.twoKHigh : gptPricing.twoK;
+    if (imageSize === '4K') return normalizedQuality === 'high' ? gptPricing.fourKHigh : gptPricing.fourK;
+    return gptPricing.standard;
   }
   if (modelId === 'Nano_Banana_Pro') {
     if (imageSize === '1K') return pricing.nanoBanana.oneK;

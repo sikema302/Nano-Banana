@@ -131,19 +131,19 @@ const FIREFLY_GPT_IMAGE_2_SIZES: Record<string, Record<string, string>> = {
     '1:1': '1024x1024', '5:4': '1120x896', '4:3': '1152x864',
     '3:2': '1248x832', '16:9': '1280x720', '21:9': '1456x624',
     '4:5': '896x1120', '3:4': '864x1152', '2:3': '832x1248',
-    '9:16': '720x1280',
+    '9:16': '720x1280', '3:1': '1536x512',
   },
   '2K': {
     '1:1': '2048x2048', '5:4': '2240x1792', '4:3': '2304x1728',
     '3:2': '2496x1664', '16:9': '2560x1440', '21:9': '3024x1296',
     '4:5': '1792x2240', '3:4': '1728x2304', '2:3': '1664x2496',
-    '9:16': '1440x2560',
+    '9:16': '1440x2560', '3:1': '3072x1024',
   },
   '4K': {
     '1:1': '2880x2880', '5:4': '3200x2560', '4:3': '3264x2448',
     '3:2': '3504x2336', '16:9': '3840x2160', '21:9': '3696x1584',
     '4:5': '2560x3200', '3:4': '2448x3264', '2:3': '2336x3504',
-    '9:16': '2160x3840',
+    '9:16': '2160x3840', '3:1': '3840x1280',
   },
 };
 
@@ -151,7 +151,7 @@ function requestSize(input: ImageGenerationInput, upstreamModel: string) {
   const sizeKey = ['1K', '2K', '4K'].includes(input.imageSize) ? input.imageSize : 'STANDARD';
   const ratio = input.ratio === 'auto' ? '1:1' : input.ratio;
   if (/^\d+x\d+$/i.test(ratio)) return ratio;
-  if (upstreamModel === 'firefly-gpt-image-2') {
+  if (upstreamModel.startsWith('firefly-gpt-image-2')) {
     const fireflySizeKey = sizeKey === 'STANDARD' ? '1K' : sizeKey;
     return FIREFLY_GPT_IMAGE_2_SIZES[fireflySizeKey][ratio]
       || FIREFLY_GPT_IMAGE_2_SIZES[fireflySizeKey]['1:1'];
@@ -447,7 +447,11 @@ export function createImageProviderRouter(options: RouterOptions) {
     const primaryEligible =
       primaryConfigured &&
       primaryEnabled &&
-      (input.modelId === 'gpt-image-2' || input.modelId === 'Nano_Banana_Pro' || input.modelId === 'Grok_Image') &&
+      (input.modelId === 'gpt-image-2'
+        || input.modelId === 'GPT-image-2.5-Flare'
+        || input.modelId === 'GPT-image-2.5-Sunburst'
+        || input.modelId === 'Nano_Banana_Pro'
+        || input.modelId === 'Grok_Image') &&
       candidates.length > 0;
     if (!primaryEligible) {
       if (junliaiOnly) {

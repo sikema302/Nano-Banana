@@ -141,7 +141,11 @@ function getCredits(
   modelCreditPricing: ModelCreditPricing,
 ) {
   if (!model) return 0;
-  if (model.id === 'gpt-image-2') return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
+  if (model.id === 'gpt-image-2'
+    || model.id === 'GPT-image-2.5-Flare'
+    || model.id === 'GPT-image-2.5-Sunburst') {
+    return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
+  }
   if (model.id === 'Nano_Banana_Pro') {
     const base = getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
     const enhancementCredits = optimizeChineseText
@@ -368,7 +372,10 @@ export default function BatchCreateView({
   onGenerationComplete,
 }: BatchCreateViewProps) {
   const availableModels = useMemo(
-    () => models.filter((item) => item.id === 'gpt-image-2' || item.id === 'Nano_Banana_Pro'),
+    () => models.filter((item) => item.id === 'gpt-image-2'
+      || item.id === 'GPT-image-2.5-Flare'
+      || item.id === 'GPT-image-2.5-Sunburst'
+      || item.id === 'Nano_Banana_Pro'),
     [models],
   );
   const [mode, setMode] = useState<BatchMode>('unified');
@@ -399,7 +406,13 @@ export default function BatchCreateView({
   const taskCount = mode === 'unified' ? sourceImages.length : activePrompts.length;
   const creditsPerTask = getCredits(model, imageSize, quality, effectiveOptimizeChineseText, gptImagePricing, modelCreditPricing);
   const estimatedCredits = creditsPerTask * taskCount;
-  const creditBucket = model?.id === 'gpt-image-2' ? 'gpt' : model?.id === 'Nano_Banana_Pro' ? 'banana' : 'general';
+  const creditBucket = model?.id === 'gpt-image-2'
+    || model?.id === 'GPT-image-2.5-Flare'
+    || model?.id === 'GPT-image-2.5-Sunburst'
+    ? 'gpt'
+    : model?.id === 'Nano_Banana_Pro'
+      ? 'banana'
+      : 'general';
   const creditsRemaining = user?.creditBalances
     ? creditBucket === 'general'
       ? user.creditBalances.general
