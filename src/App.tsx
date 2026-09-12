@@ -6513,16 +6513,21 @@ export default function App() {
       mimeType: item.mimeType,
       data: item.data,
     }));
-    const initialProgress: GenerationProgress = {
-      completed: 0,
-      total: generationBatchCount,
-      visual: 6,
-      startedAt: Date.now(),
-    };
+    // 每张图片一个独立灶台，各自拥有独立的生成进度（total=1），异步同时生成。
+    const batchGenerationIds = Array.from({ length: generationBatchCount }, () =>
+      globalThis.crypto?.randomUUID?.() || `generation-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
 
     submittingGenerationRef.current = true;
     setSubmittingGeneration(true);
-    setActiveImageGenerations((current) => [...current, { id: generationId, progress: initialProgress, images: [] }]);
+    setActiveImageGenerations((current) => [
+      ...current,
+      ...batchGenerationIds.map((id) => ({
+        id,
+        progress: { completed: 0, total: 1, visual: 6, startedAt: Date.now() },
+        images: [] as DisplayImage[],
+      })),
+    ]);
     setNotice('');
     setGenerationError('');
     setEditVersions([]);
@@ -6535,8 +6540,8 @@ export default function App() {
       submittingGenerationRef.current = false;
       setSubmittingGeneration(false);
     };
-    const updateGeneration = (completed: number, visual: number, images = generatedImages) => {
-      setActiveImageGenerations((current) => current.map((item) => item.id === generationId
+    const updateGenerationSlot = (id: string, completed: number, visual: number, images: DisplayImage[]) => {
+      setActiveImageGenerations((current) => current.map((item) => item.id === id
         ? {
             ...item,
             images: [...images],
@@ -6552,60 +6557,63 @@ export default function App() {
         setProviderRouting(latestRouting);
       }
 
-      // 并行提交所有任务：避免串行等待让用户感到"一张一张"生成
-      const successCountRef = { current: 0 };
-      const runBatchIndex = async (index: number): Promise<{ index: number; displayImage: DisplayImage }> => {
-        const jobStartedAt = Date.now();
-        const { job } = await startGenerateImageJob({
-          submissionId: `${generationId}:${index}`,
-          prompt: generationPrompt,
-          model: generationModel,
-          dimensions: generationDimensions,
-          imageSize: generationImageSize,
-          quality: generationShowGptQuality ? generationQuality : undefined,
-          ...getAiEnhancementRequestFlags(generationIsNanoBananaPro ? generationOptimizeChineseText : false),
-          reference_images: generationReferences,
-        });
-        const image = job.status === 'succeeded' && job.image
-          ? job.image
-          : await waitForGenerationJob(job.id, index, generationBatchCount, jobStartedAt, () => {
-              // 并行场景：忽略 waitForGenerationJob 基于串行假设计算的 visual，
-              // 改用"已成功张数 + 1 张活跃槽位 50%"作为视觉基线，进度条更平滑。
-              const completed = successCountRef.current;
-              const baselineVisual = Math.min(99, ((completed + 0.5) / generationBatchCount) * 100);
-              setActiveImageGenerations((current) => current.map((item) => item.id === generationId
-                ? { ...item, progress: { ...item.progress, completed, visual: Math.max(item.progress.visual, baselineVisual) } }
-                : item));
-            });
-        return { index, displayImage: toDisplayImage(image) };
-      };
-
-      const settledResults = await Promise.allSettled(
-        Array.from({ length: generationBatchCount }, (_, index) => runBatchIndex(index)),
+      // 阶段 1：并行提交所有任务（每张图片一个独立灶台）
+      const submitResults = await Promise.allSettled(
+        Array.from({ length: generationBatchCount }, async (_, index) => {
+          const { job } = await startGenerateImageJob({
+            submissionId: `${generationId}:${index}`,
+            prompt: generationPrompt,
+            model: generationModel,
+            dimensions: generationDimensions,
+            imageSize: generationImageSize,
+            quality: generationShowGptQuality ? generationQuality : undefined,
+            ...getAiEnhancementRequestFlags(generationIsNanoBananaPro ? generationOptimizeChineseText : false),
+            reference_images: generationReferences,
+          });
+          return { index, job };
+        }),
       );
 
-      // 所有任务进入主流程后立即释放提交锁，让用户可以继续发起下一批
+      // 所有任务已提交（无论成败），立即释放提交锁，让用户可以继续发起下一批
       releaseSubmission();
+
+      // 阶段 2：并行轮询所有任务直到各自完成，独立更新对应灶台
+      const settledResults = await Promise.allSettled(
+        submitResults.map(async (result, index) => {
+          if (result.status === 'rejected') {
+            throw result.reason;
+          }
+          const { job } = result.value;
+          const slotId = batchGenerationIds[index];
+          const jobStartedAt = Date.now();
+          const image = job.status === 'succeeded' && job.image
+            ? job.image
+            : await waitForGenerationJob(job.id, 0, 1, jobStartedAt, (_, visual) => {
+                // 单灶台（total=1）：visual 即为该张图片的真实进度
+                updateGenerationSlot(slotId, 0, visual, []);
+              });
+          const displayImage = toDisplayImage(image);
+          updateGenerationSlot(slotId, 1, 100, [displayImage]);
+          return { index, displayImage };
+        }),
+      );
 
       // 按 index 顺序收集成功结果，错误信息一并汇总
       const successList: { index: number; displayImage: DisplayImage }[] = [];
       const failureMessages: string[] = [];
-      settledResults.forEach((result) => {
+      settledResults.forEach((result, index) => {
         if (result.status === 'fulfilled') {
           successList.push(result.value);
         } else {
           failureMessages.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+          // 失败的灶台也标记为结束，避免一直转圈
+          updateGenerationSlot(batchGenerationIds[index], 1, 100, []);
         }
       });
       successList.sort((left, right) => left.index - right.index);
 
       successList.forEach(({ displayImage }) => {
         generatedImages.push(displayImage);
-        successCountRef.current += 1;
-        updateGeneration(
-          successCountRef.current,
-          Math.min(96, (successCountRef.current / generationBatchCount) * 100),
-        );
       });
 
       // 全部失败时抛首个错误，沿用 catch 块的错误处理
@@ -6649,7 +6657,7 @@ export default function App() {
       setGenerationError(noticeMessage);
     } finally {
       releaseSubmission();
-      setActiveImageGenerations((current) => current.filter((item) => item.id !== generationId));
+      setActiveImageGenerations((current) => current.filter((item) => !batchGenerationIds.includes(item.id)));
     }
   }
 
@@ -7056,10 +7064,13 @@ export default function App() {
   // 这样每个窗口只占用自己的灶台数量，不会被其他窗口的生成挤掉；删除后也不会因历史回填而"没反应"。
   const stageSourceCards = (currentImage ? [currentImage, ...historyQueue] : historyQueue)
     .filter((item, index, array) => index === array.findIndex((candidate) => candidate.imageUrl === item.imageUrl));
-  const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => [
-    ...generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null })),
-    { image: null, generation },
-  ]);
+  const activeGenerationStageEntries = activeImageGenerations.flatMap((generation) => {
+    const imageEntries = generation.images.map((image) => ({ image, generation: null as ActiveImageGeneration | null }));
+    // 已完成（completed >= total）的灶台只展示图片，不再保留"进行中"占位；
+    // 未完成的灶台保留一个进行中占位来显示进度。
+    const isComplete = generation.progress.completed >= generation.progress.total;
+    return isComplete ? imageEntries : [...imageEntries, { image: null, generation }];
+  });
   const activeGenerationStageIndexes = activeGenerationStageEntries.flatMap((entry, index) => entry.generation ? [index] : []);
   const activeGenerationStageIndex = activeGenerationStageIndexes[0] ?? (pendingGenerationSlot ? inFlightGeneratedImages.length : -1);
   const visibleStageCards = activeImageGenerations.length > 0
