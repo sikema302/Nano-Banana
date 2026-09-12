@@ -213,7 +213,10 @@ log "使用发布包中的 dist，跳过服务器端重复构建"
 
 # ─── 验证 R2 存储 ─────────────────────────────────────────────────────
 log "验证 R2 存储连接..."
-timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify -- --allow-unavailable || true
+	if ! timeout --signal=TERM --kill-after=10s 90s npm run storage:r2:verify; then
+	  log "R2 verify failed; aborting deployment without local image fallback"
+	  finish 1
+	fi
 
 # ─── 同步 Nginx 配置 ───────────────────────────────────────────────────
 NGINX_CONF="$PROJECT/deploy/nginx-photo-app.conf"

@@ -28,12 +28,6 @@ if (scriptPath === fileURLToPath(import.meta.url)) {
   const storage = createR2ObjectStorage();
   if (!storage) throw new Error('R2 is not configured');
 
-  const available = await verifyR2Storage(storage, process.argv.includes('--allow-unavailable'));
-  if (available) {
-    console.log(`R2 verification succeeded for bucket ${storage.config.bucketName}.`);
-  } else {
-    console.warn(
-      `R2 verification is temporarily unavailable for bucket ${storage.config.bucketName}; deployment will continue with local image fallback.`,
-    );
-  }
+  await verifyR2Storage(storage);
+  console.log(`R2 verification succeeded for bucket ${storage.config.bucketName}.`);
 }

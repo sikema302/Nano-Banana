@@ -69,6 +69,7 @@ Current behavior:
 
 - `http://pixory.top` redirects to `https://pixory.top`
 - `https://pixory.top` and `https://www.pixory.top` proxy to `127.0.0.1:3001`
+- API responses are not cached and allow long-running generation requests
 
 Useful commands:
 
@@ -89,6 +90,11 @@ Important production variables:
 DATABASE_PROVIDER=sqlite
 SUPABASE_URL=https://cpjsjdvbkspkopakmlnv.supabase.co
 CORS_ORIGIN=http://23.141.172.73,http://pixory.top,http://www.pixory.top,https://pixory.top,https://www.pixory.top
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_ACCESS_KEY_ID=<r2-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+R2_BUCKET_NAME=<generated-image-bucket>
+R2_PUBLIC_BASE_URL=https://<public-r2-domain>
 ```
 
 Server-only secrets should remain only on the server:
@@ -102,6 +108,14 @@ Server-only secrets should remain only on the server:
 - `BACKUP_ENCRYPTION_KEY`
 
 The active database is `/var/www/nano-banana/data/app.sqlite`. Encrypted daily snapshots are written to `data/sqlite-backups`; keep the `data` directory on persistent storage and include it in host-level backups.
+
+R2 is the primary generated-image store. The server downloads and validates the
+provider result, uploads the original to R2, verifies its object size, and then
+downloads the public R2 URL before reporting success. Thumbnail upload is also
+verified and the frontend falls back to the original if a thumbnail is
+temporarily unavailable. If the original upload, verification, or public read
+fails, the generation is marked failed and its credits are refunded. The
+temporary provider URL is never returned to the user.
 
 Visionary key routing:
 
@@ -206,6 +220,17 @@ Expected response:
 {"ok":true,"userStorage":"SQLite","databaseProvider":"sqlite","imageStorageProvider":"r2"}
 ```
 
+R2 checks:
+
+```bash
+npm run storage:r2:verify
+curl -I https://<public-r2-domain>/generated/<existing-file>
+```
+
+The verification command must complete successfully. A newly completed
+generation should return an R2 URL, and that URL must return `200` with an image
+`Content-Type` after PM2 restarts.
+
 ## Common issues
 
 ### Domain resolves but HTTPS fails
@@ -228,6 +253,22 @@ Expected response:
 ```bash
 pm2 restart nano-banana --update-env
 ```
+
+### Generation succeeds but the image does not load
+
+- Confirm `/api/health` reports `imageStorageProvider: "r2"`.
+- Run `npm run storage:r2:verify` on Rainyun to test write, `HEAD`, and delete access.
+- Confirm the returned URL uses the configured `R2_PUBLIC_BASE_URL`.
+- Run `curl -I` from Rainyun and from an affected client network against the exact returned URL.
+- Check the R2 custom-domain DNS, certificate, public access, and CORS settings.
+
+R2 delivery still uses Cloudflare's network. Domestic clients can therefore
+still see latency or connection failures caused by their route to Cloudflare.
+The application retries provider downloads and verifies R2 persistence, so
+those client-side delivery failures no longer turn a temporary provider URL
+into a successful charged result. Removing Cloudflare from the image delivery
+path would require a different public origin or an origin proxy; keeping R2
+cannot guarantee that every domestic route to Cloudflare is stable.
 
 ## PM2 commands
 

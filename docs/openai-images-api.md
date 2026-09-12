@@ -45,13 +45,10 @@ The response follows the OpenAI Images shape:
 Set `response_format` to `b64_json` to receive Base64 image data. `n` currently
 must be `1`.
 
-Public API output images are not copied into PIXORY local storage or R2. The API
-returns an upstream HTTPS result URL directly when one is available. Provider
-results that exist only as inline image data are returned from a bounded,
-short-lived memory cache and should be downloaded promptly. Generation metadata,
-status, duration, and billing remain in admin history, with an empty image path.
-If an inline asynchronous result expires before it is fetched, its task remains
-in `succeeded` state with an empty `results` array and `resultExpired: true`.
+Public API output images are copied into Cloudflare R2 before the
+request is reported as successful. The API returns only a durable R2
+image URL. If copying or verification fails, the task fails and its reserved
+credits are refunded instead of returning a temporary upstream URL.
 
 User-facing generation failures are intentionally provider-neutral. They are
 reported as a sensitive-prompt correction, a specific reference-image problem,

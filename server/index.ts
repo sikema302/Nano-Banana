@@ -32,6 +32,7 @@ import {
   downloadGeneratedImage,
   generatedImageDownloadError,
   isValidImageBuffer,
+  verifyPublicGeneratedImage,
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
@@ -4287,12 +4288,13 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
 
 async function refundUserCreditsWithRetry(userId: string, debit: CreditDebit) {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const delaysMs = [0, 1_000, 3_000, 8_000, 15_000];
+  for (let attempt = 0; attempt < delaysMs.length; attempt += 1) {
     try {
+      if (delaysMs[attempt] > 0) await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
       return await refundUserCredits(userId, debit);
     } catch (error) {
       lastError = error;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Credit refund failed');
@@ -5794,46 +5796,35 @@ async function createGeneratedThumbnail(buffer: Buffer, fileName: string) {
   return `/uploads/thumbnails/${thumbnailName}`;
 }
 
-async function writeGeneratedImage(buffer: Buffer, extension: string) {
+// Upload verified bytes to R2, then read the public URL before reporting success.
+async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
+  if (!R2_STORAGE) throw new Error('Image storage is not configured');
   const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
-  const target = path.join(GENERATED_DIR, fileName);
-  await fs.writeFile(target, buffer);
-  let thumbnailPath = '';
+  let thumbnailBuffer: Buffer | null = null;
   try {
-    thumbnailPath = await createGeneratedThumbnail(buffer, fileName);
+    thumbnailBuffer = await sharp(buffer, { failOn: 'none', limitInputPixels: 100_000_000 })
+      .rotate()
+      .resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 60, effort: 4 })
+      .toBuffer();
   } catch (error) {
-    console.error(`[thumbnail] failed for ${fileName}`, error);
+    console.warn(`[thumbnail] failed for ${fileName}:`, error);
   }
 
-  const localImagePath = `/uploads/generated/${fileName}`;
-  if (!R2_STORAGE) return localImagePath;
-
-  try {
-    const thumbnailFile = thumbnailPath
-      ? path.join(THUMBNAILS_DIR, path.basename(thumbnailPath))
-      : '';
-    const thumbnailBuffer = thumbnailFile ? await fs.readFile(thumbnailFile).catch(() => null) : null;
-    const uploads = [R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer)];
-    if (thumbnailBuffer && thumbnailFile) {
-      uploads.push(
-        R2_STORAGE.putVerifiedObject(`thumbnails/${path.basename(thumbnailFile)}`, thumbnailBuffer, 'image/webp'),
-      );
+  const imageUrl = await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer);
+  await verifyPublicGeneratedImage(imageUrl, buffer.byteLength);
+  if (thumbnailBuffer) {
+    try {
+      await R2_STORAGE.putVerifiedObject(`thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`, thumbnailBuffer, 'image/webp');
+    } catch (error) {
+      console.warn(`[r2-upload] thumbnail upload failed for ${fileName}:`, error);
     }
-
-    const [publicImageUrl] = await Promise.all(uploads);
-    await Promise.all([
-      fs.unlink(target).catch(() => undefined),
-      thumbnailFile && thumbnailBuffer ? fs.unlink(thumbnailFile).catch(() => undefined) : Promise.resolve(),
-    ]);
-    return publicImageUrl;
-  } catch (error) {
-    console.error(`[r2-upload] failed for ${fileName}; keeping local fallback`, error);
-    return localImagePath;
   }
+  return imageUrl;
 }
 
 async function backfillGeneratedThumbnails() {
-  if (IS_VERCEL) return;
+  if (IS_VERCEL || R2_STORAGE) return;
   const entries = await fs.readdir(GENERATED_DIR, { withFileTypes: true }).catch(() => []);
   let created = 0;
 
@@ -5863,10 +5854,6 @@ async function persistGeneratedImage(source: string) {
     throw new Error('Generated image URL is empty');
   }
 
-  if (IS_VERCEL) {
-    return normalizedSource;
-  }
-
   if (normalizedSource.startsWith('data:image/')) {
     const mimeMatch = normalizedSource.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
     const mimeType = mimeMatch?.[1] || 'image/png';
@@ -5881,30 +5868,30 @@ async function persistGeneratedImage(source: string) {
       throw new Error(generatedImageDownloadError(buffer, '图像服务返回的结果不是有效图片'));
     }
 
-    return writeGeneratedImage(buffer, extension);
+    return writeGeneratedImageToR2(buffer, extension);
   }
 
   if (!/^https?:\/\//i.test(normalizedSource)) {
-    return normalizedSource;
+    throw new Error('Generated image source must be an HTTPS URL or image data');
   }
 
   const { buffer, contentType } = await downloadGeneratedImage(normalizedSource);
   const extension = contentType.startsWith('image/')
     ? fileExtensionFromMimeType(contentType.split(';')[0])
     : fileExtensionFromUrl(normalizedSource);
-  return writeGeneratedImage(buffer, extension);
+  return writeGeneratedImageToR2(buffer, extension);
 }
 
-// 公共 API（同步/异步）返回上游图片结果时，上游可能给出临时任务 URL（会过期），
-// 这里尽力转存到本地/R2 生成永久链接；转存失败时回退到原始地址，避免破坏现有行为。
+// Public API results are only successful after the image has been copied to
+// durable R2 storage. Temporary upstream URLs are never returned.
 async function persistPublicImageSource(source: string) {
   const normalizedSource = normalizeString(source);
   if (!normalizedSource) return '';
   try {
     return await persistGeneratedImage(normalizedSource);
   } catch (error) {
-    console.warn('[public-image] persist failed, keeping original source:', error);
-    return normalizedSource;
+    console.error('[public-image] persist failed; refusing to return a temporary upstream URL:', error);
+    throw error;
   }
 }
 
@@ -6272,6 +6259,12 @@ async function start() {
     await ensureRuntimeDirectories();
   }
 
+  if (!R2_STORAGE) {
+    throw new Error(
+      'R2 image storage is required. Configure R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, and R2_PUBLIC_BASE_URL before starting the server.',
+    );
+  }
+
   if (USE_SUPABASE) {
     if (IS_VERCEL) {
       // Vercel Serverless 鐜锛氬垵濮嬪寲澶辫触鏃跺欢杩熷埌棣栦釜璇锋眰鍐嶉噸璇?
@@ -6506,6 +6499,26 @@ async function start() {
     res.status(503).json({ error: 'Database migration is in progress. Please retry shortly.' });
   });
 
+  // Job state, balances, and generation history change on every request. These
+  // headers also prevent Cloudflare from replaying an older polling response.
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/v1')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('Pragma', 'no-cache');
+    }
+    next();
+  });
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/v1')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('Pragma', 'no-cache');
+    }
+    next();
+  });
+
   app.use((req, res, next) => {
     const rawHost = normalizeString(req.headers.host);
     const hostname = rawHost.replace(/:\d+$/, '');
@@ -6556,7 +6569,6 @@ async function start() {
 
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
-    app.use('/uploads', express.static(UPLOADS_DIR));
     if (R2_STORAGE) {
       app.get(/^\/uploads\/(?:generated|thumbnails)\/[^/]+$/, (req, res, next) => {
         const key = legacyAssetObjectKey(req.path);
@@ -6567,6 +6579,7 @@ async function start() {
         res.redirect(302, R2_STORAGE.publicUrl(key));
       });
     }
+    app.use('/uploads', express.static(UPLOADS_DIR));
   }
 
   app.get('/api/health', (_req, res) => {
@@ -6574,7 +6587,7 @@ async function start() {
       ok: true,
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
-      imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
+      imageStorageProvider: 'r2',
       loadControl: generationLoadControlPayload(),
     });
   });
@@ -6592,7 +6605,7 @@ async function start() {
       res.json({
         ok: true,
         databaseProvider: DATABASE_PROVIDER,
-        imageStorageProvider: R2_STORAGE ? 'r2' : 'local',
+        imageStorageProvider: 'r2',
         loadControl: generationLoadControlPayload(),
       });
     } catch (error) {
@@ -8380,6 +8393,7 @@ async function start() {
           'X-Pixory-Generation-Job': job.id,
         },
         body: JSON.stringify(job.requestBody),
+        signal: AbortSignal.timeout(15 * 60_000),
       });
 
       const responseText = await response.text().catch(() => '');
@@ -11894,7 +11908,7 @@ async function start() {
 
   const httpServer = app.listen(port, host, () => {
     console.log(`Visionary server listening on http://${host}:${port}`);
-    console.log(`[image-storage] provider=${R2_STORAGE ? `r2 bucket=${R2_STORAGE.config.bucketName}` : 'local'}`);
+    console.log(`[image-storage] provider=r2 bucket=${R2_STORAGE!.config.bucketName}`);
     if (typeof process.send === 'function') {
       process.send('ready');
     }
@@ -11908,7 +11922,7 @@ async function start() {
         void runImageRetentionCleanup('interval');
       }, IMAGE_CLEANUP_INTERVAL_MS);
     }
-    setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
+    if (!R2_STORAGE) setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   const shutdown = async () => {
     // 退出前落盘：先等在途 flush 完成，再经 saveChain 做最后一次落盘（串行链保证不撞车）。

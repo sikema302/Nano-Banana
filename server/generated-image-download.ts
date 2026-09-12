@@ -46,9 +46,23 @@ function shouldRetry(message: string) {
   return normalized.includes('归档') || normalized.includes('稍后重试') || normalized.includes('archiv');
 }
 
+function shouldRetryStatus(status: number) {
+  return status === 404 || status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function networkErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback;
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (!cause || typeof cause !== 'object') return error.message || fallback;
+  const causeRecord = cause as { code?: unknown; message?: unknown };
+  const detail = [causeRecord.code, causeRecord.message].filter(Boolean).join(': ');
+  return detail && !error.message.includes(detail) ? `${error.message} (${detail})` : error.message;
+}
+
 export async function downloadGeneratedImage(
   sourceUrl: string,
   retryDelaysMs = [0, 2_000, 4_000, 8_000, 12_000, 18_000, 25_000],
+  timeoutMs = 120_000,
 ) {
   let lastError = 'Download generated image failed';
 
@@ -62,25 +76,50 @@ export async function downloadGeneratedImage(
           'Cache-Control': 'no-cache',
           Pragma: 'no-cache',
         },
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
-      lastError = error instanceof Error ? error.message : 'Download generated image failed';
+      lastError = networkErrorMessage(error, 'Download generated image failed');
       if (attempt === retryDelaysMs.length - 1) throw new Error(lastError);
       continue;
     }
 
     const contentType = String(response.headers.get('content-type') || '').trim().toLowerCase();
-    const buffer = Buffer.from(await response.arrayBuffer());
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      lastError = networkErrorMessage(error, 'Download generated image body failed');
+      if (attempt === retryDelaysMs.length - 1) throw new Error(lastError);
+      continue;
+    }
     if (response.ok && isValidImageBuffer(buffer, contentType)) return { buffer, contentType };
 
     lastError = generatedImageDownloadError(
       buffer,
       response.ok ? '图像服务返回的结果不是有效图片' : `Download generated image failed (${response.status})`,
     );
-    if (!shouldRetry(lastError) || attempt === retryDelaysMs.length - 1) throw new Error(lastError);
+    if ((!shouldRetry(lastError) && !shouldRetryStatus(response.status)) || attempt === retryDelaysMs.length - 1) {
+      throw new Error(lastError);
+    }
 
     console.warn(`[generated-image] result is not ready, retry ${attempt + 2}/${retryDelaysMs.length}`);
   }
 
   throw new Error(lastError);
+}
+
+export async function verifyPublicGeneratedImage(
+  sourceUrl: string,
+  expectedBytes: number,
+  retryDelaysMs = [0, 1_000, 3_000],
+  timeoutMs = 30_000,
+) {
+  const result = await downloadGeneratedImage(sourceUrl, retryDelaysMs, timeoutMs);
+  if (result.buffer.byteLength !== expectedBytes) {
+    throw new Error(
+      `Public generated image size mismatch: expected ${expectedBytes}, received ${result.buffer.byteLength}`,
+    );
+  }
+  return result;
 }
