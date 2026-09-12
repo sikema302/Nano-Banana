@@ -6552,9 +6552,9 @@ export default function App() {
         setProviderRouting(latestRouting);
       }
 
-      for (let index = 0; index < generationBatchCount; index += 1) {
-        updateGeneration(index, Math.min(88, (index / generationBatchCount) * 100 + 8));
-
+      // 并行提交所有任务：避免串行等待让用户感到"一张一张"生成
+      const successCountRef = { current: 0 };
+      const runBatchIndex = async (index: number): Promise<{ index: number; displayImage: DisplayImage }> => {
         const jobStartedAt = Date.now();
         const { job } = await startGenerateImageJob({
           submissionId: `${generationId}:${index}`,
@@ -6566,13 +6566,56 @@ export default function App() {
           ...getAiEnhancementRequestFlags(generationIsNanoBananaPro ? generationOptimizeChineseText : false),
           reference_images: generationReferences,
         });
-        if (index === 0) releaseSubmission();
         const image = job.status === 'succeeded' && job.image
           ? job.image
-          : await waitForGenerationJob(job.id, index, generationBatchCount, jobStartedAt, updateGeneration);
+          : await waitForGenerationJob(job.id, index, generationBatchCount, jobStartedAt, () => {
+              // 并行场景：忽略 waitForGenerationJob 基于串行假设计算的 visual，
+              // 改用"已成功张数 + 1 张活跃槽位 50%"作为视觉基线，进度条更平滑。
+              const completed = successCountRef.current;
+              const baselineVisual = Math.min(99, ((completed + 0.5) / generationBatchCount) * 100);
+              setActiveImageGenerations((current) => current.map((item) => item.id === generationId
+                ? { ...item, progress: { ...item.progress, completed, visual: Math.max(item.progress.visual, baselineVisual) } }
+                : item));
+            });
+        return { index, displayImage: toDisplayImage(image) };
+      };
 
-        generatedImages.push(toDisplayImage(image));
-        updateGeneration(index + 1, Math.min(96, ((index + 1) / generationBatchCount) * 100));
+      const settledResults = await Promise.allSettled(
+        Array.from({ length: generationBatchCount }, (_, index) => runBatchIndex(index)),
+      );
+
+      // 所有任务进入主流程后立即释放提交锁，让用户可以继续发起下一批
+      releaseSubmission();
+
+      // 按 index 顺序收集成功结果，错误信息一并汇总
+      const successList: { index: number; displayImage: DisplayImage }[] = [];
+      const failureMessages: string[] = [];
+      settledResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          successList.push(result.value);
+        } else {
+          failureMessages.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
+      });
+      successList.sort((left, right) => left.index - right.index);
+
+      successList.forEach(({ displayImage }) => {
+        generatedImages.push(displayImage);
+        successCountRef.current += 1;
+        updateGeneration(
+          successCountRef.current,
+          Math.min(96, (successCountRef.current / generationBatchCount) * 100),
+        );
+      });
+
+      // 全部失败时抛首个错误，沿用 catch 块的错误处理
+      if (generatedImages.length === 0 && failureMessages.length > 0) {
+        throw new Error(failureMessages[0]);
+      }
+
+      // 部分失败的轻提示：成功的图片仍会进入结果区
+      if (failureMessages.length > 0) {
+        setGenerationError(`其中 ${failureMessages.length} 张失败：${failureMessages[0]}`);
       }
 
       commitGeneratedImages(generatedImages);
@@ -6581,7 +6624,9 @@ export default function App() {
         setEditLocks(new Set(['person', 'composition']));
       }
       if (generationBatchCount > 1) {
-        setNotice(`\u5df2\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247`);
+        const baseNotice = `\u5df2\u751f\u6210 ${generatedImages.length} \u5f20\u56fe\u7247`;
+        const failureNote = failureMessages.length > 0 ? `\uff08${failureMessages.length} \u5f20\u5931\u8d25\uff09` : '';
+        setNotice(`${baseNotice}${failureNote}`);
       }
 
       void fetchMe().then(setUser).catch(() => undefined);
