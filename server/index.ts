@@ -9380,7 +9380,7 @@ async function start() {
         status: 'succeeded',
         image: publicImage,
         creditsCharged: generationCreditsCharged,
-        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsUsed: generationCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
         creditsRemaining: chargedCreditsRemaining,
       });
       res.json({ image: publicImage });
@@ -9424,13 +9424,13 @@ async function start() {
         status: 'failed',
         error: publicError,
         creditsCharged: generationCreditsCharged,
-        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsUsed: generationCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
         creditsRemaining: chargedCreditsRemaining,
       });
       res.status(status).json({
         error: publicError,
         creditsCharged: generationCreditsCharged,
-        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsUsed: generationCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
         creditsRemaining: chargedCreditsRemaining,
       });
     }
