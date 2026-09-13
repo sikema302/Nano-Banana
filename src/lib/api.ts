@@ -73,6 +73,9 @@ export interface GenerationJobInfo {
   completedAt?: string;
   image?: GeneratedImagePayload;
   error?: string;
+  creditsCharged?: boolean;
+  creditsUsed?: number;
+  creditsRemaining?: number;
   queuePosition?: number;
   resourcePaused?: boolean;
 }

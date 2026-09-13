@@ -1152,7 +1152,7 @@ function SidePanel({
   const batchLoading = actionLoading && !hasSelection;
 
   return (
-    <section className="space-y-3">
+    <section className="flex min-h-0 h-full flex-col gap-2">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className="rounded-md border border-white/8 bg-white/[0.03] p-1.5 text-zinc-300">{icon}</span>
@@ -1175,16 +1175,16 @@ function SidePanel({
         ) : null}
       </div>
 
-      <div className="card min-h-[138px] p-3">
+      <div className="card min-h-0 flex-1 overflow-y-auto p-2">
         {items.length > 0 ? (
-          <div className="custom-scrollbar flex max-w-full gap-3 overflow-x-auto overflow-y-hidden pb-1">
+          <div className="custom-scrollbar grid min-w-0 grid-cols-1 gap-2 overflow-y-auto pb-1 xl:grid-cols-2">
             {items.map((item) => {
               const isSelected = selectedIds.has(item.id);
               return (
-                <article key={item.id} className="card relative w-36 shrink-0 p-2.5">
+                <article key={item.id} className="card relative min-w-0 p-2">
                   {/* 头部：图片固定不跟随下方横滑 */}
                   <div className="relative">
-                    <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                    <img alt={item.prompt} className="h-16 w-full rounded-lg object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
                     {loggedIn && onBatchDownload ? (
                       <button
                         type="button"
@@ -1209,14 +1209,14 @@ function SidePanel({
                   {/* 下半部分：标题 / 时间 / 操作按钮，可独立横滑查看完整内容 */}
                   <div className="mt-2 overflow-x-auto pb-0.5">
                     <div className="inline-flex min-w-full flex-col gap-1.5">
-                      <p className="whitespace-nowrap text-sm font-medium leading-5 text-zinc-100">{item.prompt}</p>
-                      <p className="whitespace-nowrap text-xs leading-5 text-zinc-500">{formatTime(item.createdAt)}</p>
+                      <p className="truncate text-xs font-medium leading-4 text-zinc-100">{item.prompt}</p>
+                      <p className="whitespace-nowrap text-[10px] leading-4 text-zinc-500">{formatTime(item.createdAt)}</p>
 
                       {loggedIn ? (
                         <div className="flex shrink-0 gap-2">
                           {onMove ? (
                             <button
-                              className="btn-secondary min-h-0 px-2 py-1 text-xs"
+                              className="btn-secondary min-h-0 px-1.5 py-1 text-[10px]"
                               type="button"
                               onClick={() => onMove(item)}
                             >
@@ -1225,7 +1225,7 @@ function SidePanel({
                           ) : null}
                           {onDelete ? (
                             <button
-                              className="btn-ghost min-h-0 px-2 py-1 text-xs"
+                              className="btn-ghost min-h-0 px-1.5 py-1 text-[10px]"
                               type="button"
                               onClick={() => onDelete(item)}
                             >
@@ -6611,6 +6611,12 @@ export default function App() {
         return job.image;
       }
       if (job.status === 'failed') {
+        const failure = Object.assign(new Error(job.error || 'Generation failed'), {
+          creditsCharged: job.creditsCharged,
+          creditsUsed: job.creditsUsed,
+          creditsRemaining: job.creditsRemaining,
+        });
+        throw failure;
         throw new Error(job.error || '生成失败');
       }
       if (Date.now() > deadlineMs) {
@@ -7479,7 +7485,7 @@ export default function App() {
       </section>
 
       <aside className="h-full overflow-hidden p-4">
-        <div className="grid h-full content-start gap-5">
+        <div className="grid h-full min-h-0 content-start grid-rows-3 gap-3">
           <SidePanel
             title="收藏区"
             count={sideFavoriteItems.length}
@@ -8250,7 +8256,7 @@ export default function App() {
                 }}
               />
             ) : (
-            <div className="grid content-start gap-5 lg:h-full">
+            <div className="grid h-full min-h-0 content-start grid-rows-3 gap-3">
             <SidePanel
               title="收藏区"
               count={sideFavoriteItems.length}

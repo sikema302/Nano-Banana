@@ -1532,21 +1532,27 @@ async function withRecordingRetry(task: () => Promise<void>) {
 }
 
 // 上游出图成功后诊断记录已写入 success；后续环节失败时同步修正为 failed，保持与 generations 表口径一致。
-async function markGenerationRequestFailed(requestId: string | undefined, message: string) {
+async function markGenerationRequestFailed(
+  requestId: string | undefined,
+  message: string,
+  options: { preserveCredits?: boolean } = {},
+) {
   if (!requestId) return;
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
-    await db.markGenerationRequestFailed(requestId, message);
+    await db.markGenerationRequestFailed(requestId, message, options);
     return;
   }
   await withWriteDb((db) => {
     ensureSchema(db);
-    db.run(
-      `UPDATE generation_requests
-       SET result_status = 'failed', result_message = ?, error_detail = ?, credits_used = 0
-       WHERE id = ?`,
-      [message, message, requestId],
-    );
+    const sql = options.preserveCredits
+      ? `UPDATE generation_requests
+         SET result_status = 'failed', result_message = ?, error_detail = ?
+         WHERE id = ?`
+      : `UPDATE generation_requests
+         SET result_status = 'failed', result_message = ?, error_detail = ?, credits_used = 0
+         WHERE id = ?`;
+    db.run(sql, [message, message, requestId]);
   });
 }
 
@@ -5865,8 +5871,23 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
     return `/uploads/generated/${fileName}`;
   }
 
-  const imageUrl = await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer);
-  await verifyPublicGeneratedImage(imageUrl, buffer.byteLength);
+  let imageUrl = '';
+  let lastR2Error: unknown;
+  const r2RetryDelaysMs = [0, 2_000, 5_000];
+  for (let attempt = 0; attempt < r2RetryDelaysMs.length; attempt += 1) {
+    if (r2RetryDelaysMs[attempt] > 0) {
+      await new Promise((resolve) => setTimeout(resolve, r2RetryDelaysMs[attempt]));
+    }
+    try {
+      imageUrl = await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer);
+      await verifyPublicGeneratedImage(imageUrl, buffer.byteLength);
+      break;
+    } catch (error) {
+      lastR2Error = error;
+      console.warn(`[r2-upload] generated image attempt ${attempt + 1}/${r2RetryDelaysMs.length} failed:`, error);
+      if (attempt === r2RetryDelaysMs.length - 1) throw lastR2Error;
+    }
+  }
   if (thumbnailBuffer) {
     try {
       await R2_STORAGE.putVerifiedObject(`thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`, thumbnailBuffer, 'image/webp');
@@ -8374,6 +8395,9 @@ async function start() {
     completedAt?: string;
     image?: GeneratedImagePayload;
     error?: string;
+    creditsCharged?: boolean;
+    creditsUsed?: number;
+    creditsRemaining?: number;
   };
 
   const generationJobs = new Map<string, AuthenticatedGenerationJob>();
@@ -8415,6 +8439,9 @@ async function start() {
       completedAt: job.completedAt,
       image: job.image,
       error: job.error,
+      creditsCharged: job.creditsCharged,
+      creditsUsed: job.creditsUsed,
+      creditsRemaining: job.creditsRemaining,
       queuePosition: job.status === 'queued' ? generationWorkQueue.position(job.id) : 0,
       resourcePaused: job.status === 'queued' && generationResourceMonitor.isPaused(),
     };
@@ -8435,7 +8462,14 @@ async function start() {
   // 从而避免「后台已成功并扣积分、前端却显示失败」的不一致。
   function setGenerationJobTerminal(
     jobId: string,
-    patch: { status: 'succeeded' | 'failed'; image?: GeneratedImagePayload; error?: string },
+    patch: {
+      status: 'succeeded' | 'failed';
+      image?: GeneratedImagePayload;
+      error?: string;
+      creditsCharged?: boolean;
+      creditsUsed?: number;
+      creditsRemaining?: number;
+    },
   ) {
     const current = generationJobs.get(jobId);
     if (!current) return;
@@ -9069,6 +9103,9 @@ async function start() {
     }
 
     let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | null = null;
+    let upstreamGenerationSucceeded = false;
+    let generationCreditsCharged = false;
+    let chargedCreditsRemaining: number | undefined;
     // 提升到外层 try 之外：上游一旦出图成功就会立刻写入 success 诊断记录（见 onAttempt），
     // 后续任何环节（转存/扣款/写历史）失败时，catch 里需要访问 successfulRequestId 同步修正该记录。
     let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
@@ -9158,8 +9195,22 @@ async function start() {
           images: uniqueModelReferenceImages,
           requestContext,
         });
+        upstreamGenerationSucceeded = true;
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
+        // Only settle the reservation after the image is durably stored in R2.
+        // If storage fails, the reservation is released and the user is not charged.
+        if (reservedGenerationCredit) {
+          const charged = await debitUserCredits(
+            req.authUser!.userId,
+            reservedGenerationCredit.bucket,
+            reservedGenerationCredit.amount,
+          );
+          generationCreditsCharged = true;
+          chargedCreditsRemaining = charged.remainingCredits;
+          releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
+          reservedGenerationCredit = null;
+        }
         try {
           await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
         } catch (error) {
@@ -9172,16 +9223,6 @@ async function start() {
 
       // 成功才扣款：生成成功后才真正扣除。debitUserCredits 原子扣款（不足会先抛错、不动任何账），
       // 扣款成功后再释放预留；后续若只是记账失败，也不影响已经发生的扣款与返图（best-effort recording）。
-      if (reservedGenerationCredit) {
-        await debitUserCredits(
-          req.authUser!.userId,
-          reservedGenerationCredit.bucket,
-          reservedGenerationCredit.amount,
-        );
-        releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
-        reservedGenerationCredit = null;
-      }
-
       const payload: GeneratedImagePayload = {
         prompt,
         modelName,
@@ -9329,39 +9370,19 @@ async function start() {
         }
       }
       } catch (recordingError) {
-        // 扣款与历史记录必须同进退：写历史/计数失败即退回本次积分并判定失败，绝不留下「扣了分却没有记录」的脏账。
-        // 同时把 generation_requests 里的成功记录标记为失败，保持两张表状态一致。
-        console.warn('[generate] credit sync or history recording failed (charge already applied):', recordingError);
-        let refundSucceeded = false;
-        try {
-          await refundUserCreditsWithRetry(req.authUser!.userId, { [creditBucket]: creditsUsed } as CreditDebit);
-          refundSucceeded = true;
-          creditAudit('refund', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed,
-            { modelId, imageSize, reason: `history-recording-failure: ${String(recordingError instanceof Error ? recordingError.message : recordingError)}` });
-          releaseCreditReservation(req.authUser!.userId, creditBucket, creditsUsed);
-        } catch (refundError) {
-          console.error('[generate] refund after history recording failure failed:', refundError);
-        }
-        // 同步修正 generation_requests 中已记录的成功状态，避免后台显示成功但用户实际失败。
-        const recordedRequestId = requestContext?.successfulRequestId;
-        if (recordedRequestId) {
-          try {
-            await markGenerationRequestFailed(recordedRequestId,
-              '历史记录写入失败，已退款');
-          } catch (markError) {
-            console.warn('[generate] failed to mark request as failed:', markError);
-          }
-        }
-        const historyFailureMessage = refundSucceeded
-          ? '记录生成结果失败，本次积分已退回，请重试'
-          : '记录生成结果失败，积分退款暂时未完成，请联系客服处理';
-        setGenerationJobTerminal(queuedJobId, { status: 'failed', error: historyFailureMessage });
-        res.status(500).json({ error: historyFailureMessage });
-        return;
+        // The image is already persisted and the user has already been charged.
+        // Keep the delivered result; history/stat writes are retried separately
+        // and must never turn a paid image into a free upstream request.
+        console.error('[generate] history recording failed after charge:', recordingError);
       }
-
       const publicImage = toPublicGeneratedImagePayload(req, payload);
-      setGenerationJobTerminal(queuedJobId, { status: 'succeeded', image: publicImage });
+      setGenerationJobTerminal(queuedJobId, {
+        status: 'succeeded',
+        image: publicImage,
+        creditsCharged: generationCreditsCharged,
+        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
       res.json({ image: publicImage });
     } catch (error) {
       // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
@@ -9371,12 +9392,22 @@ async function start() {
         releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
         reservedGenerationCredit = null;
       }
-      // 上游已出图（generation_requests 已写入 success）但结果落地前失败，例如图片转存下载失败、扣款异常：
-      // 同步把该记录标记为失败，否则后台显示成功、用户历史却没有记录。
+      const chargedProcessingMessage =
+        '生成结果处理失败，已扣除积分；上游已生成，但图片保存到 R2 失败，请联系管理员处理';
+      const upstreamChargeUncertainMessage =
+        '上游已返回结果，但积分扣款状态暂时无法确认，请联系管理员核对';
       const orphanRequestId = requestContext?.successfulRequestId;
       if (orphanRequestId) {
         try {
-          await markGenerationRequestFailed(orphanRequestId, '生成结果处理失败，未扣取积分');
+          await markGenerationRequestFailed(
+            orphanRequestId,
+            generationCreditsCharged
+              ? chargedProcessingMessage
+              : upstreamGenerationSucceeded
+                ? upstreamChargeUncertainMessage
+                : '\u751f\u6210\u7ed3\u679c\u5904\u7406\u5931\u8d25\uff0c\u672c\u6b21\u672a\u6263\u53d6\u79ef\u5206',
+            { preserveCredits: generationCreditsCharged },
+          );
         } catch (markError) {
           console.warn('[generate] failed to mark orphaned request as failed:', markError);
         }
@@ -9384,8 +9415,24 @@ async function start() {
       console.error('[generate]', error);
       const rawMessage = error instanceof Error ? error.message : 'Generate failed';
       const status = getPublicApiErrorStatus(rawMessage);
-      setGenerationJobTerminal(queuedJobId, { status: 'failed', error: publicImageErrorMessage(rawMessage) });
-      res.status(status).json({ error: publicImageErrorMessage(rawMessage) });
+      const publicError = generationCreditsCharged
+        ? chargedProcessingMessage
+        : upstreamGenerationSucceeded
+          ? upstreamChargeUncertainMessage
+          : publicImageErrorMessage(rawMessage);
+      setGenerationJobTerminal(queuedJobId, {
+        status: 'failed',
+        error: publicError,
+        creditsCharged: generationCreditsCharged,
+        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
+      res.status(status).json({
+        error: publicError,
+        creditsCharged: generationCreditsCharged,
+        creditsUsed: generationCreditsCharged ? creditsUsed : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
     }
   });
 

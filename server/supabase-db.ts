@@ -1187,18 +1187,27 @@ export async function updateGenerationRequestImage(requestId: string, imagePath:
 
 // 上游出图成功后会先写入 success 记录；若后续环节（转存/扣款/写历史）失败，必须同步把该记录标记为失败，
 // 否则后台显示成功但用户侧没有历史记录。credits_used 归零与失败口径一致（未扣费或已退款）。
-export async function markGenerationRequestFailed(requestId: string, message: string): Promise<void> {
+export async function markGenerationRequestFailed(
+  requestId: string,
+  message: string,
+  options: { preserveCredits?: boolean } = {},
+): Promise<void> {
   if (!requestId) return;
+  const update = options.preserveCredits
+    ? { result_status: 'failed', result_message: message, error_detail: message }
+    : { result_status: 'failed', result_message: message, error_detail: message, credits_used: 0 };
   const { error } = await getSupabase()
     .from('generation_requests')
-    .update({ result_status: 'failed', result_message: message, error_detail: message, credits_used: 0 })
+    .update(update)
     .eq('id', requestId);
   if (!error) return;
   // 生产表未迁移 error_detail 列时降级更新，保证状态修正不被 schema 差异阻断。
   if (/column[^:]*error_detail/.test(error.message || '')) {
     const legacy = await getSupabase()
       .from('generation_requests')
-      .update({ result_status: 'failed', result_message: message, credits_used: 0 })
+      .update(options.preserveCredits
+        ? { result_status: 'failed', result_message: message }
+        : { result_status: 'failed', result_message: message, credits_used: 0 })
       .eq('id', requestId);
     if (!legacy.error) return;
     throw new Error(`Mark generation request failed failed: ${legacy.error.message}`);
