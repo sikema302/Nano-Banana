@@ -5161,6 +5161,33 @@ async function callMeasuredImageChannel(
   }
 }
 
+// GPT-image-2 与 GPT-image-2.5-* 同属 gpt-image 系列，共享 image2Routes 渠道分发。
+function isGptImage2Family(modelId: string) {
+  return modelId === 'gpt-image-2'
+    || modelId === 'GPT-image-2.5-Flare'
+    || modelId === 'GPT-image-2.5-Sunburst';
+}
+
+// 把 image2Routes 里的渠道映射到 junliai 上游模型名。
+// GPT-image-2：junliai-economy → gpt-image-2（1K 标准），junliai-firefly → firefly-gpt-image-2（2K/4K）。
+// GPT-image-2.5-*：junliai-economy → gpt-image-2.5-{flare|sunburst}（仅 1K），
+//                 junliai-firefly → firefly-gpt-image-2.5-{flare|sunburst}（仅 2K/4K）。
+function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSize: string) {
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    const variant = modelId === 'GPT-image-2.5-Flare' ? 'flare' : 'sunburst';
+    if (channelId === 'junliai-economy') {
+      return imageSize === '1K' ? `gpt-image-2.5-${variant}` : '';
+    }
+    if (channelId === 'junliai-firefly') {
+      return imageSize === '2K' || imageSize === '4K' ? `firefly-gpt-image-2.5-${variant}` : '';
+    }
+    return '';
+  }
+  if (channelId === 'junliai-economy') return JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL;
+  if (channelId === 'junliai-firefly') return JUNLIAI_MODEL;
+  return '';
+}
+
 async function callConfiguredImageChannel(
   input: ImageGenerationInput,
   channelId: string,
@@ -5250,8 +5277,8 @@ async function callConfiguredImageChannel(
     }
   }
 
-  if (input.modelId === 'gpt-image-2') {
-    if (channelId === 'schat-gpt-image-2') {
+  if (isGptImage2Family(input.modelId)) {
+    if (channelId === 'schat-gpt-image-2' && input.modelId === 'gpt-image-2') {
       return callMeasuredImageChannel(
         input,
         traceId,
@@ -5288,11 +5315,7 @@ async function callConfiguredImageChannel(
         }),
       );
     }
-    const upstreamModel = channelId === 'junliai-economy'
-      ? JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL
-      : channelId === 'junliai-firefly'
-        ? JUNLIAI_MODEL
-        : '';
+    const upstreamModel = resolveJunliaiUpstreamModel(channelId, input.modelId, input.imageSize);
     if (upstreamModel && imageProviderRouter) {
       return imageProviderRouter.generate({
         ...input,
@@ -7521,7 +7544,7 @@ async function start() {
         const imageSize = dedicatedPolicy
           ? dedicatedPolicy.imageSize
           : await normalizeRoutedImageSize(requestedImageSize, modelId);
-        const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+        const quality = isGptImage2Family(modelId) ? normalizeGptQuality(requestedQuality, imageSize) : '';
         const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
         creditsUsed = dedicatedPolicy
           ? dedicatedPolicy.credits
@@ -8149,7 +8172,7 @@ async function start() {
       const imageSize = dedicatedPolicy
         ? dedicatedPolicy.imageSize
         : await normalizeRoutedImageSize(requestedImageSize, modelId);
-      const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+      const quality = isGptImage2Family(modelId) ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       creditsUsed = dedicatedPolicy
         ? dedicatedPolicy.credits
@@ -8543,7 +8566,7 @@ async function start() {
     try {
       const modelId = normalizeModelId(normalizeString(req.body?.model));
       const imageSize = await normalizeRoutedImageSize(normalizeString(req.body?.imageSize), modelId);
-      const quality = modelId === 'gpt-image-2'
+      const quality = isGptImage2Family(modelId)
         ? normalizeGptQuality(normalizeString(req.body?.quality).toLowerCase(), imageSize)
         : '';
       const creditsUsed = getModelCredits(modelId, imageSize, quality)
@@ -9055,7 +9078,7 @@ async function start() {
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
       let imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);
-      const quality = modelId === 'gpt-image-2' ? normalizeGptQuality(requestedQuality, imageSize) : '';
+      const quality = isGptImage2Family(modelId) ? normalizeGptQuality(requestedQuality, imageSize) : '';
       const effectiveOptimizeChineseText = shouldEnhanceNanoBanana(modelId, imageSize, optimizeChineseText);
       const effectiveBillAiEnhancement = shouldEnhanceNanoBanana(modelId, imageSize, billAiEnhancement);
       let creditsUsed = getModelCredits(modelId, imageSize, quality)
