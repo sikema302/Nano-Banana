@@ -4,6 +4,7 @@ import {
   Bell,
   Bookmark,
   Clock3,
+  Check,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -352,6 +353,10 @@ function displayModelName(modelName: string) {
   const probe = value.toLowerCase();
   if (probe.includes('seedream')) return 'Seedream 4';
   if (probe.includes('grok')) return 'Grok Image';
+  // 必须先判 2.5（gpt-image-2.5 也包含 gpt-image 子串，否则会被下面的规则误判成 2）
+  if (probe.includes('gpt-image-2.5')) {
+    return probe.includes('sunburst') ? 'GPT-image-2.5 Sunburst' : 'GPT-image-2.5 Flare';
+  }
   if (probe.includes('gpt-image') || probe.includes('firefly')) return 'GPT-image-2';
   if (
     probe.includes('nano-banana') ||
@@ -726,9 +731,7 @@ function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana'
 }
 
 function getModelSuccessRate(modelId: string) {
-  if (modelId === 'gpt-image-2'
-    || modelId === 'GPT-image-2.5-Flare'
-    || modelId === 'GPT-image-2.5-Sunburst') return '99%成功率';
+  if (modelId === 'gpt-image-2') return '99%成功率';
   return '';
 }
 
@@ -1096,6 +1099,7 @@ function SidePanel({
   actionLoading,
   onMove,
   onDelete,
+  onBatchDownload,
   loggedIn,
 }: {
   title: string;
@@ -1108,8 +1112,45 @@ function SidePanel({
   actionLoading?: boolean;
   onMove?: (item: SavedImage) => void;
   onDelete?: (item: SavedImage) => void;
+  onBatchDownload?: (items: SavedImage[]) => void;
   loggedIn: boolean;
 }) {
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  // items 变化时清掉已不存在的选中项，避免误触已删除/已移走的图片
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (current.size === 0) return current;
+      const validIds = new Set(items.map((item) => item.id));
+      const next = new Set<number>();
+      current.forEach((id) => { if (validIds.has(id)) next.add(id); });
+      return next.size === current.size ? current : next;
+    });
+  }, [items]);
+
+  const toggleSelected = (id: number) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectedItems = items.filter((item) => selectedIds.has(item.id));
+  const hasSelection = selectedIds.size > 0;
+  const batchLabel = hasSelection
+    ? `下载 (${selectedIds.size})`
+    : (actionLabel ?? '');
+  const batchAction = () => {
+    if (hasSelection) {
+      onBatchDownload?.(selectedItems);
+      return;
+    }
+    onAction?.();
+  };
+  const batchLoading = actionLoading && !hasSelection;
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -1121,15 +1162,15 @@ function SidePanel({
           </div>
         </div>
 
-        {actionLabel && onAction ? (
+        {actionLabel && (onAction || onBatchDownload) ? (
           <button
             className="btn-secondary inline-flex min-h-0 items-center gap-1.5 px-3 py-1.5 text-xs disabled:cursor-wait disabled:opacity-60"
             type="button"
-            onClick={onAction}
-            disabled={actionLoading}
+            onClick={batchAction}
+            disabled={batchLoading}
           >
-            {actionLoading ? <LoaderCircle size={13} className="animate-spin" /> : null}
-            {actionLabel}
+            {batchLoading ? <LoaderCircle size={13} className="animate-spin" /> : null}
+            {batchLabel}
           </button>
         ) : null}
       </div>
@@ -1137,36 +1178,67 @@ function SidePanel({
       <div className="card min-h-[138px] p-3">
         {items.length > 0 ? (
           <div className="custom-scrollbar flex max-w-full gap-3 overflow-x-auto overflow-y-hidden pb-1">
-            {items.map((item) => (
-              <article key={item.id} className="card w-36 shrink-0 p-2.5">
-                <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
-                <p className="mt-2 text-xs leading-5 text-zinc-300">{item.prompt}</p>
-                <p className="mt-2 text-[11px] text-zinc-500">{formatTime(item.createdAt)}</p>
-
-                {loggedIn ? (
-                  <div className="mt-2 flex gap-2">
-                    {onMove ? (
+            {items.map((item) => {
+              const isSelected = selectedIds.has(item.id);
+              return (
+                <article key={item.id} className="card relative w-36 shrink-0 p-2.5">
+                  {/* 头部：图片固定不跟随下方横滑 */}
+                  <div className="relative">
+                    <img alt={item.prompt} className="h-20 w-full rounded-xl object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
+                    {loggedIn && onBatchDownload ? (
                       <button
-                        className="btn-secondary min-h-0 px-2 py-1 text-[11px]"
                         type="button"
-                        onClick={() => onMove(item)}
+                        aria-label={isSelected ? '取消选中' : '选中'}
+                        title={isSelected ? '取消选中' : '选中'}
+                        className={`absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border transition ${
+                          isSelected
+                            ? 'border-violet-300 bg-violet-500/90 text-white shadow-[0_2px_6px_rgba(0,0,0,0.45)]'
+                            : 'border-white/40 bg-black/40 text-white/80 hover:border-white/70 hover:bg-black/60'
+                        }`}
+                        onClick={() => toggleSelected(item.id)}
                       >
-                        移回主区
-                      </button>
-                    ) : null}
-                    {onDelete ? (
-                      <button
-                        className="btn-ghost min-h-0 px-2 py-1 text-[11px]"
-                        type="button"
-                        onClick={() => onDelete(item)}
-                      >
-                        删除
+                        {isSelected ? (
+                          <Check size={12} strokeWidth={3} />
+                        ) : (
+                          <span className="block h-1.5 w-1.5 rounded-full bg-white/70" />
+                        )}
                       </button>
                     ) : null}
                   </div>
-                ) : null}
-              </article>
-            ))}
+
+                  {/* 下半部分：标题 / 时间 / 操作按钮，可独立横滑查看完整内容 */}
+                  <div className="mt-2 overflow-x-auto pb-0.5">
+                    <div className="inline-flex min-w-full flex-col gap-1.5">
+                      <p className="whitespace-nowrap text-sm font-medium leading-5 text-zinc-100">{item.prompt}</p>
+                      <p className="whitespace-nowrap text-xs leading-5 text-zinc-500">{formatTime(item.createdAt)}</p>
+
+                      {loggedIn ? (
+                        <div className="flex shrink-0 gap-2">
+                          {onMove ? (
+                            <button
+                              className="btn-secondary min-h-0 px-2 py-1 text-xs"
+                              type="button"
+                              onClick={() => onMove(item)}
+                            >
+                              移回主区
+                            </button>
+                          ) : null}
+                          {onDelete ? (
+                            <button
+                              className="btn-ghost min-h-0 px-2 py-1 text-xs"
+                              type="button"
+                              onClick={() => onDelete(item)}
+                            >
+                              删除
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="flex min-h-[112px] items-center justify-center px-5 text-center text-sm leading-7 text-zinc-500">
@@ -5845,7 +5917,9 @@ export default function App() {
       ? 'Nano_Banana_Pro'
       : normalizedName.includes('seedream')
         ? 'Seedream_4'
-        : 'gpt-image-2';
+        : normalizedName.includes('gpt-image-2.5')
+          ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
+          : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
@@ -6942,6 +7016,16 @@ export default function App() {
 
   function downloadDisplayImage(item: DisplayImage | SavedImage | GenerationRecord) {
     void runDownload(item.imageUrl);
+  }
+
+  async function downloadBatchImages(items: Array<DisplayImage | SavedImage | GenerationRecord>) {
+    if (items.length === 0) return;
+    // 错开下载触发，避免浏览器把多个并发下载当作弹窗广告拦截
+    items.forEach((item, index) => {
+      window.setTimeout(() => {
+        void runDownload(item.imageUrl);
+      }, index * 250);
+    });
   }
 
   async function deleteCurrentImage() {
@@ -8178,6 +8262,7 @@ export default function App() {
                   void downloadDisplayImage(target);
                 }
               }}
+              onBatchDownload={(selectedItems) => void downloadBatchImages(selectedItems)}
               actionLoading={Boolean(sideFavoriteItems[0] && downloadingUrl === sideFavoriteItems[0].imageUrl)}
               items={sideFavoriteItems}
               emptyText="看到满意的图，就把它放进这里。"
