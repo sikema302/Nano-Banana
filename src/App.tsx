@@ -7926,19 +7926,23 @@ export default function App() {
                     {visibleResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
                       const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
+                      // GPT-image-2.5 Sunburst 的 2K/4K 渠道暂时维护，禁用并标注「维护」
+                      const isSunburstMaintenance = selectedModel === 'GPT-image-2.5-Sunburst' && (item.value === '2K' || item.value === '4K');
+                      const finalEnabled = enabled && !isSunburstMaintenance;
+                      const finalActive = active && finalEnabled;
 
                       return (
                         <button
                           key={item.value}
                           className={
-                            active
+                            finalActive
                               ? 'relative inline-flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
-                              : enabled
+                              : finalEnabled
                                 ? 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
                                 : 'relative h-10 min-h-0 cursor-not-allowed overflow-visible whitespace-nowrap rounded-lg border border-white/5 bg-white/[0.02] px-2 py-0 text-[13px] font-black text-zinc-700'
                           }
                           type="button"
-                          disabled={!enabled}
+                          disabled={!finalEnabled}
                           onClick={() => {
                             setImageSize(item.value);
                             if (selectedModel === 'gpt-image-2' && item.value === 'STANDARD') {
@@ -7956,6 +7960,11 @@ export default function App() {
                           {item.value === 'STANDARD' ? (
                             <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-emerald-400/80 bg-[linear-gradient(180deg,#087f5b_0%,#056044_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-emerald-100 shadow-[0_3px_10px_rgba(5,150,105,0.3)]">
                               {'\u5feb\u901f'}
+                            </span>
+                          ) : null}
+                          {isSunburstMaintenance ? (
+                            <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-rose-400/80 bg-[linear-gradient(180deg,#e11d48_0%,#9f1239_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-rose-100 shadow-[0_3px_10px_rgba(225,29,72,0.32)]">
+                              {'\u7ef4\u62a4'}
                             </span>
                           ) : null}
                         </button>
