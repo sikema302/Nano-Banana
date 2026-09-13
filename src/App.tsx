@@ -17,9 +17,10 @@ import {
   Home,
   KeyRound,
   Layers3,
-	  LoaderCircle,
-	  LogIn,
-	  Music,
+  LoaderCircle,
+  LogIn,
+  Maximize2,
+  Music,
   LogOut,
   MessageCircle,
   Minus,
@@ -5446,6 +5447,8 @@ export default function App() {
   const [imageSize, setImageSize] = useState<ImageSizeOption>('STANDARD');
   const [gptQuality, setGptQuality] = useState<GptQualityOption>('auto');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
+  const [promptExpandOpen, setPromptExpandOpen] = useState(false);
+  const [promptExpandDraft, setPromptExpandDraft] = useState('');
   const [batchCount, setBatchCount] = useState(1);
   const [autoPlace] = useState(true);
   const [draggingReferences, setDraggingReferences] = useState(false);
@@ -5843,6 +5846,20 @@ export default function App() {
       setBatchCount(MAX_BATCH_COUNT);
     }
   }, [batchCount]);
+
+  // GPT-image-2.5 不支持 high 质量档：如果切到 2.5 时 quality 残留为 high（例如从 GPT-image-2 切换/编辑回填），自动回退到 auto
+  useEffect(() => {
+    if (isGptImage2_5 && gptQuality === 'high') {
+      setGptQuality('auto');
+    }
+  }, [isGptImage2_5, gptQuality]);
+
+  // GPT-image-2.5 Sunburst 的 2K/4K 渠道维护中：如果切到 Sunburst 时残留为 2K/4K，自动回退到 1K
+  useEffect(() => {
+    if (selectedModel === 'GPT-image-2.5-Sunburst' && (imageSize === '2K' || imageSize === '4K')) {
+      setImageSize('1K');
+    }
+  }, [selectedModel, imageSize]);
 
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
@@ -7372,22 +7389,31 @@ export default function App() {
                 {imageSizeOptions.map((item) => {
                   const active = imageSize === item.value;
                   const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
+                  // GPT-image-2.5 Sunburst 的 2K/4K 渠道暂时维护，禁用并标注「维护」
+                  const isSunburstMaintenance = selectedModel === 'GPT-image-2.5-Sunburst' && (item.value === '2K' || item.value === '4K');
+                  const finalEnabled = enabled && !isSunburstMaintenance;
+                  const finalActive = active && finalEnabled;
 
                   return (
                     <button
                       key={item.value}
-                      className={`rounded-xl border px-4 py-2 text-center transition ${
-                        active
+                      className={`group relative rounded-xl border px-4 py-2 text-center transition ${
+                        finalActive
                           ? 'border-white bg-white text-black'
-                          : enabled
+                          : finalEnabled
                             ? 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
                             : 'cursor-not-allowed border-white/5 bg-white/[0.02] text-zinc-700'
                       }`}
                       type="button"
-                      disabled={!enabled}
+                      disabled={!finalEnabled}
                       onClick={() => setImageSize(item.value)}
                     >
                       <span className="block text-sm font-black leading-none">{item.label}</span>
+                      {isSunburstMaintenance ? (
+                        <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-amber-400/80 bg-[linear-gradient(180deg,#a16207_0%,#713f12_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-amber-100 shadow-[0_3px_10px_rgba(180,83,9,0.32)]">
+                          {'\u7ef4\u62a4'}
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -7867,7 +7893,21 @@ export default function App() {
               <section className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
                   <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
-                  <span className="text-[10px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
+                    <button
+                      type="button"
+                      title="\u62b3\u5c55\u7f16\u8f91"
+                      aria-label="\u62b3\u5c55\u7f16\u8f91\u63d0\u793a\u8bcd"
+                      className="flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-white/25 hover:text-white"
+                      onClick={() => {
+                        setPromptExpandDraft(prompt);
+                        setPromptExpandOpen(true);
+                      }}
+                    >
+                      <Maximize2 size={12} />
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <textarea
@@ -7927,8 +7967,10 @@ export default function App() {
                 {showGptQuality ? (
                   <section className="space-y-1.5">
                     <div className="text-[11px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
-                    <div className="grid grid-cols-4 gap-2 overflow-visible">
-                      {gptQualityOptions.map((item) => {
+                    <div className={`grid gap-2 overflow-visible ${isGptImage2_5 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                      {gptQualityOptions
+                        .filter((item) => !(isGptImage2_5 && item.value === 'high'))
+                        .map((item) => {
                         const active = gptQuality === item.value;
                         const isHighQuality = item.value === 'high';
 
@@ -8423,6 +8465,61 @@ export default function App() {
                 />
               )}
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {promptExpandOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-4 backdrop-blur-sm">
+          <button
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setPromptExpandOpen(false)}
+            aria-label="关闭提示词编辑弹窗"
+          />
+          <div className="relative z-10 flex w-full max-w-[640px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#0c0c0d] shadow-[0_28px_90px_rgba(0,0,0,0.6)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <h2 className="text-lg font-black text-white">{'图像提示词'}</h2>
+              <button
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2b2b2e] text-[#9a9ba3] transition hover:border-[#444449] hover:text-white"
+                type="button"
+                aria-label="关闭"
+                onClick={() => setPromptExpandOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="px-5 pb-5 pt-4">
+              <textarea
+                autoFocus
+                className="block h-[260px] w-full resize-none rounded-2xl border border-sky-400/60 bg-white/[0.02] px-4 py-3 text-[13px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-sky-300"
+                placeholder="请详细描述您想生成的画面..."
+                value={promptExpandDraft}
+                onChange={(event) => setPromptExpandDraft(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
+              />
+            </div>
+            <footer className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3">
+              <span className="text-xs font-semibold text-zinc-500">{promptExpandDraft.length} / {MAX_PROMPT_LENGTH}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-full px-4 py-1.5 text-sm font-semibold text-zinc-400 transition hover:text-white"
+                  onClick={() => setPromptExpandOpen(false)}
+                >
+                  {'取消'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:brightness-95"
+                  onClick={() => {
+                    setPrompt(promptExpandDraft);
+                    setPromptExpandOpen(false);
+                  }}
+                >
+                  {'确定'}
+                </button>
+              </div>
+            </footer>
           </div>
         </div>
       ) : null}
