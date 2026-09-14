@@ -1,5 +1,6 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
 import { pooledFetch, shouldFastFailover, isConnectionTerminatedError } from './pooled-fetch.js';
+import { schatImageSize } from './schat-image.js';
 
 export type FluxBananaInput = {
   prompt: string;
@@ -26,6 +27,7 @@ type GeminiPart = {
 
 type GeminiPayload = {
   candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
+  data?: unknown;
   assets?: Array<{
     b64_json?: string;
     data?: string;
@@ -33,6 +35,7 @@ type GeminiPayload = {
     mimeType?: string;
     url?: string;
     download_url?: string;
+    signed_url?: string;
   }>;
   error?: { message?: string } | string;
   message?: string;
@@ -55,6 +58,17 @@ function providerError(message: string, safeToFallback: boolean, status?: number
   return error;
 }
 
+/** 标记「该网关不支持 OpenAI 兼容图片任务 API」，用于触发 Gemini 原生协议回退。 */
+function imagesApiUnsupportedError(message: string, status?: number) {
+  const error = providerError(message, true, status) as Error & { imagesApiUnsupported: boolean };
+  error.imagesApiUnsupported = true;
+  return error;
+}
+
+function isImagesApiUnsupported(error: unknown) {
+  return Boolean(error && typeof error === 'object' && (error as { imagesApiUnsupported?: unknown }).imagesApiUnsupported);
+}
+
 const SUCCESS_TASK_STATUSES = new Set([
   'success', 'succeeded', 'successful', 'completed', 'complete', 'done', 'finished',
 ]);
@@ -64,6 +78,9 @@ const FAILED_TASK_STATUSES = new Set([
 const MAX_TASK_POLLS = 600;
 const MAX_CONSECUTIVE_TASK_FAILURES = 5;
 const MAX_CONSECUTIVE_POLL_ERRORS = 5;
+
+const MODERATION_PATTERN = /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i;
+const UNSUPPORTED_MODEL_PATTERN = /not\s*support|unsupported|unknown\s+model|invalid\s+model|model\s+not\s+found|does\s+not\s+exist|no\s+such\s+model|未支持|不支持|未找到/i;
 
 function isSuccessTask(status: string) {
   return SUCCESS_TASK_STATUSES.has(status);
@@ -86,6 +103,17 @@ export function selectFluxBananaModel(imageSize: string) {
   const normalized = normalizeImageSize(imageSize);
   if (normalized === '4K') return FLUX_BANANA_PRO_MODEL;
   return FLUX_BANANA_FLASH_MODEL;
+}
+
+/**
+ * 同一把平台 Key 在两种协议下都可用：/v1/* 用 Bearer，/v1beta/* 用 x-goog-api-key。
+ * 轮询与资产下载同时带上两种头，兼容网关任意一种鉴权校验。
+ */
+function authHeaders(apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'x-goog-api-key': apiKey,
+  };
 }
 
 async function referencePart(source: string, signal: AbortSignal, fetchImpl: typeof fetch): Promise<GeminiPart> {
@@ -117,6 +145,23 @@ async function referencePart(source: string, signal: AbortSignal, fetchImpl: typ
   };
 }
 
+function dataUrlBlob(value: string) {
+  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) return null;
+  const bytes = match[2]
+    ? Buffer.from(match[3].replace(/\s+/g, ''), 'base64')
+    : Buffer.from(decodeURIComponent(match[3]));
+  return new Blob([bytes], { type: match[1] || 'image/png' });
+}
+
+async function referenceBlob(value: string, signal: AbortSignal, fetchImpl: typeof fetch) {
+  const inline = dataUrlBlob(value);
+  if (inline) return inline;
+  const response = await fetchImpl(value, { signal });
+  if (!response.ok) throw providerError(`Reference image returned HTTP ${response.status}`, true, response.status);
+  return response.blob();
+}
+
 function generatedImage(payload: GeminiPayload) {
   for (const candidate of payload.candidates || []) {
     for (const part of candidate.content?.parts || []) {
@@ -135,7 +180,20 @@ function generatedImage(payload: GeminiPayload) {
     if (base64) {
       return `data:${asset.mime_type || asset.mimeType || 'image/png'};base64,${base64.replace(/\s+/g, '')}`;
     }
+    // 网关文档要求优先使用 signed_url（6 小时有效、无需 Authorization）。
+    if (asset.signed_url) return asset.signed_url;
     if (asset.download_url || asset.url) return asset.download_url || asset.url || '';
+  }
+  // OpenAI 兼容同步响应：data: [{ b64_json | url }]
+  if (Array.isArray(payload.data)) {
+    for (const item of payload.data) {
+      if (!item || typeof item !== 'object') continue;
+      const record = item as { b64_json?: string; url?: string };
+      if (typeof record.b64_json === 'string' && record.b64_json) {
+        return `data:image/png;base64,${record.b64_json.replace(/\s+/g, '')}`;
+      }
+      if (typeof record.url === 'string' && record.url) return record.url;
+    }
   }
   return '';
 }
@@ -162,8 +220,7 @@ async function parsePayload(response: Response) {
 
 /**
  * 读取 SSE（text/event-stream）响应并逐个解析 data: 事件里的 JSON chunk。
- * 同步等待上游出图要 1~2 分钟，nginx 类网关 60 秒无字节就会断连（UND_ERR_SOCKET），
- * 流式端点持续推 chunk，可以避免「上游已出图扣费、我们这侧连接被掐断」的问题。
+ * 仅用于 Gemini 原生流式端点的回退路径。
  * raw 仅保留开头一小段用于错误诊断，避免把 base64 图片全量留在内存里。
  */
 async function readSsePayloads(response: Response) {
@@ -227,7 +284,7 @@ async function fetchTaskPayload(
   const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
     pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
   const response = await fetchImpl(url, {
-    headers: { 'x-goog-api-key': options.apiKey },
+    headers: authHeaders(options.apiKey),
     signal,
   });
   const parsed = await parsePayload(response);
@@ -252,7 +309,8 @@ async function materializeImage(
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw providerError('Flux image provider returned an invalid asset URL', false);
   }
-  const headers = url.origin === base.origin ? { 'x-goog-api-key': options.apiKey } : undefined;
+  // signed_url 等跨源地址不带凭据；同源受保护资产同时携带 Bearer 与 x-goog-api-key。
+  const headers = url.origin === base.origin ? authHeaders(options.apiKey) : undefined;
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
     pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
@@ -280,8 +338,136 @@ function taskUrl(payload: GeminiPayload) {
   return payload.status_url || payload.poll_url || payload.result_url || '';
 }
 
+/**
+ * 通过 OpenAI 兼容图片任务 API 提交（与 gpt-image-2 相同的异步链路）：
+ * 文生图 POST /v1/images/generations，带参考图时 POST /v1/images/edits（multipart），
+ * 统一带 "async": true 要求网关返回 202 任务回执，之后轮询 /v1/images/tasks/{task_id}。
+ * 网关不支持该端点/模型时抛 imagesApiUnsupportedError，由调用方回退到 Gemini 原生协议。
+ */
+async function submitViaImagesTaskApi(
+  input: FluxBananaInput,
+  options: FluxBananaOptions,
+  model: string,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch,
+  rootUrl: string,
+) {
+  const headers = authHeaders(options.apiKey);
+  const size = schatImageSize(normalizeImageSize(input.imageSize), input.ratio === 'auto' ? '1:1' : input.ratio || '1:1');
+  let endpoint = '/v1/images/generations';
+  let body: BodyInit;
+
+  if (input.images.length > 0) {
+    endpoint = '/v1/images/edits';
+    const form = new FormData();
+    form.set('model', model);
+    form.set('prompt', input.prompt);
+    form.set('size', size);
+    form.set('n', '1');
+    form.set('async', 'true');
+    const blobs = await Promise.all(
+      input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referenceBlob(source, signal, fetchImpl)),
+    );
+    const field = blobs.length > 1 ? 'image[]' : 'image';
+    blobs.forEach((blob, index) => form.append(field, blob, `reference-${index + 1}.png`));
+    body = form;
+  } else {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify({ model, prompt: input.prompt, size, n: 1, async: true });
+  }
+
+  const response = await fetchImpl(`${rootUrl}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body,
+    signal,
+  });
+  if (!response.ok) {
+    const { payload, raw } = await parsePayload(response);
+    const message = payloadError(payload) || `Flux image task API returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
+    if (
+      response.status === 404
+      || response.status === 405
+      || response.status === 422
+      || response.status === 501
+      || (response.status === 400 && UNSUPPORTED_MODEL_PATTERN.test(message))
+    ) {
+      throw imagesApiUnsupportedError(message, response.status);
+    }
+    // 审核类 400 换协议重试无意义，与 Gemini 原生路径保持一致：标记为不 fallback。
+    const isModeration = response.status === 400 && MODERATION_PATTERN.test(message);
+    throw providerError(
+      isModeration ? `Content moderation rejected: ${message}` : message,
+      !isModeration,
+      response.status,
+    );
+  }
+  return response;
+}
+
+/**
+ * Gemini 原生协议提交（回退路径）：优先流式端点（避免网关 60s 空闲断连），
+ * 端点不存在时退回同步 generateContent。
+ */
+async function submitViaGeminiNative(
+  input: FluxBananaInput,
+  options: FluxBananaOptions,
+  model: string,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch,
+  rootUrl: string,
+) {
+  const parts: GeminiPart[] = [{ text: input.prompt }];
+  parts.push(...await Promise.all(
+    input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, signal, fetchImpl)),
+  ));
+  const requestInit: RequestInit = {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': options.apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        imageConfig: {
+          aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
+          imageSize: normalizeImageSize(input.imageSize),
+        },
+      },
+    }),
+    signal,
+  };
+  let response = await fetchImpl(
+    `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+    requestInit,
+  );
+  if (response.status === 404) {
+    response = await fetchImpl(
+      `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      requestInit,
+    );
+  }
+  if (!response.ok) {
+    const { payload: initialPayload, raw } = await parsePayload(response);
+    const upstreamMessage = payloadError(initialPayload)
+      || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
+    // gemini 400 多为提示词/参考图内容审核或参数被拒；这类错误换渠道重试无意义，
+    // 标记为不 fallback，并交由 classifyPublicImageError 归入 sensitive_prompt 统一提示。
+    const isModeration = response.status === 400 && MODERATION_PATTERN.test(upstreamMessage);
+    throw providerError(
+      isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
+      !isModeration,
+      response.status,
+    );
+  }
+  return response;
+}
+
 export async function generateFluxBanana(input: FluxBananaInput, options: FluxBananaOptions) {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  const rootUrl = baseUrl.replace(/\/v1$/i, '');
   const fetchImpl = options.fetchImpl || ((url: string, init?: RequestInit) =>
     pooledFetch(url, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
   const controller = new AbortController();
@@ -290,55 +476,21 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   let requestSent = false;
 
   try {
-    const parts: GeminiPart[] = [{ text: input.prompt }];
-    parts.push(...await Promise.all(
-      input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, controller.signal, fetchImpl)),
-    ));
-    requestSent = true;
-    const requestInit: RequestInit = {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': options.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
-          imageConfig: {
-            aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
-            imageSize: normalizeImageSize(input.imageSize),
-          },
-        },
-      }),
-      signal: controller.signal,
-    };
-    // 优先走流式端点：出图期间持续有字节流动，避免 nginx 类网关 60s 空闲断连
-    // （上游已完成并扣费、我们这侧 UND_ERR_SOCKET 的丢图问题）。个别聚合端
-    // 不支持该端点时退回同步 generateContent。
-    let response = await fetchImpl(
-      `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-      requestInit,
-    );
-    if (response.status === 404) {
-      response = await fetchImpl(
-        `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-        requestInit,
+    // 优先走 OpenAI 兼容异步图片任务 API（与 gpt-image-2 一致：提交 → 202 回执 →
+    // 轮询任务 → 下载资产），同步生图长连接容易被网关空闲超时掐断。
+    // 个别聚合端不允许 gemini 图片模型走 /v1/images/* 时，回退 Gemini 原生协议。
+    let response: Response;
+    try {
+      response = await submitViaImagesTaskApi(input, options, model, controller.signal, fetchImpl, rootUrl);
+      requestSent = true;
+    } catch (error) {
+      if (!isImagesApiUnsupported(error)) throw error;
+      console.warn(
+        `[flux-banana] images task API unavailable (${error instanceof Error ? error.message.slice(0, 160) : 'unknown'}); `
+        + 'falling back to Gemini native generateContent',
       );
-    }
-    if (!response.ok) {
-      const { payload: initialPayload, raw } = await parsePayload(response);
-      const upstreamMessage = payloadError(initialPayload)
-        || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
-      // gemini 400 多为提示词/参考图内容审核或参数被拒；这类错误换渠道重试无意义，
-      // 标记为不 fallback，并交由 classifyPublicImageError 归入 sensitive_prompt 统一提示。
-      const isModeration = response.status === 400
-        && /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i.test(upstreamMessage);
-      throw providerError(
-        isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
-        !isModeration,
-        response.status,
-      );
+      response = await submitViaGeminiNative(input, options, model, controller.signal, fetchImpl, rootUrl);
+      requestSent = true;
     }
 
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
@@ -351,7 +503,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       for (const chunk of streamed.payloads) {
         if (chunk.error) {
           const upstreamMessage = payloadError(chunk) || 'Flux stream returned an error';
-          const isModeration = /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i.test(upstreamMessage);
+          const isModeration = MODERATION_PATTERN.test(upstreamMessage);
           throw providerError(
             isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
             !isModeration,
@@ -394,7 +546,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       let fetchedPayload: GeminiPayload = {};
       try {
         const response = await (options.fetchImpl || fetch)(pollUrl, {
-          headers: { 'x-goog-api-key': options.apiKey },
+          headers: authHeaders(options.apiKey),
           signal: controller.signal,
         });
         const parsed = await parsePayload(response);
