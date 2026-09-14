@@ -52,7 +52,12 @@ export const FLUX_BANANA_FLASH_MODEL = 'gemini-3.1-flash-image-preview';
 export const FLUX_BANANA_PRO_MODEL = 'gemini-3-pro-image-preview';
 
 function providerError(message: string, safeToFallback: boolean, status?: number) {
-  const error = new Error(message) as Error & { safeToFallback: boolean; status?: number; sourceModel?: string };
+  const error = new Error(message) as Error & {
+    safeToFallback: boolean;
+    status?: number;
+    sourceModel?: string;
+    imagesApiUnsupported?: boolean;
+  };
   error.safeToFallback = safeToFallback;
   if (status) error.status = status;
   return error;
@@ -60,7 +65,7 @@ function providerError(message: string, safeToFallback: boolean, status?: number
 
 /** 标记「该网关不支持 OpenAI 兼容图片任务 API」，用于触发 Gemini 原生协议回退。 */
 function imagesApiUnsupportedError(message: string, status?: number) {
-  const error = providerError(message, true, status) as Error & { imagesApiUnsupported: boolean };
+  const error = providerError(message, true, status);
   error.imagesApiUnsupported = true;
   return error;
 }
