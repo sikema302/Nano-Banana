@@ -1,6 +1,5 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
-import { pooledFetch, shouldFastFailover, isConnectionTerminatedError } from './pooled-fetch.js';
-import { schatImageSize } from './schat-image.js';
+import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
 
 export type FluxBananaInput = {
   prompt: string;
@@ -42,6 +41,7 @@ type GeminiPayload = {
   status?: string;
   task_id?: string;
   id?: string;
+  request_id?: string;
   poll_after_ms?: number;
   poll_url?: string;
   status_url?: string;
@@ -56,22 +56,10 @@ function providerError(message: string, safeToFallback: boolean, status?: number
     safeToFallback: boolean;
     status?: number;
     sourceModel?: string;
-    imagesApiUnsupported?: boolean;
   };
   error.safeToFallback = safeToFallback;
   if (status) error.status = status;
   return error;
-}
-
-/** 标记「该网关不支持 OpenAI 兼容图片任务 API」，用于触发 Gemini 原生协议回退。 */
-function imagesApiUnsupportedError(message: string, status?: number) {
-  const error = providerError(message, true, status);
-  error.imagesApiUnsupported = true;
-  return error;
-}
-
-function isImagesApiUnsupported(error: unknown) {
-  return Boolean(error && typeof error === 'object' && (error as { imagesApiUnsupported?: unknown }).imagesApiUnsupported);
 }
 
 const SUCCESS_TASK_STATUSES = new Set([
@@ -85,7 +73,6 @@ const MAX_CONSECUTIVE_TASK_FAILURES = 5;
 const MAX_CONSECUTIVE_POLL_ERRORS = 5;
 
 const MODERATION_PATTERN = /upstream\s+error|content|safety|moderat|prohibit|block|policy|审核|敏感|违禁|违规|色情|暴力/i;
-const UNSUPPORTED_MODEL_PATTERN = /not\s*support|unsupported|unknown\s+model|invalid\s+model|model\s+not\s+found|does\s+not\s+exist|no\s+such\s+model|未支持|不支持|未找到/i;
 
 function isSuccessTask(status: string) {
   return SUCCESS_TASK_STATUSES.has(status);
@@ -112,7 +99,7 @@ export function selectFluxBananaModel(imageSize: string) {
 
 /**
  * 同一把平台 Key 在两种协议下都可用：/v1/* 用 Bearer，/v1beta/* 用 x-goog-api-key。
- * 轮询与资产下载同时带上两种头，兼容网关任意一种鉴权校验。
+ * 提交走 Gemini 原生仅用 x-goog-api-key；轮询与资产下载同时带两种头，兼容网关任意一种鉴权校验。
  */
 function authHeaders(apiKey: string): Record<string, string> {
   return {
@@ -148,23 +135,6 @@ async function referencePart(source: string, signal: AbortSignal, fetchImpl: typ
       data: bytes.toString('base64'),
     },
   };
-}
-
-function dataUrlBlob(value: string) {
-  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
-  if (!match) return null;
-  const bytes = match[2]
-    ? Buffer.from(match[3].replace(/\s+/g, ''), 'base64')
-    : Buffer.from(decodeURIComponent(match[3]));
-  return new Blob([bytes], { type: match[1] || 'image/png' });
-}
-
-async function referenceBlob(value: string, signal: AbortSignal, fetchImpl: typeof fetch) {
-  const inline = dataUrlBlob(value);
-  if (inline) return inline;
-  const response = await fetchImpl(value, { signal });
-  if (!response.ok) throw providerError(`Reference image returned HTTP ${response.status}`, true, response.status);
-  return response.blob();
 }
 
 function generatedImage(payload: GeminiPayload) {
@@ -221,63 +191,6 @@ async function parsePayload(response: Response) {
     // A short response excerpt is included in the error below.
   }
   return { payload, raw };
-}
-
-/**
- * 读取 SSE（text/event-stream）响应并逐个解析 data: 事件里的 JSON chunk。
- * 仅用于 Gemini 原生流式端点的回退路径。
- * raw 仅保留开头一小段用于错误诊断，避免把 base64 图片全量留在内存里。
- */
-async function readSsePayloads(response: Response) {
-  const reader = response.body?.getReader();
-  if (!reader) return { payloads: [] as GeminiPayload[], raw: '' };
-  const decoder = new TextDecoder();
-  let lineBuffer = '';
-  let raw = '';
-  const payloads: GeminiPayload[] = [];
-
-  const flushEvent = (eventText: string) => {
-    if (!eventText.trim()) return;
-    const data = eventText
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n')
-      .trim();
-    if (!data || data === '[DONE]') return;
-    if (raw.length < 4_096) raw = `${raw}${data}\n`.slice(0, 4_096);
-    try {
-      payloads.push(JSON.parse(data) as GeminiPayload);
-    } catch {
-      // 非 JSON 的心跳/注释帧直接忽略。
-    }
-  };
-
-  let eventBuffer = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      lineBuffer += decoder.decode(value, { stream: true });
-      let newlineIndex = lineBuffer.indexOf('\n');
-      while (newlineIndex >= 0) {
-        const line = lineBuffer.slice(0, newlineIndex).replace(/\r$/, '');
-        lineBuffer = lineBuffer.slice(newlineIndex + 1);
-        if (line === '') {
-          flushEvent(eventBuffer);
-          eventBuffer = '';
-        } else {
-          eventBuffer += `${line}\n`;
-        }
-        newlineIndex = lineBuffer.indexOf('\n');
-      }
-    }
-    if (lineBuffer.trim()) eventBuffer += `${lineBuffer.replace(/\r$/, '')}\n`;
-    flushEvent(eventBuffer);
-  } finally {
-    reader.releaseLock();
-  }
-  return { payloads, raw };
 }
 
 async function fetchTaskPayload(
@@ -344,75 +257,22 @@ function taskUrl(payload: GeminiPayload) {
 }
 
 /**
- * 通过 OpenAI 兼容图片任务 API 提交（与 gpt-image-2 相同的异步链路）：
- * 文生图 POST /v1/images/generations，带参考图时 POST /v1/images/edits（multipart），
- * 统一带 "async": true 要求网关返回 202 任务回执，之后轮询 /v1/images/tasks/{task_id}。
- * 网关不支持该端点/模型时抛 imagesApiUnsupportedError，由调用方回退到 Gemini 原生协议。
+ * 解析异步任务的轮询地址：
+ * 1. 优先使用网关显式返回的 status_url / poll_url / result_url；
+ * 2. 否则用 task_id / id / request_id 自行拼接图片任务查询端点。
  */
-async function submitViaImagesTaskApi(
-  input: FluxBananaInput,
-  options: FluxBananaOptions,
-  model: string,
-  signal: AbortSignal,
-  fetchImpl: typeof fetch,
-  rootUrl: string,
-) {
-  const headers = authHeaders(options.apiKey);
-  const size = schatImageSize(normalizeImageSize(input.imageSize), input.ratio === 'auto' ? '1:1' : input.ratio || '1:1');
-  let endpoint = '/v1/images/generations';
-  let body: BodyInit;
-
-  if (input.images.length > 0) {
-    endpoint = '/v1/images/edits';
-    const form = new FormData();
-    form.set('model', model);
-    form.set('prompt', input.prompt);
-    form.set('size', size);
-    form.set('n', '1');
-    form.set('async', 'true');
-    const blobs = await Promise.all(
-      input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referenceBlob(source, signal, fetchImpl)),
-    );
-    const field = blobs.length > 1 ? 'image[]' : 'image';
-    blobs.forEach((blob, index) => form.append(field, blob, `reference-${index + 1}.png`));
-    body = form;
-  } else {
-    headers['Content-Type'] = 'application/json';
-    body = JSON.stringify({ model, prompt: input.prompt, size, n: 1, async: true });
-  }
-
-  const response = await fetchImpl(`${rootUrl}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body,
-    signal,
-  });
-  if (!response.ok) {
-    const { payload, raw } = await parsePayload(response);
-    const message = payloadError(payload) || `Flux image task API returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
-    if (
-      response.status === 404
-      || response.status === 405
-      || response.status === 422
-      || response.status === 501
-      || (response.status === 400 && UNSUPPORTED_MODEL_PATTERN.test(message))
-    ) {
-      throw imagesApiUnsupportedError(message, response.status);
-    }
-    // 审核类 400 换协议重试无意义，与 Gemini 原生路径保持一致：标记为不 fallback。
-    const isModeration = response.status === 400 && MODERATION_PATTERN.test(message);
-    throw providerError(
-      isModeration ? `Content moderation rejected: ${message}` : message,
-      !isModeration,
-      response.status,
-    );
-  }
-  return response;
+function taskQueryUrl(payload: GeminiPayload, baseUrl: string) {
+  const explicit = taskUrl(payload);
+  if (explicit) return resolveProviderUrl(baseUrl, explicit);
+  const taskId = payload.task_id || payload.id || payload.request_id || '';
+  if (taskId) return resolveProviderUrl(baseUrl, `/v1/images/tasks/${taskId}`);
+  return '';
 }
 
 /**
- * Gemini 原生协议提交（回退路径）：优先流式端点（避免网关 60s 空闲断连），
- * 端点不存在时退回同步 generateContent。
+ * 香蕉（Gemini 图片模型）统一走 Gemini 原生 `generateContent` 接口（非流式），
+ * 与 uselg 文档契约一致：请求头 x-goog-api-key，结果从响应 inlineData 读取；
+ * 若网关返回 202 异步任务，则按 task_id / status_url 轮询查询，不重复提交同一张图。
  */
 async function submitViaGeminiNative(
   input: FluxBananaInput,
@@ -426,37 +286,30 @@ async function submitViaGeminiNative(
   parts.push(...await Promise.all(
     input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, signal, fetchImpl)),
   ));
-  const requestInit: RequestInit = {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': options.apiKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts }],
-      generationConfig: {
-        responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: {
-          aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
-          imageSize: normalizeImageSize(input.imageSize),
-        },
+  const response = await fetchImpl(
+    `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': options.apiKey,
+        'Content-Type': 'application/json',
       },
-    }),
-    signal,
-  };
-  let response = await fetchImpl(
-    `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-    requestInit,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
+            imageSize: normalizeImageSize(input.imageSize),
+          },
+        },
+      }),
+      signal,
+    },
   );
-  if (response.status === 404) {
-    response = await fetchImpl(
-      `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      requestInit,
-    );
-  }
   if (!response.ok) {
-    const { payload: initialPayload, raw } = await parsePayload(response);
-    const upstreamMessage = payloadError(initialPayload)
+    const { payload, raw } = await parsePayload(response);
+    const upstreamMessage = payloadError(payload)
       || `Flux image provider returned HTTP ${response.status}: ${raw.slice(0, 240)}`;
     // gemini 400 多为提示词/参考图内容审核或参数被拒；这类错误换渠道重试无意义，
     // 标记为不 fallback，并交由 classifyPublicImageError 归入 sensitive_prompt 统一提示。
@@ -481,59 +334,23 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   let requestSent = false;
 
   try {
-    // 优先走 OpenAI 兼容异步图片任务 API（与 gpt-image-2 一致：提交 → 202 回执 →
-    // 轮询任务 → 下载资产），同步生图长连接容易被网关空闲超时掐断。
-    // 个别聚合端不允许 gemini 图片模型走 /v1/images/* 时，回退 Gemini 原生协议。
-    let response: Response;
-    try {
-      response = await submitViaImagesTaskApi(input, options, model, controller.signal, fetchImpl, rootUrl);
-      requestSent = true;
-    } catch (error) {
-      if (!isImagesApiUnsupported(error)) throw error;
-      console.warn(
-        `[flux-banana] images task API unavailable (${error instanceof Error ? error.message.slice(0, 160) : 'unknown'}); `
-        + 'falling back to Gemini native generateContent',
-      );
-      response = await submitViaGeminiNative(input, options, model, controller.signal, fetchImpl, rootUrl);
-      requestSent = true;
-    }
+    const response = await submitViaGeminiNative(input, options, model, controller.signal, fetchImpl, rootUrl);
+    requestSent = true;
 
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    let payload: GeminiPayload = {};
-    let raw = '';
-    let source = '';
-    if (contentType.includes('text/event-stream')) {
-      const streamed = await readSsePayloads(response);
-      raw = streamed.raw;
-      for (const chunk of streamed.payloads) {
-        if (chunk.error) {
-          const upstreamMessage = payloadError(chunk) || 'Flux stream returned an error';
-          const isModeration = MODERATION_PATTERN.test(upstreamMessage);
-          throw providerError(
-            isModeration ? `Content moderation rejected: ${upstreamMessage}` : upstreamMessage,
-            !isModeration,
-          );
-        }
-        if (!source) source = generatedImage(chunk);
-        payload = chunk;
-      }
-    } else {
-      const parsed = await parsePayload(response);
-      payload = parsed.payload;
-      raw = parsed.raw;
-      source = generatedImage(payload);
-    }
+    const { payload: initialPayload, raw } = await parsePayload(response);
+    let payload = initialPayload;
+    let source = generatedImage(payload);
     if (source) {
       return { source: await materializeImage(source, options, controller.signal), model };
     }
 
+    // 网关返回 202 异步任务：保存 task_id / status_url 后按地址轮询，不重复提交。
     const initialStatus = taskStatus(payload);
-    const initialTaskUrl = taskUrl(payload);
-    if (!initialTaskUrl || (!initialStatus && !payload.task_id && !payload.id)) {
+    let pollUrl = taskQueryUrl(payload, baseUrl);
+    if (!pollUrl && !initialStatus) {
       throw providerError(`Flux image provider returned no image: ${raw.slice(0, 240)}`, false);
     }
 
-    let pollUrl = resolveProviderUrl(options.baseUrl, initialTaskUrl);
     let consecutiveFailures = 0;
     let consecutivePollErrors = 0;
     let polls = 0;
@@ -550,18 +367,18 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       await (options.sleepImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
       let fetchedPayload: GeminiPayload = {};
       try {
-        const response = await (options.fetchImpl || fetch)(pollUrl, {
+        const pollResponse = await fetchImpl(pollUrl, {
           headers: authHeaders(options.apiKey),
           signal: controller.signal,
         });
-        const parsed = await parsePayload(response);
-        if (!response.ok) {
+        const parsed = await parsePayload(pollResponse);
+        if (!pollResponse.ok) {
           consecutivePollErrors += 1;
           if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
             throw providerError(
-              payloadError(parsed.payload) || `Flux task status returned HTTP ${response.status}: ${parsed.raw.slice(0, 240)}`,
+              payloadError(parsed.payload) || `Flux task status returned HTTP ${pollResponse.status}: ${parsed.raw.slice(0, 240)}`,
               false,
-              response.status,
+              pollResponse.status,
             );
           }
           polls += 1;
@@ -591,7 +408,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
         return { source: await materializeImage(source, options, controller.signal), model };
       }
       const nextUrl = taskUrl(payload);
-      if (nextUrl) pollUrl = resolveProviderUrl(options.baseUrl, nextUrl);
+      if (nextUrl) pollUrl = resolveProviderUrl(baseUrl, nextUrl);
       polls += 1;
     }
 
@@ -599,7 +416,7 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
     if (isSuccessTask(finalStatus)) {
       const resultUrl = payload.result_url;
       if (resultUrl) {
-        const resultPayload = await fetchTaskPayload(resolveProviderUrl(options.baseUrl, resultUrl), options, controller.signal);
+        const resultPayload = await fetchTaskPayload(resolveProviderUrl(baseUrl, resultUrl), options, controller.signal);
         source = generatedImage(resultPayload);
         if (source) {
           return { source: await materializeImage(source, options, controller.signal), model };
