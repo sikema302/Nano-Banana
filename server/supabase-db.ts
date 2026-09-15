@@ -1187,15 +1187,17 @@ export async function updateGenerationRequestImage(requestId: string, imagePath:
 
 // 上游出图成功后会先写入 success 记录；若后续环节（转存/扣款/写历史）失败，必须同步把该记录标记为失败，
 // 否则后台显示成功但用户侧没有历史记录。credits_used 归零与失败口径一致（未扣费或已退款）。
+// message 是人话结论、detail 是真实技术根因（两者都要落库，后台据此定位，见 error_detail 的用途）。
 export async function markGenerationRequestFailed(
   requestId: string,
   message: string,
-  options: { preserveCredits?: boolean } = {},
+  options: { preserveCredits?: boolean; detail?: string } = {},
 ): Promise<void> {
   if (!requestId) return;
+  const detail = options.detail?.trim() || message;
   const update = options.preserveCredits
-    ? { result_status: 'failed', result_message: message, error_detail: message }
-    : { result_status: 'failed', result_message: message, error_detail: message, credits_used: 0 };
+    ? { result_status: 'failed', result_message: message, error_detail: detail }
+    : { result_status: 'failed', result_message: message, error_detail: detail, credits_used: 0 };
   const { error } = await getSupabase()
     .from('generation_requests')
     .update(update)

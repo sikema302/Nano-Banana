@@ -55,8 +55,12 @@ tar -czf "$BACKUPS/$TIMESTAMP-pre-deploy.tar.gz" \
   --exclude='./.git' \
   --exclude='./.runtime' \
   --exclude='./.deploy-backups' \
+  --exclude='./.deploy-incoming' \
   --exclude='./uploads' \
   --exclude='./.uploads' \
+  --exclude='core' \
+  --exclude='core.*' \
+  --exclude='*.core' \
   -C "$PROJECT" . 2>/dev/null || true
 
 # 只保留最近 5 个备份

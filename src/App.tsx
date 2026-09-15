@@ -5176,8 +5176,8 @@ function AdminView({
                               ) : <span className="text-zinc-600">-</span>}
                             </td>
                             <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                            <td className={`max-w-[300px] break-words px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultStatus === 'failed' ? (item.errorDetail || item.resultMessage || '请求失败') : ''}>
-                              {item.resultStatus === 'failed' ? (item.errorDetail || item.resultMessage || '请求失败') : '成功'}
+                            <td className={`max-w-[300px] break-words px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultStatus === 'failed' ? (item.errorDetail ? `根因：${item.errorDetail}` : (item.resultMessage || '请求失败')) : ''}>
+                              {item.resultStatus === 'failed' ? (item.resultMessage || item.errorDetail || '请求失败') : '成功'}
                             </td>
                             <td className="px-3 py-3 font-medium text-zinc-300" title={(item.referenceImageTypes || []).join(', ')}>
                               {item.referenceImageTypes && item.referenceImageTypes.length > 0 ? item.referenceImageTypes.map((type) => type.toUpperCase()).join(', ') : '-'}

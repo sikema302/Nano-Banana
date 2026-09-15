@@ -36,6 +36,11 @@ import {
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
+import {
+  generationFailureDetail,
+  generationFailureMessage,
+  resolveGenerationFailureStage,
+} from './generation-failure.js';
 import { isConnectionTerminatedError, shouldFastFailover } from './pooled-fetch.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
@@ -469,6 +474,18 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 dns.setDefaultResultOrder('ipv4first');
 
 const R2_STORAGE = createR2ObjectStorage();
+// R2 是生成的唯一持久层。但「R2 抖一下」不该让上游已经出好的图凭空消失
+// （用户拿不到图、上游成本照付、后台只留一句无法定位的失败）。
+// 默认开启降级：R2 全部重试失败后改写本地磁盘，先把图交给用户，并打 [r2-fallback] 告警。
+// 置 R2_LOCAL_FALLBACK=false 可恢复「R2 失败即整单失败」的严格行为。
+const R2_LOCAL_FALLBACK = normalizeEnvValue(process.env.R2_LOCAL_FALLBACK) !== 'false';
+// 降级次数必须在 /api/health 上可见：否则「R2 其实一直失败、只是一直在偷偷写本地盘」
+// 这种状态会静默持续下去，等到磁盘满了才被发现。
+const generatedImageLocalFallbacks: { count: number; lastAt: string; lastReason: string } = {
+  count: 0,
+  lastAt: '',
+  lastReason: '',
+};
 
 const CANONICAL_WEB_HOST = normalizeEnvValue(process.env.CANONICAL_WEB_HOST) || 'pixory.top';
 const CANONICAL_WEB_ORIGIN =
@@ -1532,15 +1549,20 @@ async function withRecordingRetry(task: () => Promise<void>) {
 }
 
 // 上游出图成功后诊断记录已写入 success；后续环节失败时同步修正为 failed，保持与 generations 表口径一致。
+// 注意：message 是「给后台看的人话结论」，detail 是「真实技术根因」，两者必须分开传。
+// 早期实现把 detail 也写成 message，导致上游/转存环节的真实报错（HTTP 状态、ECONNRESET 等）
+// 被一句笼统文案覆盖，事后完全无法定位根因。
 async function markGenerationRequestFailed(
   requestId: string | undefined,
   message: string,
-  options: { preserveCredits?: boolean } = {},
+  options: { preserveCredits?: boolean; detail?: string } = {},
 ) {
   if (!requestId) return;
+  const detail = normalizeString(options.detail) || message;
+  const supabaseOptions = { preserveCredits: options.preserveCredits, detail };
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
-    await db.markGenerationRequestFailed(requestId, message, options);
+    await db.markGenerationRequestFailed(requestId, message, supabaseOptions);
     return;
   }
   await withWriteDb((db) => {
@@ -1552,7 +1574,7 @@ async function markGenerationRequestFailed(
       : `UPDATE generation_requests
          SET result_status = 'failed', result_message = ?, error_detail = ?, credits_used = 0
          WHERE id = ?`;
-    db.run(sql, [message, message, requestId]);
+    db.run(sql, [message, detail, requestId]);
   });
 }
 
@@ -5842,6 +5864,23 @@ async function createGeneratedThumbnail(buffer: Buffer, fileName: string) {
   return `/uploads/thumbnails/${thumbnailName}`;
 }
 
+// 本地磁盘兜底：未配置 R2 的开发环境，以及 R2 彻底不可用时的降级路径。
+// 目录归属 GENERATED_DIR，因此沿用既有的保留策略（IMAGE_RETENTION_DAYS）
+// 与磁盘压力保护（enforceDiskPressure），不会无限增长。
+async function writeGeneratedImageLocally(fileName: string, buffer: Buffer, thumbnailBuffer: Buffer | null) {
+  const localPath = path.join(GENERATED_DIR, fileName);
+  await fs.writeFile(localPath, buffer);
+  if (thumbnailBuffer) {
+    const thumbnailName = `${fileName.replace(/\.[^.]+$/, '')}.webp`;
+    try {
+      await fs.writeFile(path.join(THUMBNAILS_DIR, thumbnailName), thumbnailBuffer);
+    } catch (error) {
+      console.warn(`[local-upload] thumbnail failed for ${fileName}:`, error);
+    }
+  }
+  return `/uploads/generated/${fileName}`;
+}
+
 // Upload verified bytes to R2, then read the public URL before reporting success.
 async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
   const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
@@ -5858,21 +5897,11 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
 
   // 本地开发兜底：未配置 R2 时写入本地 uploads 目录，经 /uploads 静态服务访问
   if (!R2_STORAGE) {
-    const localPath = path.join(GENERATED_DIR, fileName);
-    await fs.writeFile(localPath, buffer);
-    if (thumbnailBuffer) {
-      const thumbnailName = `${fileName.replace(/\.[^.]+$/, '')}.webp`;
-      try {
-        await fs.writeFile(path.join(THUMBNAILS_DIR, thumbnailName), thumbnailBuffer);
-      } catch (error) {
-        console.warn(`[local-upload] thumbnail failed for ${fileName}:`, error);
-      }
-    }
-    return `/uploads/generated/${fileName}`;
+    return writeGeneratedImageLocally(fileName, buffer, thumbnailBuffer);
   }
 
   let imageUrl = '';
-  let lastR2Error: unknown;
+  let lastR2Error: unknown = new Error(`R2 upload failed for ${fileName}`);
   const r2RetryDelaysMs = [0, 2_000, 5_000];
   for (let attempt = 0; attempt < r2RetryDelaysMs.length; attempt += 1) {
     if (r2RetryDelaysMs[attempt] > 0) {
@@ -5884,10 +5913,26 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
       break;
     } catch (error) {
       lastR2Error = error;
+      imageUrl = '';
       console.warn(`[r2-upload] generated image attempt ${attempt + 1}/${r2RetryDelaysMs.length} failed:`, error);
-      if (attempt === r2RetryDelaysMs.length - 1) throw lastR2Error;
     }
   }
+
+  // R2 全部重试失败：上游已经出图且已按次计费，此时抛错等于「用户没图 + 上游白花 + 后台只见一句模糊话」。
+  // 降级写本地磁盘先把图交付，并保留失败原因到日志，供后续人工回迁 R2。
+  if (!imageUrl) {
+    if (!R2_LOCAL_FALLBACK || IS_VERCEL) throw lastR2Error;
+    const reason = lastR2Error instanceof Error ? lastR2Error.message : String(lastR2Error);
+    generatedImageLocalFallbacks.count += 1;
+    generatedImageLocalFallbacks.lastAt = nowIso();
+    generatedImageLocalFallbacks.lastReason = reason;
+    console.error(
+      `[r2-fallback] R2 upload failed for ${fileName}; serving the already-generated image from local disk (total=${generatedImageLocalFallbacks.count}):`,
+      lastR2Error,
+    );
+    return writeGeneratedImageLocally(fileName, buffer, thumbnailBuffer);
+  }
+
   if (thumbnailBuffer) {
     try {
       await R2_STORAGE.putVerifiedObject(`thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`, thumbnailBuffer, 'image/webp');
@@ -6671,9 +6716,16 @@ async function start() {
   // 闈欐€佹枃浠舵湇鍔′粎鏈湴鐜
   if (!IS_VERCEL) {
     if (R2_STORAGE) {
-      app.get(/^\/uploads\/(?:generated|thumbnails)\/[^/]+$/, (req, res, next) => {
+      // 历史记录里存的是 /uploads/... 路径、对象却在 R2（见 legacyAssetObjectKey），所以默认 302 过去。
+      // 例外：R2 上传失败后走本地兜底存下来的图（日志标记 [r2-fallback]），R2 里压根没有这个 key，
+      // 照旧跳转只会拿到一个裂图。因此本地磁盘确实存在该文件时，交给下面的 express.static 直接读盘。
+      app.get(/^\/uploads\/(?:generated|thumbnails)\/[^/]+$/, async (req, res, next) => {
         const key = legacyAssetObjectKey(req.path);
         if (!key) {
+          next();
+          return;
+        }
+        if (await pathExists(path.join(UPLOADS_DIR, key))) {
           next();
           return;
         }
@@ -6689,6 +6741,12 @@ async function start() {
       userStorage: USE_SUPABASE ? 'Supabase' : 'SQLite',
       databaseProvider: DATABASE_PROVIDER,
       imageStorageProvider: R2_STORAGE ? 'r2' : 'local-filesystem',
+      generatedImageStorage: {
+        localFallbackEnabled: R2_LOCAL_FALLBACK,
+        localFallbackCount: generatedImageLocalFallbacks.count,
+        lastLocalFallbackAt: generatedImageLocalFallbacks.lastAt,
+        lastLocalFallbackReason: generatedImageLocalFallbacks.lastReason,
+      },
       loadControl: generationLoadControlPayload(),
     });
   });
@@ -9105,6 +9163,11 @@ async function start() {
     let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | null = null;
     let upstreamGenerationSucceeded = false;
     let generationCreditsCharged = false;
+    // 记录「图是否已经落到持久层」。用来区分三类失败：
+    //   未落盘 → 转存失败（用户没图、也确实没扣款）
+    //   已落盘但未扣款 → 账务失败（图在，钱没扣）
+    // 没有这个标记，catch 里只能给出笼统文案，事后无法定位。
+    let generatedImagePersisted = false;
     let chargedCreditsRemaining: number | undefined;
     // 提升到外层 try 之外：上游一旦出图成功就会立刻写入 success 诊断记录（见 onAttempt），
     // 后续任何环节（转存/扣款/写历史）失败时，catch 里需要访问 successfulRequestId 同步修正该记录。
@@ -9198,6 +9261,7 @@ async function start() {
         upstreamGenerationSucceeded = true;
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         imagePath = await persistGeneratedImage(generatedImageSource);
+        generatedImagePersisted = Boolean(imagePath);
         // Only settle the reservation after the image is durably stored in R2.
         // If storage fails, the reservation is released and the user is not charged.
         if (reservedGenerationCredit) {
@@ -9392,34 +9456,37 @@ async function start() {
         releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
         reservedGenerationCredit = null;
       }
-      const chargedProcessingMessage =
-        '生成结果处理失败，已扣除积分；上游已生成，但图片保存到 R2 失败，请联系管理员处理';
-      const upstreamChargeUncertainMessage =
-        '上游已返回结果，但积分扣款状态暂时无法确认，请联系管理员核对';
+      // 三类失败必须分开报：它们的「钱和图」状态完全不同，文案混用会让后台和用户都判断错。
+      // 归因逻辑（含文案）在 generation-failure.ts 里，有单测覆盖。
+      const failureStage = resolveGenerationFailureStage({
+        upstreamSucceeded: upstreamGenerationSucceeded,
+        imagePersisted: generatedImagePersisted,
+        creditsCharged: generationCreditsCharged,
+      });
+      const rawMessage = error instanceof Error ? error.message : 'Generate failed';
+      const status = getPublicApiErrorStatus(rawMessage);
+      const upstreamFailureMessage = publicImageErrorMessage(rawMessage);
+      // result_message（后台单元格）放人话结论；error_detail（后台 tooltip）放真实技术根因，
+      // 例如 "stage=persist Download generated image failed (404)"。
+      const failureMessage = generationFailureMessage(failureStage, upstreamFailureMessage);
+      const failureDetail = generationFailureDetail(failureStage, imageErrorDetail(error));
       const orphanRequestId = requestContext?.successfulRequestId;
+      // 结构化一行，便于日志检索：以后这条记录直接能归因到什么阶段、什么错误。
+      // 模型/尺寸等配置由 generation_requests 那一行承载，这里用 requestId 关联即可。
+      console.error(`[generate-failed] stage=${failureStage} requestId=${orphanRequestId || '-'} : ${failureDetail}`);
+      console.error('[generate]', error);
       if (orphanRequestId) {
         try {
           await markGenerationRequestFailed(
             orphanRequestId,
-            generationCreditsCharged
-              ? chargedProcessingMessage
-              : upstreamGenerationSucceeded
-                ? upstreamChargeUncertainMessage
-                : '\u751f\u6210\u7ed3\u679c\u5904\u7406\u5931\u8d25\uff0c\u672c\u6b21\u672a\u6263\u53d6\u79ef\u5206',
-            { preserveCredits: generationCreditsCharged },
+            failureMessage,
+            { preserveCredits: generationCreditsCharged, detail: failureDetail },
           );
         } catch (markError) {
           console.warn('[generate] failed to mark orphaned request as failed:', markError);
         }
       }
-      console.error('[generate]', error);
-      const rawMessage = error instanceof Error ? error.message : 'Generate failed';
-      const status = getPublicApiErrorStatus(rawMessage);
-      const publicError = generationCreditsCharged
-        ? chargedProcessingMessage
-        : upstreamGenerationSucceeded
-          ? upstreamChargeUncertainMessage
-          : publicImageErrorMessage(rawMessage);
+      const publicError = failureMessage;
       setGenerationJobTerminal(queuedJobId, {
         status: 'failed',
         error: publicError,
