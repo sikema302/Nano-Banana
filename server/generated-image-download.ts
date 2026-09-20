@@ -23,10 +23,16 @@ export function isValidImageBuffer(buffer: Buffer, contentType: string) {
   const gifHeader = buffer.subarray(0, 6).toString('ascii');
   const isGif = gifHeader === 'GIF87a' || gifHeader === 'GIF89a';
   const isWebp = buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
-  const trimmedStart = buffer.subarray(0, Math.min(buffer.length, 512)).toString('utf8').trimStart();
-  const isSvg = contentType.startsWith('image/svg+xml') && (trimmedStart.startsWith('<svg') || trimmedStart.includes('<svg'));
+  // Some image CDNs return application/octet-stream (or text/plain) even for
+  // valid images. Keep validation signature-based instead of trusting MIME.
+  const isAvif = buffer.length >= 12
+    && buffer.subarray(4, 8).toString('ascii') === 'ftyp'
+    && buffer.subarray(8, 12).toString('ascii') === 'avif';
+  const trimmedStart = buffer.subarray(0, Math.min(buffer.length, 1024)).toString('utf8').replace(/^\uFEFF/, '').trimStart();
+  const isSvg = (contentType.startsWith('image/svg+xml') || trimmedStart.startsWith('<'))
+    && /<svg(?:\s|>)/i.test(trimmedStart);
 
-  return isPng || isJpeg || isGif || isWebp || isSvg;
+  return isPng || isJpeg || isGif || isWebp || isAvif || isSvg;
 }
 
 export function generatedImageDownloadError(buffer: Buffer, fallback: string) {

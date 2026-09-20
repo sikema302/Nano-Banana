@@ -18,6 +18,13 @@ test('validates image signatures instead of trusting file extensions', () => {
   assert.equal(isValidImageBuffer(Buffer.from('{"error":"not an image"}'), 'image/png'), false);
 });
 
+test('accepts valid SVG and AVIF bytes when the upstream MIME type is generic', () => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>');
+  const avif = Buffer.concat([Buffer.alloc(4), Buffer.from('ftypavif'), Buffer.alloc(8)]);
+  assert.equal(isValidImageBuffer(svg, 'application/octet-stream'), true);
+  assert.equal(isValidImageBuffer(avif, 'application/octet-stream'), true);
+});
+
 test('retries an archived image URL until real image bytes are available', async () => {
   let attempts = 0;
   const server = http.createServer((_req, res) => {
