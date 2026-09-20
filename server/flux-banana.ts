@@ -13,6 +13,7 @@ export type FluxBananaInput = {
 type FluxBananaOptions = {
   baseUrl: string;
   apiKey: string;
+  maxConcurrent?: number;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   sleepImpl?: (milliseconds: number) => Promise<void>;
@@ -200,7 +201,11 @@ async function fetchTaskPayload(
 ) {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
-    pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
+    pooledFetch(u, init || {}, {
+      baseUrl,
+      maxConcurrent: options.maxConcurrent,
+      timeoutMs: options.timeoutMs,
+    }));
   const response = await fetchImpl(url, {
     headers: authHeaders(options.apiKey),
     signal,
@@ -231,7 +236,11 @@ async function materializeImage(
   const headers = url.origin === base.origin ? authHeaders(options.apiKey) : undefined;
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const fetchImpl = options.fetchImpl || ((u: string, init?: RequestInit) =>
-    pooledFetch(u, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
+    pooledFetch(u, init || {}, {
+      baseUrl,
+      maxConcurrent: options.maxConcurrent,
+      timeoutMs: options.timeoutMs,
+    }));
   const response = await fetchImpl(url.toString(), {
     headers,
     signal,
@@ -327,7 +336,11 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const rootUrl = baseUrl.replace(/\/v1$/i, '');
   const fetchImpl = options.fetchImpl || ((url: string, init?: RequestInit) =>
-    pooledFetch(url, init || {}, { baseUrl, timeoutMs: options.timeoutMs }));
+    pooledFetch(url, init || {}, {
+      baseUrl,
+      maxConcurrent: options.maxConcurrent,
+      timeoutMs: options.timeoutMs,
+    }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15 * 60_000);
   const model = input.model || selectFluxBananaModel(input.imageSize);

@@ -31,15 +31,20 @@ function createSemaphore(maxConcurrent: number): Semaphore {
   };
 }
 
-// 每个 baseUrl 独立的并发限制器（默认最多 10 个并发）
+// 每个 baseUrl 独立的并发限制器（默认最多 16 个并发）。
+// 上游有更严格配额时，可通过调用方传入 maxConcurrent 降低该值。
 const semaphores = new Map<string, Semaphore>();
-const DEFAULT_MAX_CONCURRENT = 10;
+const DEFAULT_MAX_CONCURRENT = 16;
 
 function getSemaphore(baseUrl: string, maxConcurrent = DEFAULT_MAX_CONCURRENT): Semaphore {
-  const key = baseUrl.toLowerCase().replace(/\/+$/, '');
+  const parsedMax = Number(maxConcurrent);
+  const normalizedMax = Number.isFinite(parsedMax)
+    ? Math.max(1, Math.floor(parsedMax))
+    : DEFAULT_MAX_CONCURRENT;
+  const key = `${baseUrl.toLowerCase().replace(/\/+$/, '')}:${normalizedMax}`;
   let sem = semaphores.get(key);
   if (!sem) {
-    sem = createSemaphore(maxConcurrent);
+    sem = createSemaphore(normalizedMax);
     semaphores.set(key, sem);
   }
   return sem;

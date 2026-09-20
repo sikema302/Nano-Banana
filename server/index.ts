@@ -497,19 +497,19 @@ const boundedEnvNumber = (name: string, fallback: number, minimum: number, maxim
   const parsed = Number(process.env[name]);
   return Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : fallback));
 };
-const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 100, 1, 1_000));
+const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 200, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 10, 1, 1_000))),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 16, 1, 1_000))),
 );
-const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 100, 1, 1_000));
+const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 200, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 10, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 16, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_CONCURRENCY, boundedEnvNumber('VIDEO_MAX_CONCURRENCY', 1, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_CONCURRENCY, boundedEnvNumber('VIDEO_MAX_CONCURRENCY', 3, 1, 1_000))),
 );
 const RESOURCE_SAMPLE_INTERVAL_MS = boundedEnvNumber('RESOURCE_SAMPLE_INTERVAL_MS', 2_000, 500, 60_000);
 const resourceCpuPausePercent = boundedEnvNumber(
@@ -651,6 +651,9 @@ const FLUX_BANANA_API_BASE_URL = normalizeEnvValue(
   process.env.FLUX_BANANA_API_BASE_URL || 'https://api.ai-media.vip',
 );
 const FLUX_BANANA_API_KEY = normalizeEnvValue(process.env.FLUX_BANANA_API_KEY);
+const FLUX_BANANA_MAX_CONCURRENCY = Math.floor(
+  boundedEnvNumber('FLUX_BANANA_MAX_CONCURRENCY', 16, 1, 100),
+);
 const FLUX_BANANA_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.FLUX_BANANA_TIMEOUT_MS || 15 * 60_000),
@@ -5255,6 +5258,7 @@ async function callConfiguredImageChannel(
         const selected = await generateFluxBanana(fluxInput, {
           baseUrl: FLUX_BANANA_API_BASE_URL,
           apiKey: FLUX_BANANA_API_KEY,
+          maxConcurrent: FLUX_BANANA_MAX_CONCURRENCY,
           timeoutMs: FLUX_BANANA_TIMEOUT_MS,
         });
         await recordImageChannelAttempt({
