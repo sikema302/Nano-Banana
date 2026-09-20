@@ -1,4 +1,4 @@
-export type Image2ProviderId = 'junliai-economy' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
+export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type SeedreamProviderId = 'schat-seedream-4';
 export type GrokImageProviderId = 'junliai-grok';

@@ -49,6 +49,7 @@ import {
   MAX_REFERENCE_IMAGE_BYTES,
   MAX_REFERENCE_IMAGE_MB,
   MAX_REFERENCE_IMAGES,
+  MAX_GPT_IMAGE_25_REFERENCE_IMAGES,
 } from '../src/lib/reference-image-limits.js';
 import { createImageChannelFailover } from './image-channel-failover.js';
 import { normalizePublicApiProviderRouting } from './public-api-routing.js';
@@ -449,7 +450,7 @@ const DATABASE_MIGRATION_LOCK_FILE = path.join(ROOT_DIR, '.runtime', 'database-m
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const MAX_REFERENCE_IMAGE_COUNT = MAX_REFERENCE_IMAGES;
-const MAX_IMAGE_REQUEST_BODY_MB = Math.ceil(MAX_REFERENCE_IMAGES * MAX_REFERENCE_IMAGE_MB * 4 / 3) + 10;
+const MAX_IMAGE_REQUEST_BODY_MB = Math.ceil(Math.max(MAX_REFERENCE_IMAGES, MAX_GPT_IMAGE_25_REFERENCE_IMAGES) * MAX_REFERENCE_IMAGE_MB * 4 / 3) + 10;
 const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 2));
 const THUMBNAIL_RETENTION_DAYS = Math.max(
   ORIGINAL_IMAGE_RETENTION_DAYS,
@@ -719,6 +720,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   image2Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
@@ -5206,6 +5208,9 @@ function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSi
     if (channelId === 'junliai-economy') {
       return imageSize === '1K' ? `gpt-image-2.5-${variant}` : '';
     }
+    if (channelId === 'junliai-gpt-image-25') {
+      return imageSize === '1K' ? 'gpt-image-2.5' : '';
+    }
     if (channelId === 'junliai-firefly') {
       return imageSize === '2K' || imageSize === '4K' ? `firefly-gpt-image-2.5-${variant}` : '';
     }
@@ -5401,13 +5406,25 @@ async function callImageGeneration(input: ImageGenerationInput) {
   }
   const routing = providerRouting ? await providerRouting.get() : DEFAULT_PROVIDER_ROUTING;
   const resolution = routingResolution(effectiveInput.imageSize);
-  const configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
+  let configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
     ? enabledProviderIds(routing.bananaRoutes[resolution])
     : effectiveInput.modelId === 'Seedream_4'
       ? enabledProviderIds(routing.seedreamRoutes[resolution])
       : effectiveInput.modelId === 'Grok_Image'
         ? enabledProviderIds(routing.grokImageRoutes[resolution])
-        : enabledProviderIds(routing.image2Routes[resolution]);
+        : enabledProviderIds(routing.image2Routes[resolution])
+          .filter((channelId) => channelId !== 'junliai-gpt-image-25'
+            || effectiveInput.modelId === 'GPT-image-2.5-Flare'
+            || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
+  // 旧配置可能没有新渠道，normalize 会把它追加到末尾；2.5 的 1K
+  // 必须稳定按“变体主渠道 -> 通用 gpt-image-2.5”顺序自动切换。
+  if (resolution === '1K' && (effectiveInput.modelId === 'GPT-image-2.5-Flare' || effectiveInput.modelId === 'GPT-image-2.5-Sunburst')) {
+    const preferred = ['junliai-economy', 'junliai-gpt-image-25'];
+    configuredChannels = [
+      ...preferred.filter((id) => configuredChannels.includes(id)),
+      ...configuredChannels.filter((id) => !preferred.includes(id)),
+    ];
+  }
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -6015,7 +6032,7 @@ async function persistPublicImageSource(source: string) {
   }
 }
 
-async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
+async function persistReferenceImages(referenceImages: ReferenceUploadInput[], modelId?: string) {
   // Vercel 鐜涓嬩笉淇濆瓨鍙傝€冨浘鐗囧埌鏈湴鏂囦欢绯荤粺锛岀洿鎺ヨ繑鍥炲師濮?data URL
   if (IS_VERCEL || !STORE_REFERENCE_IMAGES) {
     return [];
@@ -6023,7 +6040,8 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
 
   const output: string[] = [];
 
-  for (const item of referenceImages.slice(0, MAX_REFERENCE_IMAGE_COUNT)) {
+  const maxCount = maxReferenceImageCountForModel(modelId);
+  for (const item of referenceImages.slice(0, maxCount)) {
     const base64 = typeof item.data === 'string' ? item.data.split(',').pop() || '' : '';
     if (!base64) continue;
 
@@ -6039,14 +6057,15 @@ async function persistReferenceImages(referenceImages: ReferenceUploadInput[]) {
 
 // 鈹€鈹€鈹€ 鏈嶅姟鍣ㄥ惎鍔?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadInput[]) {
+async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadInput[], modelId?: string) {
   if (IS_VERCEL) {
     return [];
   }
 
   const output: string[] = [];
 
-  for (const item of referenceImages.slice(0, MAX_REFERENCE_IMAGE_COUNT)) {
+  const maxCount = maxReferenceImageCountForModel(modelId);
+  for (const item of referenceImages.slice(0, maxCount)) {
     const data = normalizeString(item.data);
     if (!data.startsWith('data:image/')) continue;
 
@@ -6107,8 +6126,16 @@ function isReferenceImageInput(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
 }
 
+function maxReferenceImageCountForModel(modelId?: string) {
+  return modelId === 'Grok_Image'
+    ? 3
+    : modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+      ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+      : MAX_REFERENCE_IMAGE_COUNT;
+}
+
 function validateReferenceImageSources(referenceImages: string[], modelId?: string) {
-  const maxCount = modelId === 'Grok_Image' ? 3 : MAX_REFERENCE_IMAGE_COUNT;
+  const maxCount = maxReferenceImageCountForModel(modelId);
   if (referenceImages.length > maxCount) {
     throw new Error(`A maximum of ${maxCount} reference images is supported`);
   }
@@ -6467,8 +6494,8 @@ async function start() {
     primaryModelChains: {
       'gpt-image-2': [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL, JUNLIAI_MODEL],
       Nano_Banana_Pro: ['nano-banana-pro', 'nano-banana-2'],
-      'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'firefly-gpt-image-2.5-flare'],
-      'GPT-image-2.5-Sunburst': ['gpt-image-2.5-sunburst', 'firefly-gpt-image-2.5-sunburst'],
+      'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'gpt-image-2.5'],
+      'GPT-image-2.5-Sunburst': ['gpt-image-2.5-sunburst', 'gpt-image-2.5'],
     },
     primaryModelCapabilities: {
       [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL]: {
@@ -6484,7 +6511,12 @@ async function start() {
       'gpt-image-2.5-flare': {
         imageSizes: ['1K'],
         ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
-        maxImages: 15,
+        maxImages: 9,
+      },
+      'gpt-image-2.5': {
+        imageSizes: ['1K'],
+        ratios: ['auto', '1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4', '2:3', '21:9', '3:1', '1:4'],
+        maxImages: 9,
       },
       'firefly-gpt-image-2.5-flare': {
         imageSizes: ['1K', '2K', '4K'],
@@ -6494,7 +6526,7 @@ async function start() {
       'gpt-image-2.5-sunburst': {
         imageSizes: ['1K'],
         ratios: ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
-        maxImages: 15,
+        maxImages: 9,
       },
       'firefly-gpt-image-2.5-sunburst': {
         imageSizes: ['1K', '2K', '4K'],
@@ -6516,7 +6548,8 @@ async function start() {
         : input.modelId === 'Grok_Image'
           ? isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok')
           : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
-            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
@@ -6532,6 +6565,9 @@ async function start() {
       // GPT-image-2 / GPT-image-2.5-* 系列：firefly-* 上游走 junliai-firefly，其余走 junliai-economy
       if (upstreamModel.startsWith('firefly-gpt-image-2')) {
         return isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
+      }
+      if (upstreamModel === 'gpt-image-2.5') {
+        return isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
       }
       return isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy');
     },
@@ -8237,7 +8273,7 @@ async function start() {
         throw new Error('Reference images must be HTTPS URLs or base64 data URLs');
       }
 
-      temporaryReferenceImages = await persistTemporaryReferenceImages(toReferenceUploadInputs(dataReferenceImages));
+      temporaryReferenceImages = await persistTemporaryReferenceImages(toReferenceUploadInputs(dataReferenceImages), modelId);
       const temporaryReferenceUrls = temporaryReferenceImages
         .map((item) => toPublicAssetUrl(req, item))
         .filter((item) => item.startsWith('https://'));
@@ -9217,8 +9253,8 @@ async function start() {
       reservedGenerationCredit = { bucket: creditBucket, amount: creditsUsed };
       creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, imageSize }, requestId);
 
-      const referenceImages = await persistReferenceImages(referenceImagesInput);
-      const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput);
+      const referenceImages = await persistReferenceImages(referenceImagesInput, modelId);
+      const temporaryReferenceImages = referenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput, modelId);
       const modelReferenceImages = [
         ...referenceImagesInput
           .map((item) => normalizeString(item.data))

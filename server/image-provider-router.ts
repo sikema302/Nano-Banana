@@ -1,4 +1,4 @@
-import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
+import { MAX_GPT_IMAGE_25_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
 
 export type ImageGenerationInput = {
   prompt: string;
@@ -328,7 +328,9 @@ export function createImageProviderRouter(options: RouterOptions) {
           form.set('size', requestSize(input, upstreamModel));
           form.set('response_format', 'url');
           const blobs = await Promise.all(
-            input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
+            input.images.slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
+              ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+              : MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
           );
           const imageField = blobs.length > 1 ? 'image[]' : 'image';
           blobs.forEach((blob, index) => form.append(imageField, blob, `reference-${index + 1}.png`));

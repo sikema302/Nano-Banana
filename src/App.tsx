@@ -144,6 +144,7 @@ import {
   MAX_REFERENCE_IMAGE_BYTES,
   MAX_REFERENCE_IMAGE_MB,
   MAX_REFERENCE_IMAGES,
+  MAX_GPT_IMAGE_25_REFERENCE_IMAGES,
 } from './lib/reference-image-limits';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
@@ -269,6 +270,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   image2Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
@@ -326,6 +328,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
   'junliai-economy': 'Junli · GPT 经济版',
+  'junliai-gpt-image-25': 'Junli · GPT-image-2.5',
   'junliai-firefly': 'Junli · Firefly',
   'schat-gpt-image-2': 'Schat · GPT Image 2',
   'uselg': 'Uselg · Flux',
@@ -397,7 +400,11 @@ const emptyRecordsStats: AdminRecordsStats = {
 };
 
 function getMaxReferences(modelId: string) {
-  return modelId === 'Grok_Image' ? 3 : MAX_REFERENCE_IMAGES;
+  return modelId === 'Grok_Image'
+    ? 3
+    : modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+      ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+      : MAX_REFERENCE_IMAGES;
 }
 function getMaxReferenceMB(modelId: string) {
   return modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
@@ -5854,13 +5861,6 @@ export default function App() {
     }
   }, [isGptImage2_5, gptQuality]);
 
-  // GPT-image-2.5 Sunburst 的 2K/4K 渠道维护中：如果切到 Sunburst 时残留为 2K/4K，自动回退到 1K
-  useEffect(() => {
-    if (selectedModel === 'GPT-image-2.5-Sunburst' && (imageSize === '2K' || imageSize === '4K')) {
-      setImageSize('1K');
-    }
-  }, [selectedModel, imageSize]);
-
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
     if (modelId === 'gpt-image-2') {
@@ -7389,9 +7389,7 @@ export default function App() {
                 {imageSizeOptions.map((item) => {
                   const active = imageSize === item.value;
                   const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
-                  // GPT-image-2.5 Sunburst 的 2K/4K 渠道暂时维护，禁用并标注「维护」
-                  const isSunburstMaintenance = selectedModel === 'GPT-image-2.5-Sunburst' && (item.value === '2K' || item.value === '4K');
-                  const finalEnabled = enabled && !isSunburstMaintenance;
+                  const finalEnabled = enabled;
                   const finalActive = active && finalEnabled;
 
                   return (
@@ -7409,11 +7407,6 @@ export default function App() {
                       onClick={() => setImageSize(item.value)}
                     >
                       <span className="block text-sm font-black leading-none">{item.label}</span>
-                      {isSunburstMaintenance ? (
-                        <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-amber-400/80 bg-[linear-gradient(180deg,#a16207_0%,#713f12_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-amber-100 shadow-[0_3px_10px_rgba(180,83,9,0.32)]">
-                          {'\u7ef4\u62a4'}
-                        </span>
-                      ) : null}
                     </button>
                   );
                 })}
@@ -7926,9 +7919,7 @@ export default function App() {
                     {visibleResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
                       const enabled = isImageResolutionEnabled(providerRouting, selectedModel, item.value);
-                      // GPT-image-2.5 Sunburst 的 2K/4K 渠道暂时维护，禁用并标注「维护」
-                      const isSunburstMaintenance = selectedModel === 'GPT-image-2.5-Sunburst' && (item.value === '2K' || item.value === '4K');
-                      const finalEnabled = enabled && !isSunburstMaintenance;
+                      const finalEnabled = enabled;
                       const finalActive = active && finalEnabled;
 
                       return (
@@ -7960,11 +7951,6 @@ export default function App() {
                           {item.value === 'STANDARD' ? (
                             <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-emerald-400/80 bg-[linear-gradient(180deg,#087f5b_0%,#056044_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-emerald-100 shadow-[0_3px_10px_rgba(5,150,105,0.3)]">
                               {'\u5feb\u901f'}
-                            </span>
-                          ) : null}
-                          {isSunburstMaintenance ? (
-                            <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-rose-400/80 bg-[linear-gradient(180deg,#e11d48_0%,#9f1239_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-rose-100 shadow-[0_3px_10px_rgba(225,29,72,0.32)]">
-                              {'\u7ef4\u62a4'}
                             </span>
                           ) : null}
                         </button>
