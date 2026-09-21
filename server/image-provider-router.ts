@@ -443,9 +443,19 @@ export function createImageProviderRouter(options: RouterOptions) {
     const traceId = input.traceId || crypto.randomUUID();
     const dedicatedJunliai = input.providerRouting === 'junliai_dedicated';
     const junliaiOnly = input.providerRouting === 'junliai_only' || dedicatedJunliai;
+    // 2.5 的首个 Junli 渠道需要在同一渠道内按「变体 -> 通用 gpt-image-2.5」切换。
+    // 仍然保持 Junli-only：通用模型失败后交回外层渠道路由，不直接跳到 Visionary。
+    const allowsGptImage25Chain = junliaiOnly
+      && (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst')
+      && input.imageSize === '1K'
+      && input.upstreamModelOverride === (input.modelId === 'GPT-image-2.5-Flare'
+        ? 'gpt-image-2.5-flare'
+        : 'gpt-image-2.5-sunburst');
     const primaryConfigured = Boolean(options.baseUrl.trim() && options.authorization.trim());
     const primaryEnabled = dedicatedJunliai || (options.isPrimaryEnabled ? await options.isPrimaryEnabled(input) : true);
-    const candidates = primaryCandidates(input);
+    const candidates = primaryCandidates(allowsGptImage25Chain
+      ? { ...input, upstreamModelOverride: undefined }
+      : input);
     const primaryEligible =
       primaryConfigured &&
       primaryEnabled &&
@@ -515,7 +525,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           uncertainError.safeToFallback = false;
           throw uncertainError;
         }
-        if (junliaiOnly) {
+        if (junliaiOnly && !allowsGptImage25Chain) {
           logger.warn(`[image-provider] ${upstreamModel} failed (${failure.kind}); provider switching disabled`);
           const routeError = new Error(
             errorText(error) || 'Managed image channel failed',

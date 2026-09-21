@@ -259,6 +259,83 @@ test('falls through both Junliai models to Visionary after explicit failures', a
   assert.equal(fallbackCalls, 1);
 });
 
+test('2.5 Junliai-only route falls through to generic gpt-image-2.5', async () => {
+  const requestedModels: string[] = [];
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'gpt-image-2.5-flare',
+    primaryModelChains: {
+      'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'gpt-image-2.5'],
+    },
+    primaryModelCapabilities: {
+      'gpt-image-2.5-flare': { imageSizes: ['1K'], maxImages: 9 },
+      'gpt-image-2.5': { imageSizes: ['1K'], maxImages: 9 },
+    },
+    isPrimaryModelEnabled: async () => true,
+    timeoutMs: 1_000,
+    failureThreshold: 1,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'external-fallback',
+    fetchImpl: async (_url, init) => {
+      const model = JSON.parse(String(init?.body)).model;
+      requestedModels.push(model);
+      return model === 'gpt-image-2.5-flare'
+        ? new Response(JSON.stringify({ error: { message: 'generation failed' } }), { status: 500 })
+        : new Response(JSON.stringify({ data: [{ url: 'https://images.example/gpt-25.png' }] }));
+    },
+  });
+
+  const result = await router.generate({
+    ...input,
+    modelId: 'GPT-image-2.5-Flare',
+    imageSize: '1K',
+    providerRouting: 'junliai_only',
+    upstreamModelOverride: 'gpt-image-2.5-flare',
+  });
+
+  assert.equal(result, 'https://images.example/gpt-25.png');
+  assert.deepEqual(requestedModels, ['gpt-image-2.5-flare', 'gpt-image-2.5']);
+});
+
+test('2.5 2K route does not switch to generic gpt-image-2.5', async () => {
+  const requestedModels: string[] = [];
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2.5-flare',
+    primaryModelChains: {
+      'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'gpt-image-2.5'],
+    },
+    primaryModelCapabilities: {
+      'firefly-gpt-image-2.5-flare': { imageSizes: ['2K', '4K'], maxImages: 10 },
+    },
+    timeoutMs: 1_000,
+    failureThreshold: 1,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'external-fallback',
+    fetchImpl: async (_url, init) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      return new Response(JSON.stringify({ error: { message: 'generation failed' } }), { status: 500 });
+    },
+  });
+
+  await assert.rejects(() => router.generate({
+    ...input,
+    modelId: 'GPT-image-2.5-Flare',
+    imageSize: '2K',
+    providerRouting: 'junliai_only',
+    upstreamModelOverride: 'firefly-gpt-image-2.5-flare',
+  }));
+  assert.deepEqual(requestedModels, ['firefly-gpt-image-2.5-flare']);
+});
+
 test('independently skips either Junliai GPT model when its route is disabled', async () => {
   const createRouter = (enabledModels: Set<string>, requestedModels: string[]) => createImageProviderRouter({
     baseUrl: 'https://img.junliai.org',
