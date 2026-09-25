@@ -5418,7 +5418,7 @@ async function callImageGeneration(input: ImageGenerationInput) {
   }
   const routing = providerRouting ? await providerRouting.get() : DEFAULT_PROVIDER_ROUTING;
   const resolution = routingResolution(effectiveInput.imageSize);
-  let configuredChannels = effectiveInput.modelId === 'Nano_Banana_Pro'
+  let configuredChannels: string[] = effectiveInput.modelId === 'Nano_Banana_Pro'
     ? enabledProviderIds(routing.bananaRoutes[resolution])
     : effectiveInput.modelId === 'Seedream_4'
       ? enabledProviderIds(routing.seedreamRoutes[resolution])
