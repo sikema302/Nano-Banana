@@ -28,6 +28,15 @@ test('normalizes every configurable image and video tier', () => {
   assert.equal(getConfiguredVideoCredits(pricing, 'seedance2.5', '720p', 5), 87);
 });
 
+test('gpt-image-2-adobe is 1K-only priced at 26', () => {
+  assert.equal(DEFAULT_MODEL_CREDIT_PRICING.gptImage2Adobe.oneK, 26);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'gpt-image-2-adobe', '1K'), 26);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'gpt-image-2-adobe', '2K'), 26);
+
+  const pricing = normalizeModelCreditPricing({ gptImage2Adobe: { oneK: 30 } });
+  assert.equal(getConfiguredImageCredits(pricing, 'gpt-image-2-adobe', '1K'), 30);
+});
+
 test('invalid values fall back without dropping unrelated tiers', () => {
   const pricing = normalizeModelCreditPricing({
     nanoBanana: { oneK: -1, twoK: 88 },

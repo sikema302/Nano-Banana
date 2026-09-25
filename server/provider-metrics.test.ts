@@ -84,6 +84,96 @@ test('aggregates GPT Image attempts into STANDARD, 2K, and 4K groups', async () 
   ]);
 });
 
+test('groups GPT-image-2.5 by 1K, 2K, and 4K ignoring ratio', async () => {
+  const values = new Map<string, string>();
+  const metrics = createProviderMetrics({
+    store: {
+      get: async (key, fallback) => values.get(key) || fallback,
+      set: async (key, value) => {
+        values.set(key, value);
+      },
+    },
+  });
+
+  await metrics.record({
+    modelId: 'GPT-image-2.5-Flare',
+    provider: 'Junliai',
+    configuration: '1K / default / 1:1',
+    durationMs: 100,
+    success: true,
+  });
+  await metrics.record({
+    modelId: 'GPT-image-2.5-Flare',
+    provider: 'Junliai · firefly-gpt-image-2.5-flare',
+    configuration: '2K / default / 1:1',
+    durationMs: 200,
+    success: true,
+  });
+  await metrics.record({
+    modelId: 'GPT-image-2.5-Flare',
+    provider: 'Junliai · firefly-gpt-image-2.5-flare',
+    configuration: '2K / default / 16:9',
+    durationMs: 300,
+    success: false,
+  });
+  await metrics.record({
+    modelId: 'GPT-image-2.5-Sunburst',
+    provider: 'Junliai · firefly-gpt-image-2.5-sunburst',
+    configuration: '4K / default / 1:1',
+    durationMs: 400,
+    success: true,
+  });
+
+  assert.deepEqual((await metrics.getToday()).map((row) => [
+    row.modelId,
+    row.provider,
+    row.configuration,
+    row.callCount,
+    row.successCount,
+    row.failureCount,
+  ]), [
+    ['GPT-image-2.5-Flare', 'Junliai', '1K', 1, 1, 0],
+    ['GPT-image-2.5-Flare', 'Junliai · firefly-gpt-image-2.5-flare', '2K', 2, 1, 1],
+    ['GPT-image-2.5-Sunburst', 'Junliai · firefly-gpt-image-2.5-sunburst', '4K', 1, 1, 0],
+  ]);
+});
+
+test('groups gpt-image-2-adobe by 1K ignoring ratio', async () => {
+  const values = new Map<string, string>();
+  const metrics = createProviderMetrics({
+    store: {
+      get: async (key, fallback) => values.get(key) || fallback,
+      set: async (key, value) => {
+        values.set(key, value);
+      },
+    },
+  });
+
+  await metrics.record({
+    modelId: 'gpt-image-2-adobe',
+    provider: 'Junliai · firefly-gpt-image-2',
+    configuration: '1K / default / 1:1',
+    durationMs: 100,
+    success: true,
+  });
+  await metrics.record({
+    modelId: 'gpt-image-2-adobe',
+    provider: 'Junliai · firefly-gpt-image-2',
+    configuration: '1K / default / 16:9',
+    durationMs: 200,
+    success: true,
+  });
+
+  assert.deepEqual((await metrics.getToday()).map((row) => [
+    row.modelId,
+    row.provider,
+    row.configuration,
+    row.callCount,
+  ]), [
+    ['gpt-image-2-adobe', 'Junliai · firefly-gpt-image-2', '1K', 2],
+  ]);
+});
+
 test('combines Nano Banana metrics by 1K, 2K, and 4K', async () => {
   const values = new Map<string, string>();
   const metrics = createProviderMetrics({

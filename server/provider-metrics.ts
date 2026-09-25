@@ -44,6 +44,14 @@ function canonicalConfiguration(modelId: string, configuration: string) {
     if (imageSize === '2K') return '2K';
     return 'STANDARD';
   }
+  // GPT-image-2.5 仅支持 1K / 2K / 4K（无 STANDARD），且不收比例作为分组维度。
+  if (normalizedModel.includes('gpt-image-2.5')) {
+    if (imageSize === '2K') return '2K';
+    if (imageSize === '4K') return '4K';
+    return '1K';
+  }
+  // gpt-image-2-adobe 仅 1K，不收比例作为分组维度。
+  if (normalizedModel === 'gpt-image-2-adobe') return '1K';
   return configuration || 'default';
 }
 

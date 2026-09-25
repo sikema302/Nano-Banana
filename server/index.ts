@@ -977,6 +977,12 @@ const models = [
     description: 'xAI Grok 图像生成',
     creditsCost: 22,
   },
+  {
+    id: 'gpt-image-2-adobe',
+    name: 'gpt-image-2 Adobe',
+    description: 'Adobe Firefly 生图模型',
+    creditsCost: 26,
+  },
 ] as const;
 
 let activeModelCreditPricing: ModelCreditPricing = normalizeModelCreditPricing(DEFAULT_MODEL_CREDIT_PRICING);
@@ -2081,6 +2087,7 @@ function normalizeImageSize(value: string, modelId: string) {
   }
   if (modelId === 'Seedream_4') return value === '4K' ? '4K' : '2K';
   if (modelId === 'Grok_Image') return value === '1K' ? '1K' : '2K';
+  if (modelId === 'gpt-image-2-adobe') return '1K';
   if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
   if (value === '1K') return '1K';
   if (value === '4K') return '4K';
@@ -5198,7 +5205,8 @@ async function callMeasuredImageChannel(
 function isGptImage2Family(modelId: string) {
   return modelId === 'gpt-image-2'
     || modelId === 'GPT-image-2.5-Flare'
-    || modelId === 'GPT-image-2.5-Sunburst';
+    || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'gpt-image-2-adobe';
 }
 
 // 把 image2Routes 里的渠道映射到 junliai 上游模型名。
@@ -5416,10 +5424,13 @@ async function callImageGeneration(input: ImageGenerationInput) {
       ? enabledProviderIds(routing.seedreamRoutes[resolution])
       : effectiveInput.modelId === 'Grok_Image'
         ? enabledProviderIds(routing.grokImageRoutes[resolution])
-        : enabledProviderIds(routing.image2Routes[resolution])
-          .filter((channelId) => channelId !== 'junliai-gpt-image-25'
-            || effectiveInput.modelId === 'GPT-image-2.5-Flare'
-            || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
+        : effectiveInput.modelId === 'gpt-image-2-adobe'
+          ? enabledProviderIds(routing.image2Routes[resolution])
+              .filter((channelId) => channelId === 'junliai-firefly')
+          : enabledProviderIds(routing.image2Routes[resolution])
+            .filter((channelId) => channelId !== 'junliai-gpt-image-25'
+              || effectiveInput.modelId === 'GPT-image-2.5-Flare'
+              || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
   // 旧配置可能没有新渠道，normalize 会把它追加到末尾；2.5 的 1K
   // 必须稳定按“变体主渠道 -> 通用 gpt-image-2.5”顺序自动切换。
   if (resolution === '1K' && (effectiveInput.modelId === 'GPT-image-2.5-Flare' || effectiveInput.modelId === 'GPT-image-2.5-Sunburst')) {

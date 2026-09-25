@@ -24,10 +24,15 @@ export type GrokImageCreditPricing = {
 
 export type VideoCreditPricing = Record<VideoModelId, Partial<Record<`${VideoResolution}:${VideoDurationSeconds}`, number>>>;
 
+export type GptImage2AdobeCreditPricing = {
+  oneK: number;
+};
+
 export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
   gptImage25Flare: GptImagePricing;
   gptImage25Sunburst: GptImagePricing;
+  gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
   seedream: SeedreamCreditPricing;
   grokImage: GrokImageCreditPricing;
@@ -44,6 +49,9 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     twoKHigh: 48,
     fourK: 40,
     fourKHigh: 48,
+  },
+  gptImage2Adobe: {
+    oneK: 26,
   },
   nanoBanana: {
     oneK: 20,
@@ -113,6 +121,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const grokImage: Partial<GrokImageCreditPricing> = source.grokImage && typeof source.grokImage === 'object'
     ? source.grokImage
     : {};
+  const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
+    ? source.gptImage2Adobe
+    : {};
   const video = source.video && typeof source.video === 'object' ? source.video : {};
   const normalizeVideoModel = (modelId: VideoModelId) => {
     const defaults = DEFAULT_MODEL_CREDIT_PRICING.video[modelId];
@@ -126,6 +137,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     gptImage2: normalizeGptImagePricing(source.gptImage2),
     gptImage25Flare: normalizeGptImagePricing(source.gptImage25Flare),
     gptImage25Sunburst: normalizeGptImagePricing(source.gptImage25Sunburst),
+    gptImage2Adobe: {
+      oneK: positiveCredit(gptImage2Adobe.oneK, DEFAULT_MODEL_CREDIT_PRICING.gptImage2Adobe.oneK),
+    },
     nanoBanana: {
       oneK: positiveCredit(banana.oneK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.oneK),
       twoK: positiveCredit(banana.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.twoK),
@@ -166,6 +180,9 @@ export function getConfiguredImageCredits(
     if (imageSize === '2K') return normalizedQuality === 'high' ? gptPricing.twoKHigh : gptPricing.twoK;
     if (imageSize === '4K') return normalizedQuality === 'high' ? gptPricing.fourKHigh : gptPricing.fourK;
     return gptPricing.standard;
+  }
+  if (modelId === 'gpt-image-2-adobe') {
+    return pricing.gptImage2Adobe.oneK;
   }
   if (modelId === 'Nano_Banana_Pro') {
     if (imageSize === '1K') return pricing.nanoBanana.oneK;

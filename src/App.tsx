@@ -199,6 +199,7 @@ const defaultModels: ModelInfo[] = [
   { id: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Seedream_4', name: 'Seedream 4', description: '\u5373\u68a6 Seedream 4 \u751f\u56fe\u6a21\u578b' },
+  { id: 'gpt-image-2-adobe', name: 'gpt-image-2 Adobe', description: 'Adobe Firefly 生图模型' },
 ];
 
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9' | '5:4' | '4:5' | '3:1' | '1:4';
@@ -361,6 +362,7 @@ function displayModelName(modelName: string) {
   if (probe.includes('gpt-image-2.5')) {
     return probe.includes('sunburst') ? 'GPT-image-2.5 Sunburst' : 'GPT-image-2.5 Flare';
   }
+  if (probe.includes('gpt-image') && probe.includes('adobe')) return 'gpt-image-2 Adobe';
   if (probe.includes('gpt-image') || probe.includes('firefly')) return 'GPT-image-2';
   if (
     probe.includes('nano-banana') ||
@@ -705,6 +707,9 @@ function getModelCredits(
   }
   if (model.id === 'GPT-image-2.5-Flare' || model.id === 'GPT-image-2.5-Sunburst') {
     return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '1K', options?.quality || 'auto');
+  }
+  if (model.id === 'gpt-image-2-adobe') {
+    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '1K');
   }
   if (model.id === 'Nano_Banana_Pro') {
     const baseCredits = getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
@@ -5557,7 +5562,9 @@ export default function App() {
     ? gptImageSizeOptions.filter((item) => item.value === '2K' || item.value === '4K')
     : selectedModel === 'Grok_Image'
       ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
-      : selectedResolutionOptions;
+      : selectedModel === 'gpt-image-2-adobe'
+        ? imageSizeOptions.filter((item) => item.value === '1K')
+        : selectedResolutionOptions;
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
     : selectedModel === 'Grok_Image'
@@ -5888,6 +5895,12 @@ export default function App() {
       setDimensions((current) => current === '21:9' ? '1:1' : current);
       return;
     }
+    if (modelId === 'gpt-image-2-adobe') {
+      setImageSize('1K');
+      setGptQuality('auto');
+      setOptimizeChineseText(false);
+      return;
+    }
     setImageSize((current) => {
       if (modelId === 'Nano_Banana_Pro') return '1K';
       return current === '2K' || current === '4K' ? current : 'STANDARD';
@@ -5936,7 +5949,9 @@ export default function App() {
         ? 'Seedream_4'
         : normalizedName.includes('gpt-image-2.5')
           ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
-          : 'gpt-image-2';
+          : normalizedName.includes('adobe')
+            ? 'gpt-image-2-adobe'
+            : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
