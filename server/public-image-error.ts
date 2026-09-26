@@ -43,7 +43,7 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     /image_unsafe/,
     /gemini\s+upstream\s+error/,
     /content\s+moderation\s+rejected/,
-    /敏感|违规|违禁|不合规|色情|涉黄|暴力|审核未通过/,
+    /敏感|违规|违禁|不合规|色情|涉黄|暴力|安全审核|未通过.{0,6}审核|审核未通过/,
   ])) {
     return { category: 'sensitive_prompt', message: '提示词或参考图未通过内容审核，请修改后重试' };
   }

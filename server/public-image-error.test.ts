@@ -15,6 +15,22 @@ test('classifies sensitive prompts without exposing provider details', () => {
   assert.equal(publicImageErrorMessage('image_unsafe detected'), '提示词或参考图未通过内容审核，请修改后重试');
 });
 
+test('treats Chinese content-review rejections as sensitive prompt, not congestion', () => {
+  const cases = [
+    '内容未通过安全审核，请调整提示词或参考素材后再试',
+    '1304513464@qq.com内容未通过安全审核，请调整提示词或参考素材后再试',
+    '内容未通过审核',
+    '提示词触发安全审核拦截',
+  ];
+  for (const raw of cases) {
+    assert.deepEqual(classifyPublicImageError(raw), {
+      category: 'sensitive_prompt',
+      message: '提示词或参考图未通过内容审核，请修改后重试',
+    });
+    assert.equal(publicImageErrorMessage(raw), '提示词或参考图未通过内容审核，请修改后重试');
+  }
+});
+
 test('treats flux/gemini upstream 400 moderation as a terminating sensitive prompt', () => {
   assert.deepEqual(classifyPublicImageError('Content moderation rejected: gemini upstream error: 400'), {
     category: 'sensitive_prompt',
