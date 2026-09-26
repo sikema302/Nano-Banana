@@ -69,8 +69,11 @@ export async function downloadGeneratedImage(
   sourceUrl: string,
   retryDelaysMs = [0, 2_000, 4_000, 8_000, 12_000, 18_000, 25_000],
   timeoutMs = 120_000,
+  headers: Record<string, string> = {},
+  headerVariants: Array<Record<string, string>> = [],
 ) {
   let lastError = 'Download generated image failed';
+  let headerVariantIndex = 0;
 
   for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
     if (retryDelaysMs[attempt] > 0) await sleep(retryDelaysMs[attempt]);
@@ -81,6 +84,8 @@ export async function downloadGeneratedImage(
         headers: {
           'Cache-Control': 'no-cache',
           Pragma: 'no-cache',
+          ...headers,
+          ...(headerVariants[headerVariantIndex] || {}),
         },
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -105,7 +110,16 @@ export async function downloadGeneratedImage(
       buffer,
       response.ok ? '图像服务返回的结果不是有效图片' : `Download generated image failed (${response.status})`,
     );
-    if ((!shouldRetry(lastError) && !shouldRetryStatus(response.status)) || attempt === retryDelaysMs.length - 1) {
+    // Some providers issue separate keys for standard and HD generation. A
+    // generated URL can only be downloaded with the matching key, so switch
+    // credentials on an explicit auth failure before giving up the URL.
+    const canTryAnotherHeader = (response.status === 401 || response.status === 403)
+      && headerVariantIndex < headerVariants.length - 1;
+    if (canTryAnotherHeader) {
+      headerVariantIndex += 1;
+    }
+    if ((!canTryAnotherHeader && !shouldRetry(lastError) && !shouldRetryStatus(response.status))
+      || attempt === retryDelaysMs.length - 1) {
       throw new Error(lastError);
     }
 

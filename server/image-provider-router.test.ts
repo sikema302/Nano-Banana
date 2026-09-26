@@ -114,6 +114,48 @@ test('uses the documented native sizes for every firefly-gpt-image-2 resolution 
   );
 });
 
+test('retries Firefly URL responses as b64_json on an explicit unpriced-parameter rejection', async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const router = createImageProviderRouter({
+    baseUrl: 'https://img.junliai.org',
+    authorization: 'secret',
+    primaryModel: 'firefly-gpt-image-2',
+    timeoutMs: 1_000,
+    failureThreshold: 3,
+    transientCooldownMs: 60_000,
+    quotaCooldownMs: 60_000,
+    authCooldownMs: 60_000,
+    store: createStore(),
+    fallback: async () => 'fallback',
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({ error: { message: 'unsupported or unpriced parameters for this model' } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
+  });
+
+  assert.equal(
+    await router.generate({ ...input, imageSize: '4K', ratio: '3:2' }),
+    'data:image/png;base64,aW1hZ2U=',
+  );
+  assert.deepEqual(requests, [
+    {
+      model: 'firefly-gpt-image-2',
+      prompt: 'A lighthouse',
+      size: '3504x2336',
+      response_format: 'url',
+    },
+    {
+      model: 'firefly-gpt-image-2',
+      prompt: 'A lighthouse',
+      size: '3504x2336',
+      response_format: 'b64_json',
+    },
+  ]);
+});
+
 test('uses the cheaper Junliai gpt-image-2 first for STANDARD requests', async () => {
   const store = createStore();
   const requestedModels: string[] = [];

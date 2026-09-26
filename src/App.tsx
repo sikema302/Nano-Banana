@@ -95,9 +95,6 @@ import {
   updateAdminNotification,
   updateAdminProviderRouting,
   updateAdminModelCreditPricing,
-  fetchAdminAutomationStatus,
-  startAdminCommit,
-  startAdminDeploy,
   startGenerateImageJob,
   startGenerateVideoJob,
   type AdminDashboardStats,
@@ -126,7 +123,6 @@ import {
   type SiteNotification,
   type UserInfo,
   type UserApiKeyInfo,
-  type AdminAutomationOperation,
 } from './lib/api';
 import {
   DEFAULT_GPT_IMAGE_PRICING,
@@ -3619,11 +3615,6 @@ function AdminView({
   const [deletingCode, setDeletingCode] = useState('');
   const [rechargingCode, setRechargingCode] = useState('');
   const [reclaimingCode, setReclaimingCode] = useState('');
-  const [automation, setAutomation] = useState<AdminAutomationOperation | null>(null);
-  const [automationRunning, setAutomationRunning] = useState(false);
-  const [automationMessage, setAutomationMessage] = useState('');
-  const [automationBusy, setAutomationBusy] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const [rechargingUserId, setRechargingUserId] = useState('');
   const [rechargeUser, setRechargeUser] = useState<AdminUserSummary | null>(null);
   const [rechargeAmounts, setRechargeAmounts] = useState<CreditBalances>({ gpt: 0, banana: 0, general: 0 });
@@ -3894,38 +3885,6 @@ function AdminView({
   useEffect(() => {
     setRecordPage(1);
   }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
-
-  useEffect(() => {
-    let disposed = false;
-    const load = async () => {
-      try {
-        const payload = await fetchAdminAutomationStatus();
-        if (!disposed) {
-          setAutomation(payload.operation);
-          setAutomationRunning(payload.running);
-          setPendingFiles(payload.pendingFiles || []);
-        }
-      } catch { /* best effort */ }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 2_000);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, []);
-
-  async function runAutomation(kind: 'commit' | 'deploy') {
-    setAutomationBusy(true);
-    try {
-      const payload = kind === 'commit'
-        ? await startAdminCommit(automationMessage.trim() || undefined)
-        : await startAdminDeploy(automationMessage.trim() || undefined);
-      setAutomation(payload.operation);
-      setAutomationRunning(true);
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : '操作启动失败');
-    } finally {
-      setAutomationBusy(false);
-    }
-  }
 
   useEffect(() => {
     if (section === 'apiKeys') return;
@@ -4298,54 +4257,6 @@ function AdminView({
                     </tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-            <div className="rounded-[22px] border border-amber-300/15 bg-amber-500/[0.04] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-black text-white">代码与部署</h2>
-                  <p className="mt-1 text-xs text-zinc-500">仅管理员可见。部署会执行检查、推送并等待 GitHub Actions 滚动更新完成。</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <input
-                    className="input min-h-9 w-56 px-3 py-2 text-xs"
-                    placeholder="提交说明（可选）"
-                    value={automationMessage}
-                    onChange={(event) => setAutomationMessage(event.target.value.slice(0, 200))}
-                    disabled={automationRunning || automationBusy}
-                  />
-                  <button type="button" className="btn-secondary min-h-9 px-3 text-xs font-black" disabled={automationRunning || automationBusy} onClick={() => void runAutomation('commit')}>
-                    提交代码
-                  </button>
-                  <button type="button" className="btn-primary min-h-9 px-3 text-xs font-black" disabled={automationRunning || automationBusy} onClick={() => void runAutomation('deploy')}>
-                    {automationRunning && automation?.kind === 'deploy' ? '部署中…' : '提交并部署'}
-                  </button>
-                </div>
-              </div>
-              {automation ? (
-                <div className="mt-3 rounded-xl border border-white/8 bg-black/35 p-3">
-                  <div className="flex items-center justify-between text-[11px] font-bold text-zinc-300">
-                    <span>{automation.kind === 'deploy' ? '部署任务' : '提交任务'} · {automation.status}</span>
-                    <span>{new Date(automation.startedAt).toLocaleString('zh-CN')}</span>
-                  </div>
-                  {automation.status === 'succeeded' ? (
-                    <div className="mt-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-200">
-                      {automation.kind === 'deploy' ? '部署成功：服务器已完成滚动更新，健康检查通过。' : '提交成功：代码已提交到当前分支。'}
-                    </div>
-                  ) : automation.status === 'failed' ? (
-                    <div className="mt-2 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-black text-rose-200">
-                      {automation.kind === 'deploy' ? '部署失败：服务器未完成更新，请查看下方错误日志。' : '提交失败：代码未完成提交，请查看下方错误日志。'}
-                    </div>
-                  ) : (
-                    <div className="mt-2 rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs font-black text-sky-200">
-                      {automation.kind === 'deploy' ? '部署进行中，请保持页面打开。' : '正在提交代码，请稍候。'}
-                    </div>
-                  )}
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-zinc-500">{automation.error || automation.output || '等待输出…'}</pre>
-                </div>
-              ) : null}
-              <div className="mt-3 text-[10px] text-zinc-500">
-                {pendingFiles.length > 0 ? `待提交文件（${pendingFiles.length}）：${pendingFiles.join(' · ')}` : '当前没有待提交文件'}
               </div>
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">

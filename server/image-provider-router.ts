@@ -311,13 +311,14 @@ export function createImageProviderRouter(options: RouterOptions) {
     let requestUrl = '';
     let httpStatus = 0;
     let responseBody = '';
+    let responseFormat = 'url';
     try {
       const baseUrl = options.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '');
       const headers: Record<string, string> = {
         Authorization: normalizeAuthorization(options.authorization),
       };
 
-      const buildRequest = async () => {
+      const buildRequest = async (requestedResponseFormat = 'url') => {
         let body: BodyInit;
         let endpoint = '/v1/images/generations';
         if (input.images.length) {
@@ -326,7 +327,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           form.set('model', upstreamModel);
           form.set('prompt', input.prompt);
           form.set('size', requestSize(input, upstreamModel));
-          form.set('response_format', 'url');
+          form.set('response_format', requestedResponseFormat);
           const blobs = await Promise.all(
             input.images.slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
               ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
@@ -341,21 +342,19 @@ export function createImageProviderRouter(options: RouterOptions) {
             model: upstreamModel,
             prompt: input.prompt,
             size: requestSize(input, upstreamModel),
-            response_format: 'url',
+            response_format: requestedResponseFormat,
           });
         }
         return { url: `${baseUrl}${endpoint}`, body };
       };
 
-      // 网络层失败（fetch reject，未拿到任何 HTTP 响应）会直接抛 "fetch failed"，
-      // 此时自动重试 1 次以缓解上游瞬时网络抖动；图片为成功后扣费，重试不会重复扣钱。
-      let response: globalThis.Response;
-      {
-        const first = await buildRequest();
+      const sendRequest = async (requestedResponseFormat: string) => {
+        responseFormat = requestedResponseFormat;
+        const first = await buildRequest(requestedResponseFormat);
         requestUrl = first.url;
         requestSent = true;
         try {
-          response = await fetchImpl(requestUrl, {
+          return await fetchImpl(requestUrl, {
             method: 'POST',
             headers,
             body: first.body,
@@ -370,24 +369,50 @@ export function createImageProviderRouter(options: RouterOptions) {
           logger.warn(
             `[image-provider] network error on ${upstreamModel}; retrying once: ${errorCauseText(networkError)}`,
           );
-          const retry = await buildRequest();
+          const retry = await buildRequest(requestedResponseFormat);
           requestUrl = retry.url;
-          response = await fetchImpl(requestUrl, {
+          return fetchImpl(requestUrl, {
             method: 'POST',
             headers,
             body: retry.body,
             signal: controller.signal,
           });
         }
-      }
+      };
+
+      const isFireflyUrlFormatRejection = (status: number, raw: string) =>
+        status === 400
+        && upstreamModel.startsWith('firefly-gpt-image-2')
+        && responseFormat === 'url'
+        && /unsupported\s+or\s+unpriced\s+parameters?\s+for\s+this\s+model/i.test(raw);
+
+      // 网络层失败（fetch reject，未拿到任何 HTTP 响应）会直接抛 "fetch failed"，
+      // 此时自动重试 1 次以缓解上游瞬时网络抖动；图片为成功后扣费，重试不会重复扣钱。
+      let response = await sendRequest('url');
       httpStatus = response.status;
-      const raw = await response.text();
+      let raw = await response.text();
       responseBody = raw.slice(0, 600);
       let payload: ImageApiPayload = {};
       try {
         payload = raw ? JSON.parse(raw) as ImageApiPayload : {};
       } catch {
         // The status and a short response excerpt are sufficient for failover classification.
+      }
+      // Junliai's public contract documents both URL and base64 responses, but some
+      // Firefly upstream routes reject URL mode as an unpriced parameter. Retry only
+      // that explicit 400 so ordinary validation/quota errors still fail over normally.
+      if (!response.ok && isFireflyUrlFormatRejection(response.status, raw)) {
+        logger.warn(`[image-provider] ${upstreamModel} rejected response_format=url; retrying with b64_json`);
+        response = await sendRequest('b64_json');
+        httpStatus = response.status;
+        raw = await response.text();
+        responseBody = raw.slice(0, 600);
+        payload = {};
+        try {
+          payload = raw ? JSON.parse(raw) as ImageApiPayload : {};
+        } catch {
+          // The status and a short response excerpt are sufficient for failover classification.
+        }
       }
       if (!response.ok) {
         const error = new Error(
@@ -413,6 +438,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       logger.error(
         `[image-provider] FAILED traceId=${input.traceId || ''} model=${input.modelId} upstream=${upstreamModel} ` +
         `size=${requestSize(input, upstreamModel)} ratio=${input.ratio} imageSize=${input.imageSize} ` +
+        `response_format=${responseFormat} ` +
         `images=${input.images.length} prompt="${input.prompt.slice(0, 200)}" ` +
         `url=${requestUrl || '(not sent)'} http=${httpStatus} body=${responseBody || ''} ` +
         `cause=${errorCauseText(error)} err=${errorText(error)}`,

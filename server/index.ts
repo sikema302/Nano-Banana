@@ -680,6 +680,29 @@ function selectUselgApiKey(imageSize: string) {
   if (size === '2K' || size === '4K') return USSELG_HD_KEY || USSELG_STANDARD_KEY;
   return USSELG_STANDARD_KEY;
 }
+
+// Uselg(FluxPort) 返回的图片是带鉴权的临时下载 URL；裸请求会 401/403。
+// 转存下载时按域名识别 uselg 结果，附上同账号的 Bearer 头，避免「上游已出图但转存失败」。
+function uselgDownloadHeaderVariants(sourceUrl: string): Array<Record<string, string>> {
+  let host = '';
+  try {
+    host = new URL(sourceUrl).hostname.toLowerCase();
+  } catch {
+    return [];
+  }
+  const isUselg = host === 'uselg.top' || host.endsWith('.uselg.top') || host.includes('ai-media.vip');
+  if (!isUselg) return [];
+  const keys = [USSELG_STANDARD_KEY, USSELG_HD_KEY]
+    .map((key) => normalizeEnvValue(key))
+    .filter((key, index, all) => Boolean(key) && all.indexOf(key) === index);
+  return keys.map((key) => ({
+    Authorization: /^Bearer\s/i.test(key) ? key : `Bearer ${key}`,
+  }));
+}
+
+function uselgDownloadHeaders(sourceUrl: string): Record<string, string> {
+  return uselgDownloadHeaderVariants(sourceUrl)[0] || {};
+}
 // Previous Chat2API primary integration is intentionally disabled:
 // CHAT2API_PRIMARY_ENABLED / CHAT2API_BASE_URL / CHAT2API_AUTHORIZATION
 const JUNLIAI_PRIMARY_ENABLED = !['0', 'false', 'no', 'off'].includes(
@@ -6027,7 +6050,13 @@ async function persistGeneratedImage(source: string) {
     throw new Error('Generated image source must be an HTTPS URL or image data');
   }
 
-  const { buffer, contentType } = await downloadGeneratedImage(normalizedSource);
+  const { buffer, contentType } = await downloadGeneratedImage(
+    normalizedSource,
+    undefined,
+    undefined,
+    uselgDownloadHeaders(normalizedSource),
+    uselgDownloadHeaderVariants(normalizedSource),
+  );
   const extension = contentType.startsWith('image/')
     ? fileExtensionFromMimeType(contentType.split(';')[0])
     : fileExtensionFromUrl(normalizedSource);
