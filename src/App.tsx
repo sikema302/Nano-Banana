@@ -7525,11 +7525,13 @@ export default function App() {
           </nav>
 
           <div className="flex w-full items-center justify-between gap-0.5 sm:w-auto sm:justify-end">
+            {/* 客服按钮已按需求隐藏 */}
             <button
               className="group hidden min-h-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-bold text-zinc-400 transition hover:bg-sky-400/10 hover:text-sky-200 md:inline-flex"
               type="button"
               title="复制客服微信 lzp983813676"
               onClick={() => void handleCopyWechat()}
+              style={{ display: 'none' }}
             >
               <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-400/10 text-sky-300 transition group-hover:bg-sky-400/20">
                 <MessageCircle size={10} strokeWidth={2.1} />
@@ -7598,23 +7600,32 @@ export default function App() {
             ) : null}
             {user ? (
               <div className="relative flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
-                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)]">
-                  <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
-                  <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
-                </div>
+                {/* 仅保留头像，用户名/角色/积分文本已按要求隐藏，点击头像弹出弹窗 */}
                 <button
-                  className="min-w-0 text-left leading-tight"
+                  className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)] transition hover:border-white/30"
                   type="button"
+                  aria-label={user.username}
+                  title={user.username}
                   onClick={() => setCreditDetailsOpen((current) => !current)}
                 >
-                  <p className="max-w-24 truncate text-[13px] font-semibold text-zinc-100">{user.username}</p>
-                  <p className="mt-0.5 whitespace-nowrap text-[10px] font-medium text-zinc-500">
-                    {user.isAdmin ? '管理员' : '正式用户'} <span className="px-0.5">•</span> 积分{user.creditsRemaining ?? 0}
-                  </p>
+                  <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
+                  <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
                 </button>
                 {creditDetailsOpen ? (
-                  <div className="absolute right-8 top-10 z-[80] w-56 rounded-2xl border border-white/12 bg-[#11111a] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
-                    <div className="flex items-center justify-between">
+                  <div className="absolute right-0 top-10 z-[80] w-56 rounded-2xl border border-white/12 bg-[#11111a] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+                    <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+                      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200">
+                        <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
+                        <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-semibold text-zinc-100">{user.username}</p>
+                        <p className="mt-0.5 whitespace-nowrap text-[10px] font-medium text-zinc-500">
+                          {user.isAdmin ? '管理员' : '正式用户'} <span className="px-0.5">•</span> 积分{user.creditsRemaining ?? 0}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
                       <span className="text-xs font-black text-white">积分明细</span>
                       <span className="text-xs font-black text-sky-200">合计 {user.creditsRemaining ?? 0}</span>
                     </div>
@@ -7624,17 +7635,17 @@ export default function App() {
                       <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">通用积分</span><strong className="text-white">{user.creditBalances?.general ?? user.creditsRemaining ?? 0}</strong></div>
                     </div>
                     <p className="mt-3 text-[10px] leading-4 text-zinc-500">专用积分仅用于对应模型；专用积分不足时会自动使用通用积分。</p>
+                    <button
+                      className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-black text-zinc-300 transition hover:border-rose-400/25 hover:bg-rose-400/10 hover:text-rose-100"
+                      type="button"
+                      title="退出登录"
+                      aria-label="退出登录"
+                      onClick={logout}
+                    >
+                      <LogOut size={14} strokeWidth={2.2} /> {'\u9000\u51fa\u767b\u5f55'}
+                    </button>
                   </div>
                 ) : null}
-                <button
-                  className="btn-ghost min-h-0 shrink-0 px-1.5 py-1.5 text-zinc-500 hover:text-white"
-                  type="button"
-                  title="退出登录"
-                  aria-label="退出登录"
-                  onClick={logout}
-                >
-                  <LogOut size={16} />
-                </button>
               </div>
             ) : (
               <button
