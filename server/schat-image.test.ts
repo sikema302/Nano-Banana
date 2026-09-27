@@ -69,6 +69,25 @@ test('falls back to URL mode only when the requested response format is explicit
   assert.equal(bodies[1].response_format, 'url');
 });
 
+test('does not hide unrelated unsupported-parameter errors behind URL transfer failures', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  await assert.rejects(
+    () => generateSchatImage(baseInput, {
+      baseUrl: 'https://uselg.top/v1',
+      apiKey: 'secret',
+      model: 'gpt-image-2',
+      responseFormat: 'b64_json',
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ error: { message: 'unsupported or unpriced parameters for this model' } }), { status: 400 });
+      },
+    }),
+    (error: unknown) => (error as { status?: number }).status === 400,
+  );
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].response_format, 'b64_json');
+});
+
 test('uses the configured banana model as a compatible 1K channel', async () => {
   let body: Record<string, unknown> = {};
   await generateSchatImage({ ...baseInput, ratio: '16:9' }, {
@@ -210,6 +229,35 @@ test('polls a task with no status field and reads b64_json from assets', async (
   });
   assert.equal(source, 'data:image/png;base64,aGVsbG8=');
   assert.equal(polls, 1);
+});
+
+test('prefers FluxPort signed asset URLs over protected data URLs', async () => {
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://uselg.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    sleepImpl: async () => undefined,
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          execution_mode: 'async',
+          task_id: 'signed-task',
+          status_url: '/v1/images/tasks/signed-task',
+          assets: [],
+        }));
+      }
+      assert.equal(String(url), 'https://uselg.top/v1/images/tasks/signed-task');
+      return new Response(JSON.stringify({
+        status: 'success',
+        data: [{ url: 'https://uselg.top/protected/result.png' }],
+        assets: [{
+          url: 'https://uselg.top/protected/result.png',
+          signed_url: 'https://cdn.uselg.top/signed/result.png',
+        }],
+      }));
+    },
+  });
+  assert.equal(source, 'https://cdn.uselg.top/signed/result.png');
 });
 
 test('allows failover only after an accepted Schat task explicitly fails', async () => {

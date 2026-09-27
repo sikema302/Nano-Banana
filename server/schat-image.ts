@@ -101,6 +101,14 @@ function toDataUrl(value: string, mimeType?: string) {
 function imageSourceFromList(list: unknown): string {
   if (!Array.isArray(list)) return '';
   for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    // Prefer the documented public asset URL regardless of its position in
+    // the assets array, before considering legacy/protected representations.
+    if (typeof record.signed_url === 'string' && record.signed_url) return record.signed_url;
+    if (typeof record.signedUrl === 'string' && record.signedUrl) return record.signedUrl;
+  }
+  for (const item of list) {
     if (typeof item === 'string') return item;
     if (!item || typeof item !== 'object') continue;
     const record = item as Record<string, unknown>;
@@ -118,6 +126,18 @@ function imageSourceFromList(list: unknown): string {
 }
 
 function extractGeneratedImage(payload: SchatImagePayload): string {
+  // For async FluxPort responses, assets[].signed_url is the documented
+  // downloadable result. It must win over data[].url, which may require the
+  // task's Authorization header and can fail during durable transfer.
+  const signedAssetSource = imageSourceFromList(payload.assets);
+  if (signedAssetSource) {
+    const isSigned = Array.isArray(payload.assets) && payload.assets.some((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      return Boolean(record.signed_url || record.signedUrl);
+    });
+    if (isSigned) return signedAssetSource;
+  }
   if (Array.isArray(payload.data)) {
     const source = imageSourceFromList(payload.data);
     if (source) return source;
@@ -128,8 +148,7 @@ function extractGeneratedImage(payload: SchatImagePayload): string {
     const nestedAssets = imageSourceFromList(record.assets);
     if (nestedAssets) return nestedAssets;
   }
-  const assetSource = imageSourceFromList(payload.assets);
-  if (assetSource) return assetSource;
+  if (signedAssetSource) return signedAssetSource;
   if (Array.isArray(payload.output)) return imageSourceFromList(payload.output);
   if (payload.output && typeof payload.output === 'object') {
     const record = payload.output as Record<string, unknown>;
@@ -273,7 +292,7 @@ export async function generateSchatImage(
     const isResponseFormatRejection = (status: number, raw: string) =>
       status === 400
       && Boolean(responseFormat)
-      && /response[_ -]?format|unsupported\s+or\s+unpriced/i.test(raw);
+      && /response[_ -]?format/i.test(raw);
 
     requestSent = true;
     let body = await buildBody(responseFormat);
