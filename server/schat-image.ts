@@ -5,6 +5,7 @@ type SchatImageOptions = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  responseFormat?: 'url' | 'b64_json';
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (milliseconds: number) => Promise<void>;
@@ -239,34 +240,63 @@ export async function generateSchatImage(
       Authorization: `Bearer ${options.apiKey.trim().replace(/^Bearer\s+/i, '')}`,
     };
     const size = schatImageSize(input.imageSize, input.ratio);
+    const responseFormat = options.responseFormat;
     let endpoint = '/v1/images/generations';
-    let body: BodyInit;
+    const buildBody = async (requestedResponseFormat = responseFormat): Promise<BodyInit> => {
+      let nextBody: BodyInit;
 
-    if (input.images.length > 0) {
-      endpoint = '/v1/images/edits';
-      const form = new FormData();
-      form.set('model', options.model.trim());
-      form.set('prompt', input.prompt);
-      form.set('size', size);
-      const blobs = await Promise.all(
-        input.images.slice(0, MAX_REFERENCE_IMAGES).map((image) => referenceBlob(image, controller.signal, fetchImpl)),
-      );
-      const field = blobs.length > 1 ? 'image[]' : 'image';
-      blobs.forEach((blob, index) => form.append(field, blob, `reference-${index + 1}.png`));
-      body = form;
-    } else {
-      headers['Content-Type'] = 'application/json';
-      body = JSON.stringify({ model: options.model.trim(), prompt: input.prompt, size });
-    }
+      if (input.images.length > 0) {
+        endpoint = '/v1/images/edits';
+        const form = new FormData();
+        form.set('model', options.model.trim());
+        form.set('prompt', input.prompt);
+        form.set('size', size);
+        if (requestedResponseFormat) form.set('response_format', requestedResponseFormat);
+        const blobs = await Promise.all(
+          input.images.slice(0, MAX_REFERENCE_IMAGES).map((image) => referenceBlob(image, controller.signal, fetchImpl)),
+        );
+        const field = blobs.length > 1 ? 'image[]' : 'image';
+        blobs.forEach((blob, index) => form.append(field, blob, `reference-${index + 1}.png`));
+        nextBody = form;
+      } else {
+        headers['Content-Type'] = 'application/json';
+        nextBody = JSON.stringify({
+          model: options.model.trim(),
+          prompt: input.prompt,
+          size,
+          ...(requestedResponseFormat ? { response_format: requestedResponseFormat } : {}),
+        });
+      }
+      return nextBody;
+    };
+
+    const isResponseFormatRejection = (status: number, raw: string) =>
+      status === 400
+      && Boolean(responseFormat)
+      && /response[_ -]?format|unsupported\s+or\s+unpriced/i.test(raw);
 
     requestSent = true;
-    const response = await fetchImpl(`${baseUrl}${endpoint}`, {
+    let body = await buildBody(responseFormat);
+    let response = await fetchImpl(`${baseUrl}${endpoint}`, {
       method: 'POST',
       headers,
       body,
       signal: controller.signal,
     });
-    const raw = await response.text();
+    let raw = await response.text();
+    // Uselg/OpenAI-compatible gateways may expose only URL output on some
+    // routes. Prefer inline base64 when configured, but retain compatibility
+    // by retrying once without response_format after an explicit 400.
+    if (!response.ok && isResponseFormatRejection(response.status, raw)) {
+      body = await buildBody('url');
+      response = await fetchImpl(`${baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      raw = await response.text();
+    }
     let payload: SchatImagePayload = {};
     try {
       payload = raw ? JSON.parse(raw) as SchatImagePayload : {};

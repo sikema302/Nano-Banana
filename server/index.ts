@@ -5379,6 +5379,9 @@ async function callConfiguredImageChannel(
           baseUrl: USSELG_BASE_URL,
           apiKey: selectUselgApiKey(input.imageSize),
           model: USSELG_MODEL,
+          // Avoid the provider's short-lived image URL. Inline output is
+          // transferred directly into our durable storage pipeline.
+          responseFormat: 'b64_json',
           timeoutMs: USSELG_TIMEOUT_MS,
         }),
       );

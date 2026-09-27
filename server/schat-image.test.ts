@@ -32,6 +32,43 @@ test('calls Schat GPT Image 2 generations and parses b64_json', async () => {
   });
 });
 
+test('sends the requested response format so Uselg can return inline image data', async () => {
+  let body: Record<string, unknown> = {};
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://uselg.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    responseFormat: 'b64_json',
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    },
+  });
+  assert.equal(source, 'data:image/png;base64,aW1hZ2U=');
+  assert.equal(body.response_format, 'b64_json');
+});
+
+test('falls back to URL mode only when the requested response format is explicitly rejected', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://uselg.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    responseFormat: 'b64_json',
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (bodies.length === 1) {
+        return new Response(JSON.stringify({ error: { message: 'unsupported response_format b64_json' } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ data: [{ url: 'https://files.example.com/image.png' }] }));
+    },
+  });
+  assert.equal(source, 'https://files.example.com/image.png');
+  assert.equal(bodies[0].response_format, 'b64_json');
+  assert.equal(bodies[1].response_format, 'url');
+});
+
 test('uses the configured banana model as a compatible 1K channel', async () => {
   let body: Record<string, unknown> = {};
   await generateSchatImage({ ...baseInput, ratio: '16:9' }, {
