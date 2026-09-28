@@ -1078,11 +1078,12 @@ export async function incrementGenerationCount(
   if (error) throw new Error(`Increment generation count failed: ${error.message}`);
 }
 
-export async function getUserGenerations(userId: string): Promise<GenerationRow[]> {
+export async function getUserGenerations(userId: string, extraUserIds: string[] = []): Promise<GenerationRow[]> {
+  const ids = [userId, ...extraUserIds];
   const { data, error } = await getSupabase()
     .from('generations')
     .select('*')
-    .eq('user_id', userId)
+    .in('user_id', ids)
     .order('created_at', { ascending: false });
   if (error) throw new Error(`Fetch generations failed: ${error.message}`);
   return hydrateGenerationApiRequestMs((data || []).map((row) => toGenerationRow(row as Record<string, unknown>)));

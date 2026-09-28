@@ -1967,11 +1967,25 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
   }
 
   for (const summary of summaryByUserId.values()) {
-    const current = userMap.get(summary.userId);
     const apiKeyId = summary.userId.startsWith('api-key:')
       ? summary.userId.slice('api-key:'.length)
       : '';
     const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+    // 账户型 Key 归还给归属账号，生成量并入该账号一行（与网页端合并计数）
+    if (apiKey && apiKey.ownerUserId) {
+      const owner = userMap.get(apiKey.ownerUserId);
+      if (owner) {
+        owner.generations += summary.generations;
+        owner.creditsUsed += summary.creditsUsed;
+        if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+          owner.lastGeneratedAt = summary.lastGeneratedAt;
+        }
+        continue;
+      }
+    }
+
+    const current = userMap.get(summary.userId);
     const apiKeyCredits = apiKey
       ? resolveApiKeyDisplayCredits(
           apiKey,
@@ -3422,6 +3436,13 @@ async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
     const raw = getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]');
     return normalizeApiKeyRecords(parseJsonSetting(raw, []));
   });
+}
+
+async function ownedApiKeyUserIds(userId: string): Promise<string[]> {
+  const records = await readPublicApiKeyRecords();
+  return records
+    .filter((record) => record.billingMode === 'account' && record.ownerUserId === userId)
+    .map((record) => `api-key:${record.id}`);
 }
 
 async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
@@ -6347,10 +6368,11 @@ function storedAssetMatchesRequest(req: Request, storedSource: string, requested
 
 async function findOwnedAssetSource(req: Request, requestedSource: string) {
   const userId = req.authUser!.userId;
+  const apiKeyUserIds = await ownedApiKeyUserIds(userId);
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     const [generations, images] = await Promise.all([
-      db.getUserGenerations(userId),
+      db.getUserGenerations(userId, apiKeyUserIds),
       db.getUserImages(userId),
     ]);
     return [...generations, ...images]
@@ -6360,14 +6382,15 @@ async function findOwnedAssetSource(req: Request, requestedSource: string) {
 
   const sources = await withReadDb((db) => {
     ensureSchema(db);
+    const ownedIds = [userId, ...apiKeyUserIds];
     return runQuery<{ image_path: string }>(
       db,
       `
-        SELECT image_path FROM generations WHERE user_id = ?
+        SELECT image_path FROM generations WHERE user_id IN (${ownedIds.map(() => '?').join(',')})
         UNION
         SELECT image_path FROM images WHERE user_id = ?
       `,
-      [userId, userId],
+      [...ownedIds, userId],
     );
   });
   return sources
@@ -9590,11 +9613,12 @@ async function start() {
 
   app.get('/api/user/history', requireAuth, async (req, res) => {
     const userId = req.authUser!.userId;
+    const apiKeyUserIds = await ownedApiKeyUserIds(userId);
 
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const generations = await db.getUserGenerations(userId);
+        const generations = await db.getUserGenerations(userId, apiKeyUserIds);
         const history = generations.map((row) => toGeneration({
           id: row.id,
           user_id: row.user_id,
@@ -9616,15 +9640,16 @@ async function start() {
 
       const history = await withReadDb((db) => {
         ensureSchema(db);
+        const ownedIds = [userId, ...apiKeyUserIds];
         return runQuery<Record<string, unknown>>(
           db,
           `
             SELECT id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at
             FROM generations
-            WHERE user_id = ?
+            WHERE user_id IN (${ownedIds.map(() => '?').join(',')})
             ORDER BY datetime(created_at) DESC, id DESC
           `,
-          [userId],
+          ownedIds,
         ).map(toGeneration);
       });
 
@@ -9858,11 +9883,24 @@ async function start() {
         }
 
         for (const summary of summaryByUserId.values()) {
-          const current = userMap.get(summary.userId);
           const apiKeyId = summary.userId.startsWith('api-key:')
             ? summary.userId.slice('api-key:'.length)
             : '';
           const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+          if (apiKey && apiKey.ownerUserId) {
+            const owner = userMap.get(apiKey.ownerUserId);
+            if (owner) {
+              owner.generations += summary.generations;
+              owner.creditsUsed += summary.creditsUsed;
+              if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+                owner.lastGeneratedAt = summary.lastGeneratedAt;
+              }
+              continue;
+            }
+          }
+
+          const current = userMap.get(summary.userId);
           const apiKeyCredits = apiKey
             ? resolveApiKeyDisplayCredits(
                 apiKey,
@@ -10059,11 +10097,24 @@ async function start() {
         }
 
         for (const summary of summaryByUserId.values()) {
-          const current = userMap.get(summary.userId);
           const apiKeyId = summary.userId.startsWith('api-key:')
             ? summary.userId.slice('api-key:'.length)
             : '';
           const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+          if (apiKey && apiKey.ownerUserId) {
+            const owner = userMap.get(apiKey.ownerUserId);
+            if (owner) {
+              owner.generations += summary.generations;
+              owner.creditsUsed += summary.creditsUsed;
+              if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+                owner.lastGeneratedAt = summary.lastGeneratedAt;
+              }
+              continue;
+            }
+          }
+
+          const current = userMap.get(summary.userId);
           const apiKeyCredits = apiKey
             ? resolveApiKeyDisplayCredits(
                 apiKey,
@@ -10774,14 +10825,21 @@ async function start() {
           db.getRecentGenerationUsageRows(24 * 7),
         ]);
         const matchedInviteUserIds = new Set(matchedInvites.codes.map((item) => normalizeString(item.redeemed_by)).filter(Boolean));
+        const trendOwnerByUserId = new Map<string, string>();
+        for (const key of await readPublicApiKeyRecords()) {
+          if (key.billingMode === 'account' && key.ownerUserId) {
+            trendOwnerByUserId.set(`api-key:${key.id}`, key.ownerUserId);
+          }
+        }
         const trendByUserId = new Map<string, number[]>();
         for (const record of trendRecords) {
-          const buckets = trendByUserId.get(record.user_id) || Array.from({ length: 7 }, () => 0);
+          const bucketUserId = trendOwnerByUserId.get(record.user_id) || record.user_id;
+          const buckets = trendByUserId.get(bucketUserId) || Array.from({ length: 7 }, () => 0);
           const diff = Math.floor((Date.now() - new Date(record.created_at).getTime()) / (24 * 60 * 60 * 1000));
           if (diff >= 0 && diff < 7) {
             buckets[6 - diff] += Number(record.credits_used || 0);
           }
-          trendByUserId.set(record.user_id, buckets);
+          trendByUserId.set(bucketUserId, buckets);
         }
 
         const filteredUsers = users
