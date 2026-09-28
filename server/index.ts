@@ -505,7 +505,7 @@ const PUBLIC_ASYNC_CONCURRENCY = Math.max(
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 200, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 20, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 25, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
@@ -652,7 +652,7 @@ const FLUX_BANANA_API_BASE_URL = normalizeEnvValue(
 );
 const FLUX_BANANA_API_KEY = normalizeEnvValue(process.env.FLUX_BANANA_API_KEY);
 const FLUX_BANANA_MAX_CONCURRENCY = Math.floor(
-  boundedEnvNumber('FLUX_BANANA_MAX_CONCURRENCY', 20, 1, 100),
+  boundedEnvNumber('FLUX_BANANA_MAX_CONCURRENCY', 25, 1, 100),
 );
 const FLUX_BANANA_TIMEOUT_MS = Math.max(
   60_000,
