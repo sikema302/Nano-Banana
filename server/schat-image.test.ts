@@ -260,6 +260,31 @@ test('prefers FluxPort signed asset URLs over protected data URLs', async () => 
   assert.equal(source, 'https://cdn.uselg.top/signed/result.png');
 });
 
+test('resolves FluxPort protected download_url asset paths against the API origin', async () => {
+  const source = await generateSchatImage(baseInput, {
+    baseUrl: 'https://uselg.top/v1',
+    apiKey: 'secret',
+    model: 'gpt-image-2',
+    sleepImpl: async () => undefined,
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          execution_mode: 'async',
+          task_id: 'protected-task',
+          status_url: '/v1/images/tasks/protected-task',
+          assets: [],
+        }));
+      }
+      assert.equal(String(url), 'https://uselg.top/v1/images/tasks/protected-task');
+      return new Response(JSON.stringify({
+        status: 'success',
+        assets: [{ download_url: '/v1/images/tasks/protected-task/assets/result.jpg' }],
+      }));
+    },
+  });
+  assert.equal(source, 'https://uselg.top/v1/images/tasks/protected-task/assets/result.jpg');
+});
+
 test('allows failover only after an accepted Schat task explicitly fails', async () => {
   await assert.rejects(
     () => generateSchatImage(baseInput, {

@@ -98,7 +98,17 @@ function toDataUrl(value: string, mimeType?: string) {
   return `data:${mimeType || 'image/png'};base64,${value.replace(/\s+/g, '')}`;
 }
 
-function imageSourceFromList(list: unknown): string {
+function resolveImageUrl(value: string, baseUrl: string) {
+  const source = value.trim();
+  if (!source || !baseUrl || /^(?:data:|https?:\/\/)/i.test(source)) return source;
+  try {
+    return new URL(source, `${baseUrl.replace(/\/+$/, '')}/`).toString();
+  } catch {
+    return source;
+  }
+}
+
+function imageSourceFromList(list: unknown, baseUrl = ''): string {
   if (!Array.isArray(list)) return '';
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
@@ -119,17 +129,17 @@ function imageSourceFromList(list: unknown): string {
         : typeof record.mimeType === 'string' ? record.mimeType : undefined;
       return toDataUrl(record.data, mimeType);
     }
-    if (typeof record.url === 'string' && record.url) return record.url;
-    if (typeof record.download_url === 'string' && record.download_url) return record.download_url;
+    if (typeof record.download_url === 'string' && record.download_url) return resolveImageUrl(record.download_url, baseUrl);
+    if (typeof record.url === 'string' && record.url) return resolveImageUrl(record.url, baseUrl);
   }
   return '';
 }
 
-function extractGeneratedImage(payload: SchatImagePayload): string {
+function extractGeneratedImage(payload: SchatImagePayload, baseUrl = ''): string {
   // For async FluxPort responses, assets[].signed_url is the documented
   // downloadable result. It must win over data[].url, which may require the
   // task's Authorization header and can fail during durable transfer.
-  const signedAssetSource = imageSourceFromList(payload.assets);
+  const signedAssetSource = imageSourceFromList(payload.assets, baseUrl);
   if (signedAssetSource) {
     const isSigned = Array.isArray(payload.assets) && payload.assets.some((item) => {
       if (!item || typeof item !== 'object') return false;
@@ -139,20 +149,20 @@ function extractGeneratedImage(payload: SchatImagePayload): string {
     if (isSigned) return signedAssetSource;
   }
   if (Array.isArray(payload.data)) {
-    const source = imageSourceFromList(payload.data);
+    const source = imageSourceFromList(payload.data, baseUrl);
     if (source) return source;
   } else if (payload.data && typeof payload.data === 'object') {
     const record = payload.data as Record<string, unknown>;
-    const nested = imageSourceFromList(record.data);
+    const nested = imageSourceFromList(record.data, baseUrl);
     if (nested) return nested;
-    const nestedAssets = imageSourceFromList(record.assets);
+    const nestedAssets = imageSourceFromList(record.assets, baseUrl);
     if (nestedAssets) return nestedAssets;
   }
   if (signedAssetSource) return signedAssetSource;
-  if (Array.isArray(payload.output)) return imageSourceFromList(payload.output);
+  if (Array.isArray(payload.output)) return imageSourceFromList(payload.output, baseUrl);
   if (payload.output && typeof payload.output === 'object') {
     const record = payload.output as Record<string, unknown>;
-    return imageSourceFromList(record.data) || imageSourceFromList(record.assets);
+    return imageSourceFromList(record.data, baseUrl) || imageSourceFromList(record.assets, baseUrl);
   }
   return '';
 }
@@ -329,7 +339,7 @@ export async function generateSchatImage(
         response.status,
       );
     }
-    const immediate = extractGeneratedImage(payload);
+    const immediate = extractGeneratedImage(payload, baseUrl);
     if (immediate) return immediate;
 
     if (!isAsyncTaskResponse(payload)) {
@@ -388,7 +398,7 @@ export async function generateSchatImage(
         continue;
       }
       current = fetchedPayload;
-      const pollImage = extractGeneratedImage(current);
+      const pollImage = extractGeneratedImage(current, baseUrl);
       if (pollImage) return pollImage;
       const nextUrl = taskUrlFrom(current);
       if (nextUrl) pollUrl = resolvePollUrl(baseUrl, current, taskId);
@@ -396,7 +406,7 @@ export async function generateSchatImage(
     }
 
     const finalStatus = taskStatus(current);
-    const finalImage = extractGeneratedImage(current);
+    const finalImage = extractGeneratedImage(current, baseUrl);
     if (finalImage) return finalImage;
     if (isFailedTask(finalStatus)) {
       throw taggedError(errorMessage(current, '') || `Schat image task ${finalStatus}`, true);
@@ -417,7 +427,7 @@ export async function generateSchatImage(
             } catch {
               // A malformed result response falls through to the error below.
             }
-            const resultImage = extractGeneratedImage(resultPayload);
+            const resultImage = extractGeneratedImage(resultPayload, baseUrl);
             if (resultImage) return resultImage;
           }
         } catch {
