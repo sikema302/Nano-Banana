@@ -1510,6 +1510,23 @@ export async function getGenerationRankings(): Promise<{
   total: GenerationRankingEntry[];
 }> {
   const todayKey = formatRankingDateKeyInTimeZone(new Date());
+  const ownerByApiKeyUserId = new Map<string, { userId: string; username: string }>();
+  try {
+    const rawApiKeys = await getSetting('public_api_keys_v1', '[]');
+    const parsedApiKeys = JSON.parse(rawApiKeys);
+    if (Array.isArray(parsedApiKeys)) {
+      for (const key of parsedApiKeys as Array<{ id?: string; billingMode?: string; ownerUserId?: string; ownerUsername?: string; name?: string }>) {
+        if (key && key.billingMode === 'account' && key.ownerUserId) {
+          ownerByApiKeyUserId.set(`api-key:${key.id}`, {
+            userId: String(key.ownerUserId),
+            username: String(key.ownerUsername || key.name || ''),
+          });
+        }
+      }
+    }
+  } catch {
+    // ignore malformed / missing API key setting
+  }
   const todayMap = new Map<string, GenerationRankingEntry>();
   const pageSize = 1000;
 
@@ -1531,11 +1548,14 @@ export async function getGenerationRankings(): Promise<{
     if (page.length === 0) break;
 
     for (const row of page) {
-      const userId = normalizeSupabaseId(row.user_id);
-      if (!userId) continue;
+      const rawUserId = normalizeSupabaseId(row.user_id);
+      if (!rawUserId) continue;
       if (formatRankingDateKeyInTimeZone(String(row.created_at || '')) !== todayKey) continue;
-      const username = String(row.username || '');
+      const rawUsername = String(row.username || '');
       const credits = Number(row.credits_used || 0);
+      const owner = ownerByApiKeyUserId.get(rawUserId);
+      const userId = owner ? owner.userId : rawUserId;
+      const username = owner ? owner.username : rawUsername;
 
       const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
       today.generationCount += 1;
@@ -1558,14 +1578,20 @@ export async function getGenerationRankings(): Promise<{
       generations_total: number;
       credits_total: number;
     }>) {
-      const userId = normalizeSupabaseId(row.user_id);
-      if (!userId) continue;
-      totalMap.set(userId, {
-        userId,
-        username: String(row.username || ''),
-        generationCount: Number(row.generations_total || 0),
-        creditsUsed: Number(row.credits_total || 0),
-      });
+      const rawUserId = normalizeSupabaseId(row.user_id);
+      if (!rawUserId) continue;
+      const owner = ownerByApiKeyUserId.get(rawUserId);
+      const userId = owner ? owner.userId : rawUserId;
+      const username = owner ? owner.username : String(row.username || '');
+      const generationCount = Number(row.generations_total || 0);
+      const credits = Number(row.credits_total || 0);
+      const existing = totalMap.get(userId);
+      if (existing) {
+        existing.generationCount += generationCount;
+        existing.creditsUsed += credits;
+      } else {
+        totalMap.set(userId, { userId, username, generationCount, creditsUsed: credits });
+      }
     }
   }
 

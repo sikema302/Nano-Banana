@@ -500,7 +500,7 @@ const boundedEnvNumber = (name: string, fallback: number, minimum: number, maxim
 const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 200, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 16, 1, 1_000))),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 25, 1, 1_000))),
 );
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 200, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
@@ -10563,14 +10563,30 @@ async function start() {
           db,
           "SELECT user_id, username, credits_used, created_at FROM generations WHERE username != 'demo'",
         );
+        const apiKeys = normalizeApiKeyRecords(
+          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+        );
+        const ownerByApiKeyUserId = new Map<string, { userId: string; username: string }>();
+        for (const key of apiKeys) {
+          if (key.billingMode === 'account' && key.ownerUserId) {
+            ownerByApiKeyUserId.set(`api-key:${key.id}`, {
+              userId: key.ownerUserId,
+              username: key.ownerUsername || key.name,
+            });
+          }
+        }
+
         const todayMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
 
         for (const row of todayRows) {
           const createdAt = String(row.created_at || '');
           if (formatDateKeyInTimeZone(createdAt) !== todayKey) continue;
-          const userId = String(row.user_id || '');
-          const username = String(row.username || '');
+          const rawUserId = String(row.user_id || '');
+          const rawUsername = String(row.username || '');
           const credits = Number(row.credits_used || 0);
+          const owner = ownerByApiKeyUserId.get(rawUserId);
+          const userId = owner ? owner.userId : rawUserId;
+          const username = owner ? owner.username : rawUsername;
           const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
           today.generationCount += 1;
           today.creditsUsed += credits;
@@ -10583,14 +10599,20 @@ async function start() {
         );
         const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
         for (const row of totalRows) {
-          const userId = String(row.user_id || '');
-          const username = String(row.username || '');
-          totalMap.set(userId, {
-            userId,
-            username,
-            generationCount: Number(row.generations_total || 0),
-            creditsUsed: Number(row.credits_total || 0),
-          });
+          const rawUserId = String(row.user_id || '');
+          const rawUsername = String(row.username || '');
+          const owner = ownerByApiKeyUserId.get(rawUserId);
+          const userId = owner ? owner.userId : rawUserId;
+          const username = owner ? owner.username : rawUsername;
+          const generationCount = Number(row.generations_total || 0);
+          const credits = Number(row.credits_total || 0);
+          const existing = totalMap.get(userId);
+          if (existing) {
+            existing.generationCount += generationCount;
+            existing.creditsUsed += credits;
+          } else {
+            totalMap.set(userId, { userId, username, generationCount, creditsUsed: credits });
+          }
         }
 
         return {
@@ -11179,12 +11201,14 @@ async function start() {
         }
 
         if (options.search) {
-          where.push('(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)');
           const keyword = `%${options.search}%`;
-          params.push(keyword, keyword, keyword);
+          const baseMatch = '(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)';
           if (extendedSearchIds.length > 0) {
-            where.push(`user_id IN (${extendedSearchIds.map(() => '?').join(',')})`);
-            params.push(...extendedSearchIds);
+            where.push(`(${baseMatch} OR user_id IN (${extendedSearchIds.map(() => '?').join(',')}))`);
+            params.push(keyword, keyword, keyword, ...extendedSearchIds);
+          } else {
+            where.push(baseMatch);
+            params.push(keyword, keyword, keyword);
           }
         }
         if (options.model && options.model !== 'all') {
