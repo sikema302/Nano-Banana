@@ -7497,7 +7497,7 @@ export default function App() {
   return (
     <main className="dark-ai-app lg:h-[100dvh] lg:overflow-hidden">
       <div className="flex min-h-[100dvh] flex-col bg-[linear-gradient(180deg,rgba(255,255,255,0.025)_0%,rgba(255,255,255,0)_18%)] lg:h-[100dvh] lg:overflow-hidden">
-        <header className="app-header shrink-0 flex flex-wrap items-center justify-between gap-4 px-3 py-2.5 sm:px-5">
+        <header className="app-header relative z-20 shrink-0 flex flex-wrap items-center justify-between gap-4 px-3 py-2.5 sm:px-5">
           <div className="flex items-center gap-3">
             <div className="brand-mark h-9 w-9" />
             <span className="text-[26px] font-semibold leading-none tracking-[-0.025em] text-zinc-100">PIXORY</span>
