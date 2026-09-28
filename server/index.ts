@@ -500,12 +500,12 @@ const boundedEnvNumber = (name: string, fallback: number, minimum: number, maxim
 const PUBLIC_ASYNC_MAX_PENDING = Math.floor(boundedEnvNumber('PUBLIC_ASYNC_MAX_PENDING', 200, 1, 1_000));
 const PUBLIC_ASYNC_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 16, 1, 1_000))),
+  Math.floor(Math.min(PUBLIC_ASYNC_MAX_PENDING, boundedEnvNumber('PUBLIC_ASYNC_CONCURRENCY', 25, 1, 1_000))),
 );
 const GENERATION_MAX_PENDING = Math.floor(boundedEnvNumber('GENERATION_MAX_PENDING', 200, 1, 1_000));
 const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
-  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 16, 1, 1_000))),
+  Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 25, 1, 1_000))),
 );
 const VIDEO_MAX_CONCURRENCY = Math.max(
   1,
@@ -652,7 +652,7 @@ const FLUX_BANANA_API_BASE_URL = normalizeEnvValue(
 );
 const FLUX_BANANA_API_KEY = normalizeEnvValue(process.env.FLUX_BANANA_API_KEY);
 const FLUX_BANANA_MAX_CONCURRENCY = Math.floor(
-  boundedEnvNumber('FLUX_BANANA_MAX_CONCURRENCY', 16, 1, 100),
+  boundedEnvNumber('FLUX_BANANA_MAX_CONCURRENCY', 25, 1, 100),
 );
 const FLUX_BANANA_TIMEOUT_MS = Math.max(
   60_000,
@@ -1967,11 +1967,25 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
   }
 
   for (const summary of summaryByUserId.values()) {
-    const current = userMap.get(summary.userId);
     const apiKeyId = summary.userId.startsWith('api-key:')
       ? summary.userId.slice('api-key:'.length)
       : '';
     const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+    // 账户型 Key 归还给归属账号，生成量并入该账号一行（与网页端合并计数）
+    if (apiKey && apiKey.ownerUserId) {
+      const owner = userMap.get(apiKey.ownerUserId);
+      if (owner) {
+        owner.generations += summary.generations;
+        owner.creditsUsed += summary.creditsUsed;
+        if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+          owner.lastGeneratedAt = summary.lastGeneratedAt;
+        }
+        continue;
+      }
+    }
+
+    const current = userMap.get(summary.userId);
     const apiKeyCredits = apiKey
       ? resolveApiKeyDisplayCredits(
           apiKey,
@@ -3422,6 +3436,13 @@ async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
     const raw = getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]');
     return normalizeApiKeyRecords(parseJsonSetting(raw, []));
   });
+}
+
+async function ownedApiKeyUserIds(userId: string): Promise<string[]> {
+  const records = await readPublicApiKeyRecords();
+  return records
+    .filter((record) => record.billingMode === 'account' && record.ownerUserId === userId)
+    .map((record) => `api-key:${record.id}`);
 }
 
 async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
@@ -6347,10 +6368,11 @@ function storedAssetMatchesRequest(req: Request, storedSource: string, requested
 
 async function findOwnedAssetSource(req: Request, requestedSource: string) {
   const userId = req.authUser!.userId;
+  const apiKeyUserIds = await ownedApiKeyUserIds(userId);
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     const [generations, images] = await Promise.all([
-      db.getUserGenerations(userId),
+      db.getUserGenerations(userId, apiKeyUserIds),
       db.getUserImages(userId),
     ]);
     return [...generations, ...images]
@@ -6360,14 +6382,15 @@ async function findOwnedAssetSource(req: Request, requestedSource: string) {
 
   const sources = await withReadDb((db) => {
     ensureSchema(db);
+    const ownedIds = [userId, ...apiKeyUserIds];
     return runQuery<{ image_path: string }>(
       db,
       `
-        SELECT image_path FROM generations WHERE user_id = ?
+        SELECT image_path FROM generations WHERE user_id IN (${ownedIds.map(() => '?').join(',')})
         UNION
         SELECT image_path FROM images WHERE user_id = ?
       `,
-      [userId, userId],
+      [...ownedIds, userId],
     );
   });
   return sources
@@ -9590,11 +9613,12 @@ async function start() {
 
   app.get('/api/user/history', requireAuth, async (req, res) => {
     const userId = req.authUser!.userId;
+    const apiKeyUserIds = await ownedApiKeyUserIds(userId);
 
     try {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
-        const generations = await db.getUserGenerations(userId);
+        const generations = await db.getUserGenerations(userId, apiKeyUserIds);
         const history = generations.map((row) => toGeneration({
           id: row.id,
           user_id: row.user_id,
@@ -9616,15 +9640,16 @@ async function start() {
 
       const history = await withReadDb((db) => {
         ensureSchema(db);
+        const ownedIds = [userId, ...apiKeyUserIds];
         return runQuery<Record<string, unknown>>(
           db,
           `
             SELECT id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at
             FROM generations
-            WHERE user_id = ?
+            WHERE user_id IN (${ownedIds.map(() => '?').join(',')})
             ORDER BY datetime(created_at) DESC, id DESC
           `,
-          [userId],
+          ownedIds,
         ).map(toGeneration);
       });
 
@@ -9858,11 +9883,24 @@ async function start() {
         }
 
         for (const summary of summaryByUserId.values()) {
-          const current = userMap.get(summary.userId);
           const apiKeyId = summary.userId.startsWith('api-key:')
             ? summary.userId.slice('api-key:'.length)
             : '';
           const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+          if (apiKey && apiKey.ownerUserId) {
+            const owner = userMap.get(apiKey.ownerUserId);
+            if (owner) {
+              owner.generations += summary.generations;
+              owner.creditsUsed += summary.creditsUsed;
+              if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+                owner.lastGeneratedAt = summary.lastGeneratedAt;
+              }
+              continue;
+            }
+          }
+
+          const current = userMap.get(summary.userId);
           const apiKeyCredits = apiKey
             ? resolveApiKeyDisplayCredits(
                 apiKey,
@@ -10059,11 +10097,24 @@ async function start() {
         }
 
         for (const summary of summaryByUserId.values()) {
-          const current = userMap.get(summary.userId);
           const apiKeyId = summary.userId.startsWith('api-key:')
             ? summary.userId.slice('api-key:'.length)
             : '';
           const apiKey = apiKeyId ? apiKeyById.get(apiKeyId) : undefined;
+
+          if (apiKey && apiKey.ownerUserId) {
+            const owner = userMap.get(apiKey.ownerUserId);
+            if (owner) {
+              owner.generations += summary.generations;
+              owner.creditsUsed += summary.creditsUsed;
+              if (summary.lastGeneratedAt && (!owner.lastGeneratedAt || summary.lastGeneratedAt > owner.lastGeneratedAt)) {
+                owner.lastGeneratedAt = summary.lastGeneratedAt;
+              }
+              continue;
+            }
+          }
+
+          const current = userMap.get(summary.userId);
           const apiKeyCredits = apiKey
             ? resolveApiKeyDisplayCredits(
                 apiKey,
@@ -10563,14 +10614,30 @@ async function start() {
           db,
           "SELECT user_id, username, credits_used, created_at FROM generations WHERE username != 'demo'",
         );
+        const apiKeys = normalizeApiKeyRecords(
+          parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
+        );
+        const ownerByApiKeyUserId = new Map<string, { userId: string; username: string }>();
+        for (const key of apiKeys) {
+          if (key.billingMode === 'account' && key.ownerUserId) {
+            ownerByApiKeyUserId.set(`api-key:${key.id}`, {
+              userId: key.ownerUserId,
+              username: key.ownerUsername || key.name,
+            });
+          }
+        }
+
         const todayMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
 
         for (const row of todayRows) {
           const createdAt = String(row.created_at || '');
           if (formatDateKeyInTimeZone(createdAt) !== todayKey) continue;
-          const userId = String(row.user_id || '');
-          const username = String(row.username || '');
+          const rawUserId = String(row.user_id || '');
+          const rawUsername = String(row.username || '');
           const credits = Number(row.credits_used || 0);
+          const owner = ownerByApiKeyUserId.get(rawUserId);
+          const userId = owner ? owner.userId : rawUserId;
+          const username = owner ? owner.username : rawUsername;
           const today = todayMap.get(userId) || { userId, username, generationCount: 0, creditsUsed: 0 };
           today.generationCount += 1;
           today.creditsUsed += credits;
@@ -10583,14 +10650,20 @@ async function start() {
         );
         const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
         for (const row of totalRows) {
-          const userId = String(row.user_id || '');
-          const username = String(row.username || '');
-          totalMap.set(userId, {
-            userId,
-            username,
-            generationCount: Number(row.generations_total || 0),
-            creditsUsed: Number(row.credits_total || 0),
-          });
+          const rawUserId = String(row.user_id || '');
+          const rawUsername = String(row.username || '');
+          const owner = ownerByApiKeyUserId.get(rawUserId);
+          const userId = owner ? owner.userId : rawUserId;
+          const username = owner ? owner.username : rawUsername;
+          const generationCount = Number(row.generations_total || 0);
+          const credits = Number(row.credits_total || 0);
+          const existing = totalMap.get(userId);
+          if (existing) {
+            existing.generationCount += generationCount;
+            existing.creditsUsed += credits;
+          } else {
+            totalMap.set(userId, { userId, username, generationCount, creditsUsed: credits });
+          }
         }
 
         return {
@@ -10752,14 +10825,21 @@ async function start() {
           db.getRecentGenerationUsageRows(24 * 7),
         ]);
         const matchedInviteUserIds = new Set(matchedInvites.codes.map((item) => normalizeString(item.redeemed_by)).filter(Boolean));
+        const trendOwnerByUserId = new Map<string, string>();
+        for (const key of await readPublicApiKeyRecords()) {
+          if (key.billingMode === 'account' && key.ownerUserId) {
+            trendOwnerByUserId.set(`api-key:${key.id}`, key.ownerUserId);
+          }
+        }
         const trendByUserId = new Map<string, number[]>();
         for (const record of trendRecords) {
-          const buckets = trendByUserId.get(record.user_id) || Array.from({ length: 7 }, () => 0);
+          const bucketUserId = trendOwnerByUserId.get(record.user_id) || record.user_id;
+          const buckets = trendByUserId.get(bucketUserId) || Array.from({ length: 7 }, () => 0);
           const diff = Math.floor((Date.now() - new Date(record.created_at).getTime()) / (24 * 60 * 60 * 1000));
           if (diff >= 0 && diff < 7) {
             buckets[6 - diff] += Number(record.credits_used || 0);
           }
-          trendByUserId.set(record.user_id, buckets);
+          trendByUserId.set(bucketUserId, buckets);
         }
 
         const filteredUsers = users
@@ -11179,12 +11259,14 @@ async function start() {
         }
 
         if (options.search) {
-          where.push('(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)');
           const keyword = `%${options.search}%`;
-          params.push(keyword, keyword, keyword);
+          const baseMatch = '(username LIKE ? OR user_id LIKE ? OR prompt LIKE ?)';
           if (extendedSearchIds.length > 0) {
-            where.push(`user_id IN (${extendedSearchIds.map(() => '?').join(',')})`);
-            params.push(...extendedSearchIds);
+            where.push(`(${baseMatch} OR user_id IN (${extendedSearchIds.map(() => '?').join(',')}))`);
+            params.push(keyword, keyword, keyword, ...extendedSearchIds);
+          } else {
+            where.push(baseMatch);
+            params.push(keyword, keyword, keyword);
           }
         }
         if (options.model && options.model !== 'all') {

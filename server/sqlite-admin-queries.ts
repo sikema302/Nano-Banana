@@ -183,9 +183,41 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
     });
   }
 
+  const apiKeyById = new Map(options.apiKeys.map((item) => [item.id, item]));
+  const ownerByApiKeyUserId = new Map<string, string>();
+  for (const key of options.apiKeys) {
+    if (key.billingMode === 'account' && key.ownerUserId) {
+      ownerByApiKeyUserId.set(`api-key:${key.id}`, key.ownerUserId);
+    }
+  }
+
+  const rowByUserId = new Map<string, Record<string, unknown>>();
+  for (const row of options.rows) {
+    rowByUserId.set(String(row.user_id || ''), row);
+  }
+
+  // 账户型 Key 的生成量累加到归属账号
+  const ownerAccum = new Map<string, { generations: number; creditsUsed: number; lastGeneratedAt: string }>();
+  for (const row of options.rows) {
+    const userId = String(row.user_id || '');
+    const ownerUserId = ownerByApiKeyUserId.get(userId);
+    if (!ownerUserId || !rowByUserId.has(ownerUserId)) continue;
+    const generations = Number(row.generations || 0);
+    const creditsUsed = Number(row.credits_used || 0);
+    const lastGeneratedAt = String(row.last_generated_at || '');
+    const acc = ownerAccum.get(ownerUserId) || { generations: 0, creditsUsed: 0, lastGeneratedAt: '' };
+    acc.generations += generations;
+    acc.creditsUsed += creditsUsed;
+    if (lastGeneratedAt && (!acc.lastGeneratedAt || lastGeneratedAt > acc.lastGeneratedAt)) {
+      acc.lastGeneratedAt = lastGeneratedAt;
+    }
+    ownerAccum.set(ownerUserId, acc);
+  }
+
   const trendByUserId = new Map<string, number[]>();
   for (const row of options.trendRows) {
-    const userId = String(row.user_id || '');
+    const rawUserId = String(row.user_id || '');
+    const userId = ownerByApiKeyUserId.get(rawUserId) || rawUserId;
     const createdAt = new Date(String(row.created_at || '')).getTime();
     const dayOffset = Math.floor((now - createdAt) / (24 * 60 * 60 * 1000));
     if (!userId || !Number.isFinite(createdAt) || dayOffset < 0 || dayOffset >= 7) continue;
@@ -194,9 +226,13 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
     trendByUserId.set(userId, buckets);
   }
 
-  const apiKeyById = new Map(options.apiKeys.map((item) => [item.id, item]));
   const search = options.search.trim().toLowerCase();
   const matchingUsers = options.rows
+    .filter((row) => {
+      const userId = String(row.user_id || '');
+      const ownerUserId = ownerByApiKeyUserId.get(userId);
+      return !(ownerUserId && rowByUserId.has(ownerUserId));
+    })
     .map((row) => {
       const userId = String(row.user_id || '');
       const totalCredits = Number(row.total_credits || 0);
@@ -213,12 +249,17 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
       const displayName = apiKey
         ? (apiKey.ownerUsername || apiKey.name || String(row.username || '')).trim()
         : String(row.username || '');
+      const acc = ownerAccum.get(userId);
+      let lastGeneratedAt = String(row.last_generated_at || '');
+      if (acc?.lastGeneratedAt && (!lastGeneratedAt || acc.lastGeneratedAt > lastGeneratedAt)) {
+        lastGeneratedAt = acc.lastGeneratedAt;
+      }
       const user: SqliteAdminUserSummary = {
         userId,
         username: displayName,
         inviteCode: String(row.invite_code || ''),
-        generations: Number(row.generations || 0),
-        creditsUsed: Number(row.credits_used || 0),
+        generations: Number(row.generations || 0) + (acc?.generations || 0),
+        creditsUsed: Number(row.credits_used || 0) + (acc?.creditsUsed || 0),
         totalCredits: apiKeyCredits?.totalCredits ?? totalCredits,
         usedCredits: apiKeyCredits?.usedCredits ?? usedCredits,
         remainingCredits: apiKeyCredits?.remainingCredits ?? Math.max(0, totalCredits - usedCredits),
@@ -227,7 +268,7 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
         quotaSource: apiKeyCredits?.quotaSource,
         ownerUserId: apiKey?.ownerUserId,
         ownerUsername: apiKey?.ownerUsername,
-        lastGeneratedAt: String(row.last_generated_at || ''),
+        lastGeneratedAt,
         usageTrend: trendByUserId.get(userId) || Array.from({ length: 7 }, () => 0),
       };
       return { user, inviteCodes: String(row.invite_codes || '').toLowerCase() };
