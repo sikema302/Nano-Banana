@@ -348,12 +348,12 @@ test('2.5 2K route does not switch to generic gpt-image-2.5', async () => {
   const router = createImageProviderRouter({
     baseUrl: 'https://img.junliai.org',
     authorization: 'secret',
-    primaryModel: 'firefly-gpt-image-2.5-flare',
+    primaryModel: 'gpt-image-2.5-flare-firefly',
     primaryModelChains: {
       'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'gpt-image-2.5'],
     },
     primaryModelCapabilities: {
-      'firefly-gpt-image-2.5-flare': { imageSizes: ['2K', '4K'], maxImages: 10 },
+      'gpt-image-2.5-flare-firefly': { imageSizes: ['2K', '4K'], maxImages: 10 },
     },
     timeoutMs: 1_000,
     failureThreshold: 1,
@@ -373,9 +373,9 @@ test('2.5 2K route does not switch to generic gpt-image-2.5', async () => {
     modelId: 'GPT-image-2.5-Flare',
     imageSize: '2K',
     providerRouting: 'junliai_only',
-    upstreamModelOverride: 'firefly-gpt-image-2.5-flare',
+    upstreamModelOverride: 'gpt-image-2.5-flare-firefly',
   }));
-  assert.deepEqual(requestedModels, ['firefly-gpt-image-2.5-flare']);
+  assert.deepEqual(requestedModels, ['gpt-image-2.5-flare-firefly']);
 });
 
 test('independently skips either Junliai GPT model when its route is disabled', async () => {

@@ -104,21 +104,21 @@ test('groups GPT-image-2.5 by 1K, 2K, and 4K ignoring ratio', async () => {
   });
   await metrics.record({
     modelId: 'GPT-image-2.5-Flare',
-    provider: 'Junliai · firefly-gpt-image-2.5-flare',
+    provider: 'Junliai · gpt-image-2.5-flare-firefly',
     configuration: '2K / default / 1:1',
     durationMs: 200,
     success: true,
   });
   await metrics.record({
     modelId: 'GPT-image-2.5-Flare',
-    provider: 'Junliai · firefly-gpt-image-2.5-flare',
+    provider: 'Junliai · gpt-image-2.5-flare-firefly',
     configuration: '2K / default / 16:9',
     durationMs: 300,
     success: false,
   });
   await metrics.record({
     modelId: 'GPT-image-2.5-Sunburst',
-    provider: 'Junliai · firefly-gpt-image-2.5-sunburst',
+    provider: 'Junliai · gpt-image-2.5-sunburst-firefly',
     configuration: '4K / default / 1:1',
     durationMs: 400,
     success: true,
@@ -133,8 +133,8 @@ test('groups GPT-image-2.5 by 1K, 2K, and 4K ignoring ratio', async () => {
     row.failureCount,
   ]), [
     ['GPT-image-2.5-Flare', 'Junliai', '1K', 1, 1, 0],
-    ['GPT-image-2.5-Flare', 'Junliai · firefly-gpt-image-2.5-flare', '2K', 2, 1, 1],
-    ['GPT-image-2.5-Sunburst', 'Junliai · firefly-gpt-image-2.5-sunburst', '4K', 1, 1, 0],
+    ['GPT-image-2.5-Flare', 'Junliai · gpt-image-2.5-flare-firefly', '2K', 2, 1, 1],
+    ['GPT-image-2.5-Sunburst', 'Junliai · gpt-image-2.5-sunburst-firefly', '4K', 1, 1, 0],
   ]);
 });
 

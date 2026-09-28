@@ -25,6 +25,91 @@ function normalizedError(value: unknown) {
     .trim();
 }
 
+// 内部渠道/上游/模型标识：这些词出现在错误里会暴露路由与供应商实现细节，
+// 统一在「展示真实错误」前清洗掉，只保留用户能理解的语义。
+const INTERNAL_DETAIL_PATTERN = new RegExp(
+  [
+    'junliai',
+    'visionary',
+    'uselg',
+    'fluxport',
+    'firefly',
+    'openrouter',
+    'openai',
+    'seedream',
+    'gpt-image[^\\s,，;；:：)]*',
+    'grok-image[^\\s,，;；:：)]*',
+    'nano-?banana[^\\s,，;；:：)]*',
+    'schat-[a-z0-9-]+',
+    'banana',
+    'flux',
+    'adobe',
+    'gemini',
+    'midjourney',
+    'stability',
+    'dall-?e[^\\s,，;；:：)]*',
+    'ideogram',
+    'recraft',
+    'qwen',
+    'wanx',
+    'hunyuan',
+    'doubao',
+    '备用渠道\\s*\\w*',
+    '备用通道\\s*\\w*',
+    '渠道',
+    '通道',
+    'provider',
+    'upstream',
+    '上游',
+    'switch\\w*',
+    'fallback\\w*',
+    'failover',
+    'cooldown',
+    'route\\w*',
+  ].join('|'),
+  'gi',
+);
+
+const SERVICE_UNAVAILABLE_MESSAGE = '当前模型太拥挤了，请稍后重试或试试其他模型';
+
+// 纯技术性、对用户无意义的内部错误（连接重置、DNS、socket 等），不直接展示原文。
+const LOW_VALUE_TECHNICAL_PATTERN =
+  /^(?:fetch failed|network|socket|dns|econn\w*|etimedout|econnreset|econnrefused|terminated|aborted?|abort error|connection (?:reset|refused|terminated)|internal (?:server )?(?:error|failure)|\d{3}(?:\s.*)?|bad gateway|gateway time-?out|service unavailable|http\/\d[\d.]*\s*\d{3})[\s\S]*$/i;
+
+function isSensitiveOrInternal(raw: string) {
+  return /prisma|database|sqlite|error querying the database|shutting down|database connection/i.test(raw);
+}
+
+/**
+ * 把上游真实错误整理成「用户能看懂、且不暴露渠道/供应商实现细节」的文案。
+ * - 命中内容审核：固定为内容审核提示（单独分类）。
+ * - 命中明确的服务不可用（5xx/网关/超时/网络）：用「太拥挤」中性文案。
+ * - 其余情况：清洗内部标识后透传真实原文；原文无有效信息才回退「太拥挤」。
+ */
+function toUserFacingMessage(normalized: string): string {
+  const raw = normalized.replace(INTERNAL_DETAIL_PATTERN, ' ').replace(/\s+/g, ' ').trim();
+  if (!raw) return SERVICE_UNAVAILABLE_MESSAGE;
+  if (isSensitiveOrInternal(normalized)) return '图像服务暂时不可用，请稍后重试';
+  // 内部标识清掉后若只剩技术噪声（纯状态码/连接错误），对用户没意义，用中性文案。
+  if (LOW_VALUE_TECHNICAL_PATTERN.test(raw)) return SERVICE_UNAVAILABLE_MESSAGE;
+  return raw.length > 160 ? `${raw.slice(0, 160).trimEnd()}…` : raw;
+}
+
+/**
+ * 供外部（如 server/index.ts 的 sanitizeExternalErrorMessage）复用的脱敏：
+ * 输入任意上游错误原文，返回清洗掉渠道/供应商/模型名后的安全文本；
+ * 若清洗后无有效信息或属于敏感内部错误，返回空串，交由调用方决定兜底文案。
+ */
+export function sanitizeUpstreamErrorForDisplay(value: unknown): string {
+  const normalized = normalizedError(value);
+  if (!normalized) return '';
+  if (isSensitiveOrInternal(normalized)) return '';
+  const raw = normalized.replace(INTERNAL_DETAIL_PATTERN, ' ').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  if (LOW_VALUE_TECHNICAL_PATTERN.test(raw)) return '';
+  return raw.length > 300 ? `${raw.slice(0, 300).trimEnd()}…` : raw;
+}
+
 function containsAny(value: string, patterns: RegExp[]) {
   return patterns.some((pattern) => pattern.test(value));
 }
@@ -110,7 +195,8 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     /internal (?:server )?(?:error|failure)/,
     /服务暂时不可用|服务异常|网络异常|响应超时|网关异常/,
   ])) {
-    return { category: 'service_unavailable', message: '当前模型太拥挤了，请稍后重试或试试其他模型' };
+    // 明确的服务不可用/网络类错误：保留中性「太拥挤」文案，不暴露上游技术细节。
+    return { category: 'service_unavailable', message: SERVICE_UNAVAILABLE_MESSAGE };
   }
 
   if (containsAny(lower, [
@@ -133,7 +219,9 @@ export function classifyPublicImageError(value: unknown): PublicImageError {
     return { category: 'request', message: '当前请求较多，请稍后重试' };
   }
 
-  return { category: 'busy', message: '当前模型太拥挤了，请稍后重试或试试其他模型' };
+  // 兜底：把真实错误（已清洗渠道/供应商/模型名）带给用户；
+  // 若原文是敏感内部信息、纯技术噪声或为空，才回退到「太拥挤」中性文案。
+  return { category: 'busy', message: toUserFacingMessage(normalized) };
 }
 
 export function publicImageErrorMessage(value: unknown) {

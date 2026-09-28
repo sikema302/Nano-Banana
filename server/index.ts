@@ -35,7 +35,7 @@ import {
   verifyPublicGeneratedImage,
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
-import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
+import { classifyPublicImageError, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
 import {
   generationFailureDetail,
   generationFailureMessage,
@@ -4958,7 +4958,9 @@ function sanitizeExternalErrorMessage(value: string, fallback = '图像服务返
     return normalized && normalized.length <= 180 ? normalized : fallback;
   }
 
-  return normalized ? normalized.slice(0, 300) : fallback;
+  // 透传真实错误前清洗渠道/供应商/模型等内部标识；清洗后无有效信息则用兜底文案。
+  const display = sanitizeUpstreamErrorForDisplay(value);
+  return display || fallback;
 }
 
 function getVisionaryErrorMessage(payload: unknown, fallback: string) {
@@ -5256,7 +5258,7 @@ function isGptImage2Family(modelId: string) {
 // 把 image2Routes 里的渠道映射到 junliai 上游模型名。
 // GPT-image-2：junliai-economy → gpt-image-2（1K 标准），junliai-firefly → firefly-gpt-image-2（2K/4K）。
 // GPT-image-2.5-*：junliai-economy → gpt-image-2.5-{flare|sunburst}（仅 1K），
-//                 junliai-firefly → firefly-gpt-image-2.5-{flare|sunburst}（仅 2K/4K）。
+//                 junliai-firefly → gpt-image-2.5-{flare|sunburst}-firefly（仅 2K/4K）。
 function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSize: string) {
   if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
     const variant = modelId === 'GPT-image-2.5-Flare' ? 'flare' : 'sunburst';
@@ -5267,7 +5269,7 @@ function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSi
       return imageSize === '1K' ? 'gpt-image-2.5' : '';
     }
     if (channelId === 'junliai-firefly') {
-      return imageSize === '2K' || imageSize === '4K' ? `firefly-gpt-image-2.5-${variant}` : '';
+      return imageSize === '2K' || imageSize === '4K' ? `gpt-image-2.5-${variant}-firefly` : '';
     }
     return '';
   }
@@ -6221,6 +6223,49 @@ function validateReferenceImageSources(referenceImages: string[], modelId?: stri
   }
 }
 
+// URL 形式的参考图此前不做大小校验、直接透传给上游，最终由上游按自己的口径拒绝。
+// 这里补一道兜底：能明确拿到 Content-Length 且超限时提前拦截；拿不到大小（HEAD 不支持/超时）则放行，
+// 交给上游判定，避免误伤正常请求。
+const REFERENCE_URL_PROBE_TIMEOUT_MS = 5000;
+
+function probeReferenceImageSize(url: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REFERENCE_URL_PROBE_TIMEOUT_MS);
+    fetch(url, { method: 'HEAD', signal: controller.signal })
+      .then((response) => {
+        clearTimeout(timeout);
+        if (!response.ok) {
+          resolve(null);
+          return;
+        }
+        const value = response.headers.get('content-length');
+        const size = value ? Number(value) : NaN;
+        resolve(Number.isFinite(size) && size >= 0 ? size : null);
+      })
+      .catch(() => {
+        clearTimeout(timeout);
+        resolve(null);
+      });
+  });
+}
+
+async function validateReferenceImageUrlSizes(referenceImages: string[], modelId?: string) {
+  const maxMB = modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+  const maxBytes = maxMB * 1024 * 1024;
+  const urls = referenceImages
+    .map((item) => normalizeString(item))
+    .filter((item) => /^https?:\/\//i.test(item));
+  if (urls.length === 0) return;
+
+  await Promise.all(urls.map(async (url) => {
+    const size = await probeReferenceImageSize(url);
+    if (size !== null && size > maxBytes) {
+      throw new Error(`Each reference image must be ${maxMB} MB or smaller`);
+    }
+  }));
+}
+
 function normalizeGeminiReferenceImages(value: unknown) {
   const rawReferenceImages = Array.isArray(value) ? value : [];
   return rawReferenceImages
@@ -6588,7 +6633,7 @@ async function start() {
         ratios: ['auto', '1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4', '2:3', '21:9', '3:1', '1:4'],
         maxImages: 9,
       },
-      'firefly-gpt-image-2.5-flare': {
+      'gpt-image-2.5-flare-firefly': {
         imageSizes: ['1K', '2K', '4K'],
         ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '3:4', '2:3'],
         maxImages: 10,
@@ -6598,7 +6643,7 @@ async function start() {
         ratios: ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
         maxImages: 9,
       },
-      'firefly-gpt-image-2.5-sunburst': {
+      'gpt-image-2.5-sunburst-firefly': {
         imageSizes: ['1K', '2K', '4K'],
         ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
         maxImages: 10,
@@ -6632,8 +6677,8 @@ async function start() {
       if (input.modelId === 'Grok_Image') {
         return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
-      // GPT-image-2 / GPT-image-2.5-* 系列：firefly-* 上游走 junliai-firefly，其余走 junliai-economy
-      if (upstreamModel.startsWith('firefly-gpt-image-2')) {
+      // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，其余走 junliai-economy
+      if (upstreamModel.startsWith('firefly-gpt-image-2') || upstreamModel.endsWith('-firefly')) {
         return isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
       }
       if (upstreamModel === 'gpt-image-2.5') {
@@ -7724,6 +7769,7 @@ async function start() {
     try {
       await generationWorkQueue.enqueue(`public-sync:${Date.now()}:${randomHex(4)}`, 'image', async () => {
         validateReferenceImageSources(referenceImages, modelId);
+        await validateReferenceImageUrlSizes(referenceImages, modelId);
         const ratio = normalizeRatio(dimensions, modelId);
         const modelName = modelNameFromId(modelId);
         const imageSize = dedicatedPolicy
@@ -8334,6 +8380,7 @@ async function start() {
         throw new Error(`Async generation queue is full (capacity ${PUBLIC_ASYNC_MAX_PENDING})`);
       }
       validateReferenceImageSources(suppliedReferenceImages, modelId);
+      await validateReferenceImageUrlSizes(suppliedReferenceImages, modelId);
       const remoteReferenceImages = suppliedReferenceImages.filter((item: string) => /^https:\/\//i.test(item));
       const dataReferenceImages = suppliedReferenceImages.filter((item: string) => item.startsWith('data:image/'));
       const unsupportedReferenceImages = suppliedReferenceImages.filter(
@@ -9281,6 +9328,7 @@ async function start() {
     try {
       let modelId = normalizeModelId(model);
       validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
+      await validateReferenceImageUrlSizes(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
       let ratio = normalizeRatio(dimensions, modelId);
       let modelName = modelNameFromId(modelId);
       let imageSize = await normalizeRoutedImageSize(requestedImageSize, modelId);

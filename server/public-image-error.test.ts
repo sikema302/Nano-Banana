@@ -71,9 +71,13 @@ test('separates real service failures from congestion and hides routing', () => 
   assert.equal(publicImageErrorMessage('503 service unavailable from Visionary'), '当前模型太拥挤了，请稍后重试或试试其他模型');
   assert.equal(publicImageErrorMessage('504 Gateway Timeout'), '当前模型太拥挤了，请稍后重试或试试其他模型');
   assert.equal(publicImageErrorMessage('fetch failed: ECONNRESET'), '当前模型太拥挤了，请稍后重试或试试其他模型');
+  // 真实但可读的上游错误：透出语义、清掉渠道/供应商/模型名，而不是笼统的「太拥挤」。
   const busy = publicImageErrorMessage('gpt-image-2 quota exhausted; switching to Visionary fallback');
-  assert.equal(busy, '当前模型太拥挤了，请稍后重试或试试其他模型');
-  assert.doesNotMatch(busy, /gpt|visionary|switch|fallback/i);
+  assert.match(busy, /quota exhausted/i);
+  assert.doesNotMatch(busy, /gpt|visionary|switch|fallback|junliai|渠道/i);
+  assert.notEqual(busy, '当前模型太拥挤了，请稍后重试或试试其他模型');
+  // 纯技术噪声（清洗后只剩状态码/连接词）仍回退到中性文案。
+  assert.equal(publicImageErrorMessage('some unknown upstream glitch'), 'some unknown glitch');
 });
 
 test('keeps API key and credit request errors actionable without internal details', () => {
