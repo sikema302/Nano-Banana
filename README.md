@@ -54,9 +54,9 @@ IMAGE_RETENTION_DAYS=2
 IMAGE_CLEANUP_INTERVAL_MS=21600000
 ALLOW_MULTI_DEVICE_LOGIN=true
 GENERATION_MAX_PENDING=200
-GENERATION_MAX_CONCURRENCY=16
+GENERATION_MAX_CONCURRENCY=30
 VIDEO_MAX_CONCURRENCY=3
-FLUX_BANANA_MAX_CONCURRENCY=16
+FLUX_BANANA_MAX_CONCURRENCY=30
 ```
 
 ### Database backups
@@ -81,7 +81,7 @@ Notes:
 - Visionary routing uses `VISIONARY_BANANA_PRO_API_KEY` for Nano Banana Pro, `VISIONARY_GPT_IMAGE_2_API_KEY` for GPT-image-2 Plus standard, and `VISIONARY_GPT_IMAGE_2_HD_API_KEY` for GPT-image-2 Plus 2K/4K. `VISIONARY_API_KEY` remains a fallback.
 - GPT-image-2 pricing is checked against Visionary's machine-readable configuration every 72 hours. Valid pricing changes are applied without a redeploy; broader API documentation changes are flagged in the admin dashboard for review. Configure the interval with `VISIONARY_DOC_SYNC_INTERVAL_HOURS`.
 - Image retention defaults to 2 days. `IMAGE_CLEANUP_INTERVAL_MS` controls how often the server reruns cleanup.
-- Image and video generation share a resource-aware admission queue. By default, at most 16 generation tasks run at once and at most three can be video tasks. New work pauses after CPU reaches 85%, memory reaches 85% (or available memory falls below 300 MB), or event-loop lag reaches 200 ms for five consecutive two-second samples. Work resumes after ten healthy samples; in-flight work is never interrupted. `/api/health` and `/api/ready` expose the current `loadControl` status. Tune `GENERATION_MAX_CONCURRENCY`, `PUBLIC_ASYNC_CONCURRENCY`, and `FLUX_BANANA_MAX_CONCURRENCY` independently when an upstream provider has a lower quota.
+- Image and video generation share a resource-aware admission queue. By default, at most 30 generation tasks run at once and at most three can be video tasks. New work pauses after CPU reaches 85%, memory reaches 85% (or available memory falls below 300 MB), or event-loop lag reaches 200 ms for five consecutive two-second samples. Work resumes after ten healthy samples; in-flight work is never interrupted. `/api/health` and `/api/ready` expose the current `loadControl` status. Tune `GENERATION_MAX_CONCURRENCY`, `PUBLIC_ASYNC_CONCURRENCY`, and `FLUX_BANANA_MAX_CONCURRENCY` independently when an upstream provider has a lower quota.
 - The R2 migration defaults to two workers and waits on the same CPU, memory, and event-loop pressure thresholds before starting each file.
 - Keep `DATABASE_PROVIDER=sqlite` on the persistent production server. Do not use SQLite on Vercel's ephemeral filesystem.
 
