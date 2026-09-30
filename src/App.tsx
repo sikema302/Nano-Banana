@@ -50,7 +50,8 @@ import {
   downloadAsset,
   deductPublicApiKeyCredits,
   deductAdminUserCredits,
-  fetchAdminDashboard,
+  fetchAdminDashboardSummary,
+  fetchAdminProviderHealth,
   fetchAdminGenerationRanking,
   fetchAdminNotifications,
   fetchAdminInviteCodes,
@@ -172,17 +173,11 @@ interface ActiveImageGeneration {
   images: DisplayImage[];
 }
 
-const HIDDEN_IMAGE_MODEL_IDS: ReadonlySet<string> = new Set(['Seedream_4']);
-function visibleImageModels(models: ModelInfo[]): ModelInfo[] {
-  return models.filter((item) => !HIDDEN_IMAGE_MODEL_IDS.has(item.id));
-}
-
 const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u66f4\u5feb\u8fed\u4ee3' },
   { id: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
-  { id: 'Seedream_4', name: 'Seedream 4', description: '\u5373\u68a6 Seedream 4 \u751f\u56fe\u6a21\u578b' },
   { id: 'gpt-image-2-adobe', name: 'gpt-image-2 Adobe', description: 'Adobe Firefly 生图模型' },
 ];
 
@@ -295,16 +290,6 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
-  seedreamRoutes: {
-    '1K': [],
-    '2K': [{ id: 'schat-seedream-4', enabled: false }],
-    '4K': [{ id: 'schat-seedream-4', enabled: false }],
-  },
-  grokImageRoutes: {
-    '1K': [{ id: 'junliai-grok', enabled: true }],
-    '2K': [{ id: 'junliai-grok', enabled: true }],
-    '4K': [],
-  },
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
@@ -313,14 +298,12 @@ const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
   'junliai-firefly': 'Junli · Firefly',
   'schat-gpt-image-2': 'Schat · GPT Image 2',
   'uselg': 'Uselg · Flux',
-  'junliai-grok': 'Junli · Grok Image',
   'visionary': 'Visionary',
   'flux': 'Flux',
   'flux-flash': 'Flux Flash',
   'junliai': 'Junli · Nano Banana Pro',
   'junliai-nano-banana-2': 'Junli · Nano Banana 2',
   'schat-nano-banana-2': 'Schat · Nano Banana 2',
-  'schat-seedream-4': 'Schat · Seedream 4',
 };
 
 function providerChannelName(id: string, resolution?: string) {
@@ -330,14 +313,12 @@ function providerChannelName(id: string, resolution?: string) {
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
 }
 
-// 用户端只展示前端模型名（GPT-image-2 / Nano Banana Pro / Seedream 4 / Grok Image），
+// 用户端只展示前端模型名（GPT-image-2 / Nano Banana Pro），
 // 隐藏内部渠道与上游模型（如 "Flux · gemini-3-pro-image-preview"）。
 function displayModelName(modelName: string) {
   const value = String(modelName ?? '').trim();
   if (!value) return value;
   const probe = value.toLowerCase();
-  if (probe.includes('seedream')) return 'Seedream 4';
-  if (probe.includes('grok')) return 'Grok Image';
   // 必须先判 2.5（gpt-image-2.5 也包含 gpt-image 子串，否则会被下面的规则误判成 2）
   if (probe.includes('gpt-image-2.5')) {
     return probe.includes('sunburst') ? 'GPT-image-2.5 Sunburst' : 'GPT-image-2.5 Flare';
@@ -365,11 +346,7 @@ function isImageResolutionEnabled(
   const resolution = imageSize === '2K' || imageSize === '4K' ? imageSize : '1K';
   const channels = modelId === 'Nano_Banana_Pro'
     ? routing.bananaRoutes[resolution]
-    : modelId === 'Seedream_4'
-      ? routing.seedreamRoutes[resolution]
-      : modelId === 'Grok_Image'
-        ? routing.grokImageRoutes[resolution]
-        : routing.image2Routes[resolution];
+    : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -382,14 +359,12 @@ const emptyRecordsStats: AdminRecordsStats = {
 };
 
 function getMaxReferences(modelId: string) {
-  return modelId === 'Grok_Image'
-    ? 3
-    : modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
-      ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
-      : MAX_REFERENCE_IMAGES;
+  return modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+    : MAX_REFERENCE_IMAGES;
 }
-function getMaxReferenceMB(modelId: string) {
-  return modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+function getMaxReferenceMB(_modelId: string) {
+  return MAX_REFERENCE_IMAGE_MB;
 }
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 10;
@@ -700,9 +675,6 @@ function getModelCredits(
       : 0;
     return baseCredits + enhancementCredits;
   }
-  if (model.id === 'Seedream_4') {
-    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
-  }
   if (typeof model.creditsCost === 'number') return model.creditsCost;
   return 1;
 }
@@ -712,7 +684,6 @@ function getModelSortOrder(modelId: string) {
   if (modelId === 'GPT-image-2.5-Flare') return 1;
   if (modelId === 'GPT-image-2.5-Sunburst') return 2;
   if (modelId === 'Nano_Banana_Pro') return 3;
-  if (modelId === 'Seedream_4') return 4;
   return 99;
 }
 
@@ -1545,7 +1516,7 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro、seedream-4。'],
+    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
@@ -1556,7 +1527,6 @@ function ApiDocsView({
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
-    { model: 'seedream-4', name: 'Seedream 4', cost: '2K 18 / 4K 20', note: '仅支持 2K、4K，使用通用积分。' },
   ];
   const gptPixelGroups = [
     {
@@ -2831,12 +2801,6 @@ function AdminModelCreditPanel({
   const setBanana = (key: keyof ModelCreditPricing['nanoBanana'], value: number) => {
     setDraft((current) => ({ ...current, nanoBanana: { ...current.nanoBanana, [key]: value } }));
   };
-  const setSeedream = (key: keyof ModelCreditPricing['seedream'], value: number) => {
-    setDraft((current) => ({ ...current, seedream: { ...current.seedream, [key]: value } }));
-  };
-  const setGrokImage = (key: keyof ModelCreditPricing['grokImage'], value: number) => {
-    setDraft((current) => ({ ...current, grokImage: { ...current.grokImage, [key]: value } }));
-  };
   const setGpt25Flare = (key: keyof ModelCreditPricing['gptImage25Flare'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Flare: { ...current.gptImage25Flare, [key]: value } }));
   };
@@ -2919,24 +2883,6 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-          <h3 className="font-black text-emerald-100">Seedream 4</h3>
-          <p className="mt-1 text-[11px] text-zinc-500">使用通用积分，仅提供 2K 与 4K。</p>
-          <div className="mt-3">
-            {row('2K', '标准档位', creditInput(draft.seedream.twoK, (value) => setSeedream('twoK', value)))}
-            {row('4K', '高清档位', creditInput(draft.seedream.fourK, (value) => setSeedream('fourK', value)))}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-          <h3 className="font-black text-rose-100">Grok Image</h3>
-          <p className="mt-1 text-[11px] text-zinc-500">使用通用积分，仅提供 1K 与 2K。</p>
-          <div className="mt-3">
-            {row('1K', '基础档位', creditInput(draft.grokImage.oneK, (value) => setGrokImage('oneK', value)))}
-            {row('2K', '标准档位', creditInput(draft.grokImage.twoK, (value) => setGrokImage('twoK', value)))}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
           <h3 className="font-black text-amber-100">Nano Banana Pro</h3>
           <p className="mt-1 text-[11px] text-zinc-500">扣 Banana 专用积分，不足部分自动扣通用积分。</p>
           <div className="mt-3">
@@ -2982,6 +2928,7 @@ function AdminView({
   onUpdateProviderRouting,
   onUpdateModelCreditPricing,
   onLoadSection,
+  onRefreshDashboardSummary,
   onPreview,
   onNotice,
 }: {
@@ -3029,6 +2976,7 @@ function AdminView({
       range?: string;
     },
   ) => Promise<void>;
+  onRefreshDashboardSummary: () => Promise<void>;
   onPreview: (item: GenerationRecord) => void;
   onNotice: (message: string) => void;
 }) {
@@ -3038,6 +2986,13 @@ function AdminView({
   type RecordRange = 'all' | '24h' | '7d' | '30d';
 
   const [section, setSection] = useState<AdminSection>('dashboard');
+  useEffect(() => {
+    if (section !== 'dashboard') return;
+    const timer = window.setInterval(() => {
+      void onRefreshDashboardSummary();
+    }, 15 * 1000);
+    return () => window.clearInterval(timer);
+  }, [section]);
   const [credits, setCredits] = useState(100);
   const [submitting, setSubmitting] = useState(false);
   const [deletingCode, setDeletingCode] = useState('');
@@ -3084,7 +3039,6 @@ function AdminView({
   const todayRecords = dashboardStats.todayRecordCount > 0
     ? Array.from({ length: dashboardStats.todayRecordCount }, () => ({ createdAt: todayKey, creditsUsed: 0 } as GenerationRecord))
     : records.filter((item) => formatDateKey(item.createdAt) === todayKey);
-  const lowCreditUsers = users.filter((item) => item.remainingCredits <= 50);
   const dashboardTodayRecordCount = dashboardStats.todayRecordCount || todayRecords.length;
   const todayCreditsUsed = dashboardStats.todayCreditsUsed || todayRecords.reduce((sum, item) => sum + item.creditsUsed, 0);
   const totalInviteCodes = dashboardStats.inviteCodeCount || inviteCodesPage.total || inviteCodes.length;
@@ -3614,7 +3568,7 @@ function AdminView({
                 { label: '今日生成次数', value: String(todayRecords.length), hint: '按全部记录统计' },
                 { label: '今日消耗积分', value: String(todayCreditsUsed), hint: '统一积分池计费' },
                 { label: '邀请码使用率', value: formatPercent(currentInviteUsageRate), hint: `${usedInviteCodes}/${Math.max(totalInviteCodes, 1)}` },
-                { label: '低积分用户提醒', value: String(lowCreditUsers.length), hint: '剩余 <= 50 积分' },
+                { label: '低积分用户提醒', value: String(dashboardStats.lowCreditUserCount), hint: '剩余 <= 50 积分' },
               ].map((card) => (
                 <div key={card.label} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
                   <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">{card.label}</p>
@@ -3698,7 +3652,6 @@ function AdminView({
                 {([
                   { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理' },
                   { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由' },
-                  { key: 'seedreamRoutes', title: 'Seedream', subtitle: '仅开放 2K / 4K 路由' },
                 ] as const).map((group) => (
                   <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -3707,7 +3660,6 @@ function AdminView({
                     </div>
                     <div className="mt-4 grid gap-4 xl:grid-cols-3">
                       {(['1K', '2K', '4K'] as const)
-                        .filter((resolution) => group.key !== 'seedreamRoutes' || resolution !== '1K')
                         .map((resolution) => {
                         const channels = providerRouting[group.key][resolution];
                         return (
@@ -4741,12 +4693,6 @@ export default function App() {
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
 
-  useEffect(() => {
-    if (HIDDEN_IMAGE_MODEL_IDS.has(selectedModel)) {
-      const fallback = visibleImageModels(models)[0]?.id || 'gpt-image-2';
-      setSelectedModel(fallback);
-    }
-  }, [selectedModel, models]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [dimensions, setDimensions] = useState<DimensionOption>('1:1');
@@ -4852,18 +4798,12 @@ export default function App() {
     modelCreditPricing,
   });
   const selectedResolutionOptions = isNanoBananaPro || isGptImage2_5 ? imageSizeOptions : gptImageSizeOptions;
-  const visibleResolutionOptions = selectedModel === 'Seedream_4'
-    ? gptImageSizeOptions.filter((item) => item.value === '2K' || item.value === '4K')
-    : selectedModel === 'Grok_Image'
-      ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
-      : selectedModel === 'gpt-image-2-adobe'
-        ? imageSizeOptions.filter((item) => item.value === '1K')
-        : selectedResolutionOptions;
+  const visibleResolutionOptions = selectedModel === 'gpt-image-2-adobe'
+    ? imageSizeOptions.filter((item) => item.value === '1K')
+    : selectedResolutionOptions;
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
-    : selectedModel === 'Grok_Image'
-      ? dimensionOptions.filter((item) => item.value !== '21:9')
-      : dimensionOptions;
+    : dimensionOptions;
   const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const selectedCreditBucket = selectedModel === 'gpt-image-2'
     || selectedModel === 'GPT-image-2.5-Flare'
@@ -5091,11 +5031,7 @@ export default function App() {
     if (!isImageResolutionEnabled(providerRouting, selectedModel, imageSize)) {
       const candidates: ImageSizeOption[] = selectedModel === 'Nano_Banana_Pro'
         ? ['1K', '2K', '4K']
-        : selectedModel === 'Seedream_4'
-          ? ['2K', '4K']
-          : selectedModel === 'Grok_Image'
-            ? ['1K', '2K']
-            : ['STANDARD', '2K', '4K'];
+        : ['STANDARD', '2K', '4K'];
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }
@@ -5103,7 +5039,6 @@ export default function App() {
     imageSize,
     providerRouting.image2Routes,
     providerRouting.bananaRoutes,
-    providerRouting.seedreamRoutes,
     selectedModel,
   ]);
 
@@ -5169,19 +5104,6 @@ export default function App() {
       setOptimizeChineseText(false);
       return;
     }
-    if (modelId === 'Seedream_4') {
-      setImageSize('2K');
-      setGptQuality('auto');
-      setOptimizeChineseText(false);
-      return;
-    }
-    if (modelId === 'Grok_Image') {
-      setImageSize('1K');
-      setGptQuality('auto');
-      setOptimizeChineseText(false);
-      setDimensions((current) => current === '21:9' ? '1:1' : current);
-      return;
-    }
     if (modelId === 'gpt-image-2-adobe') {
       setImageSize('1K');
       setGptQuality('auto');
@@ -5232,18 +5154,16 @@ export default function App() {
     const normalizedName = image.modelName.toLowerCase();
     const normalizedModel = normalizedName.includes('nano banana')
       ? 'Nano_Banana_Pro'
-      : normalizedName.includes('seedream')
-        ? 'Seedream_4'
-        : normalizedName.includes('gpt-image-2.5')
-          ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
-          : normalizedName.includes('adobe')
-            ? 'gpt-image-2-adobe'
-            : 'gpt-image-2';
+      : normalizedName.includes('gpt-image-2.5')
+        ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
+        : normalizedName.includes('adobe')
+          ? 'gpt-image-2-adobe'
+          : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
     } else {
-      setImageSize(normalizedModel === 'Nano_Banana_Pro' ? '1K' : normalizedModel === 'Seedream_4' ? '2K' : 'STANDARD');
+      setImageSize(normalizedModel === 'Nano_Banana_Pro' ? '1K' : 'STANDARD');
     }
     if (dimensionOptions.some((item) => item.value === image.dimensions)) {
       setDimensions(image.dimensions as DimensionOption);
@@ -5417,19 +5337,34 @@ export default function App() {
       }
 
       if (section === 'dashboard') {
-        const [payload, rankingPayload] = await Promise.all([
-          fetchAdminDashboard(),
-          fetchAdminGenerationRanking().catch(() => null),
-        ]);
-        setProviderRouting(payload.providerRouting || defaultProviderRouting);
-        setAdminOverview((current) => ({
-          ...current,
-          dashboardStats: payload.stats,
-          providerMetrics: payload.providerMetrics || [],
-          providerRisks: payload.providerRisks || [],
-          adminCredits: payload.adminCredits,
-          generationRanking: rankingPayload || { today: [], total: [] },
-        }));
+        const tasks = [
+          fetchAdminDashboardSummary()
+            .then((payload) => setAdminOverview((current) => ({
+              ...current,
+              dashboardStats: payload.stats,
+              adminCredits: payload.adminCredits,
+            })))
+            .catch(() => {
+              setNotice('看板指标加载失败');
+            }),
+          fetchAdminProviderHealth()
+            .then((payload) => setAdminOverview((current) => ({
+              ...current,
+              providerMetrics: payload.providerMetrics || [],
+              providerRisks: payload.providerRisks || [],
+            })))
+            .catch(() => undefined),
+          fetchAdminGenerationRanking()
+            .then((payload) => setAdminOverview((current) => ({
+              ...current,
+              generationRanking: payload,
+            })))
+            .catch(() => undefined),
+          fetchModels()
+            .then((payload) => setProviderRouting(payload.providerRouting || defaultProviderRouting))
+            .catch(() => undefined),
+        ];
+        await Promise.allSettled(tasks);
         return;
       }
 
@@ -5485,6 +5420,19 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : '后台数据加载失败');
     } finally {
       setAdminLoading(false);
+    }
+  }
+
+  async function refreshDashboardSummary() {
+    try {
+      const payload = await fetchAdminDashboardSummary();
+      setAdminOverview((current) => ({
+        ...current,
+        dashboardStats: payload.stats,
+        adminCredits: payload.adminCredits,
+      }));
+    } catch {
+      // 轮询失败静默处理，避免打扰
     }
   }
 
@@ -6603,7 +6551,7 @@ export default function App() {
                 value={selectedModel}
                 onChange={(event) => handleModelSelect(event.target.value)}
               >
-                {visibleImageModels(models).map((item) => (
+                {models.map((item) => (
                   <option key={item.id} value={item.id} className="bg-[#111111]">
                     {item.name}
                   </option>
@@ -7115,7 +7063,7 @@ export default function App() {
                   ) : null}
                   {modelMenuOpen ? (
                     <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-white/10 bg-[#111111] p-1 shadow-2xl" role="listbox">
-                      {visibleImageModels(models).map((item) => (
+                      {models.map((item) => (
                         <button
                           key={item.id}
                           type="button"
@@ -7574,6 +7522,7 @@ export default function App() {
               onUpdateProviderRouting={handleUpdateProviderRouting}
               onUpdateModelCreditPricing={handleUpdateModelCreditPricing}
               onLoadSection={loadAdminSection}
+              onRefreshDashboardSummary={refreshDashboardSummary}
               onPreview={setPreviewImage}
               onNotice={setNotice}
             />

@@ -235,8 +235,6 @@ export interface ProviderRiskRecord {
 export type ProviderResolution = '1K' | '2K' | '4K';
 export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
-export type SeedreamProviderId = 'schat-seedream-4';
-export type GrokImageProviderId = 'junliai-grok';
 
 export interface ProviderChannel<T extends string = string> {
   id: T;
@@ -246,8 +244,6 @@ export interface ProviderChannel<T extends string = string> {
 export interface ProviderRoutingConfig {
   image2Routes: Record<ProviderResolution, Array<ProviderChannel<Image2ProviderId>>>;
   bananaRoutes: Record<ProviderResolution, Array<ProviderChannel<BananaProviderId>>>;
-  seedreamRoutes: Record<ProviderResolution, Array<ProviderChannel<SeedreamProviderId>>>;
-  grokImageRoutes: Record<ProviderResolution, Array<ProviderChannel<GrokImageProviderId>>>;
 }
 
 export interface AdminRecordsStats {
@@ -1061,14 +1057,18 @@ function appendOptionalParam(query: URLSearchParams, key: string, value: unknown
   query.set(key, String(value));
 }
 
-export async function fetchAdminDashboard() {
+export async function fetchAdminDashboardSummary() {
   return request<{
     stats: AdminDashboardStats;
+    adminCredits: CreditSummary;
+  }>('/api/admin/dashboard-summary', {}, true);
+}
+
+export async function fetchAdminProviderHealth() {
+  return request<{
     providerMetrics: ProviderMetricRow[];
     providerRisks: ProviderRiskRecord[];
-    providerRouting: ProviderRoutingConfig;
-    adminCredits: CreditSummary;
-  }>('/api/admin/dashboard', {}, true);
+  }>('/api/admin/provider-health', {}, true);
 }
 
 export async function fetchAdminGenerationRanking() {

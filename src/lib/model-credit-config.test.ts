@@ -11,13 +11,10 @@ test('normalizes every configurable image tier', () => {
   const pricing = normalizeModelCreditPricing({
     gptImage2: { standard: 11, twoK: 22, twoKHigh: 33, fourK: 44, fourKHigh: 55 },
     nanoBanana: { oneK: 12, twoK: 23, fourK: 34, enhancement: 7 },
-    seedream: { twoK: 18, fourK: 20 },
   });
 
   assert.equal(getConfiguredImageCredits(pricing, 'gpt-image-2', '4K', 'high'), 55);
   assert.equal(getConfiguredImageCredits(pricing, 'Nano_Banana_Pro', '1K'), 12);
-  assert.equal(getConfiguredImageCredits(pricing, 'Seedream_4', '2K'), 18);
-  assert.equal(getConfiguredImageCredits(pricing, 'Seedream_4', '4K'), 20);
 });
 
 test('gpt-image-2-adobe is 1K-only priced at 26', () => {

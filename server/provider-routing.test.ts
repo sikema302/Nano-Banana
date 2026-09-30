@@ -48,16 +48,6 @@ const defaults: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
-  seedreamRoutes: {
-    '1K': [],
-    '2K': [{ id: 'schat-seedream-4', enabled: false }],
-    '4K': [{ id: 'schat-seedream-4', enabled: false }],
-  },
-  grokImageRoutes: {
-    '1K': [{ id: 'junliai-grok', enabled: true }],
-    '2K': [{ id: 'junliai-grok', enabled: true }],
-    '4K': [],
-  },
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
@@ -86,7 +76,6 @@ test('persists independent provider order and switches for each resolution', asy
   assert.deepEqual(updated.bananaRoutes['2K'], nextBananaRoutes['2K']);
   assert.deepEqual(updated.bananaRoutes['1K'], defaults.bananaRoutes['1K']);
   assert.deepEqual(updated.image2Routes, defaults.image2Routes);
-  assert.deepEqual(updated.seedreamRoutes, defaults.seedreamRoutes);
   assert.deepEqual(
     enabledProviderIds(updated.bananaRoutes['2K']),
     ['junliai', 'visionary', 'junliai-nano-banana-2'],
@@ -120,7 +109,6 @@ test('normalizes duplicates, unknown channels, and missing channels per resoluti
     { id: 'schat-nano-banana-2', enabled: false },
   ]);
   assert.deepEqual(config.bananaRoutes['2K'], defaults.bananaRoutes['2K']);
-  assert.deepEqual(config.seedreamRoutes, defaults.seedreamRoutes);
 });
 
 test('migrates legacy switches into every compatible resolution route', async () => {

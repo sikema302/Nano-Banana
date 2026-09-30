@@ -1,7 +1,5 @@
 export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
-export type SeedreamProviderId = 'schat-seedream-4';
-export type GrokImageProviderId = 'junliai-grok';
 export type ProviderResolution = '1K' | '2K' | '4K';
 
 export type ProviderChannel<T extends string = string> = {
@@ -17,8 +15,6 @@ export type ProviderResolutionRoutes<T extends string> = Record<
 export type ProviderRoutingConfig = {
   image2Routes: ProviderResolutionRoutes<Image2ProviderId>;
   bananaRoutes: ProviderResolutionRoutes<BananaProviderId>;
-  seedreamRoutes: ProviderResolutionRoutes<SeedreamProviderId>;
-  grokImageRoutes: ProviderResolutionRoutes<GrokImageProviderId>;
 };
 
 export type ProviderRoutingPatch = Partial<ProviderRoutingConfig>;
@@ -56,8 +52,6 @@ function cloneConfig(config: ProviderRoutingConfig): ProviderRoutingConfig {
   return {
     image2Routes: cloneRoutes(config.image2Routes),
     bananaRoutes: cloneRoutes(config.bananaRoutes),
-    seedreamRoutes: cloneRoutes(config.seedreamRoutes),
-    grokImageRoutes: cloneRoutes(config.grokImageRoutes),
   };
 }
 
@@ -146,18 +140,6 @@ function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): Provi
           ? record.junliaiNanoBanana
           : undefined,
       },
-    ),
-    seedreamRoutes: normalizeRoutes(
-      record.seedreamRoutes,
-      undefined,
-      defaults.seedreamRoutes,
-      {},
-    ),
-    grokImageRoutes: normalizeRoutes(
-      record.grokImageRoutes,
-      undefined,
-      defaults.grokImageRoutes,
-      {},
     ),
   };
 }

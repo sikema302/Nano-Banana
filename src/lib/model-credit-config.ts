@@ -11,16 +11,6 @@ export type NanoBananaCreditPricing = {
   enhancement: number;
 };
 
-export type SeedreamCreditPricing = {
-  twoK: number;
-  fourK: number;
-};
-
-export type GrokImageCreditPricing = {
-  oneK: number;
-  twoK: number;
-};
-
 export type GptImage2AdobeCreditPricing = {
   oneK: number;
 };
@@ -31,8 +21,6 @@ export type ModelCreditPricing = {
   gptImage25Sunburst: GptImagePricing;
   gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
-  seedream: SeedreamCreditPricing;
-  grokImage: GrokImageCreditPricing;
   updatedAt: string;
 };
 
@@ -55,14 +43,6 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     fourK: 30,
     enhancement: 8,
   },
-  seedream: {
-    twoK: 18,
-    fourK: 20,
-  },
-  grokImage: {
-    oneK: 20,
-    twoK: 22,
-  },
   updatedAt: '',
 };
 
@@ -75,12 +55,6 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const source = value && typeof value === 'object' ? value as Partial<ModelCreditPricing> : {};
   const banana: Partial<NanoBananaCreditPricing> = source.nanoBanana && typeof source.nanoBanana === 'object'
     ? source.nanoBanana
-    : {};
-  const seedream: Partial<SeedreamCreditPricing> = source.seedream && typeof source.seedream === 'object'
-    ? source.seedream
-    : {};
-  const grokImage: Partial<GrokImageCreditPricing> = source.grokImage && typeof source.grokImage === 'object'
-    ? source.grokImage
     : {};
   const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
     ? source.gptImage2Adobe
@@ -98,14 +72,6 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       twoK: positiveCredit(banana.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.twoK),
       fourK: positiveCredit(banana.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.fourK),
       enhancement: positiveCredit(banana.enhancement, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.enhancement),
-    },
-    seedream: {
-      twoK: positiveCredit(seedream.twoK, DEFAULT_MODEL_CREDIT_PRICING.seedream.twoK),
-      fourK: positiveCredit(seedream.fourK, DEFAULT_MODEL_CREDIT_PRICING.seedream.fourK),
-    },
-    grokImage: {
-      oneK: positiveCredit(grokImage.oneK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.oneK),
-      twoK: positiveCredit(grokImage.twoK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.twoK),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };
@@ -135,12 +101,6 @@ export function getConfiguredImageCredits(
     if (imageSize === '1K') return pricing.nanoBanana.oneK;
     if (imageSize === '4K') return pricing.nanoBanana.fourK;
     return pricing.nanoBanana.twoK;
-  }
-  if (modelId === 'Seedream_4') {
-    return imageSize === '4K' ? pricing.seedream.fourK : pricing.seedream.twoK;
-  }
-  if (modelId === 'Grok_Image') {
-    return imageSize === '1K' ? pricing.grokImage.oneK : pricing.grokImage.twoK;
   }
   return 1;
 }

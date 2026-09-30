@@ -1439,6 +1439,8 @@ export async function getAdminDashboardCounts(): Promise<{
   lowCreditUserCount: number;
   recentRecords: Array<{ created_at: string; credits_used: number }>;
 }> {
+  const todayStartIso = todayStartIsoInTimeZone();
+
   const [
     usersResult,
     recordsResult,
@@ -1460,7 +1462,7 @@ export async function getAdminDashboardCounts(): Promise<{
       .from('generations')
       .select('created_at, credits_used')
       .neq('username', 'demo')
-      .gte('created_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+      .gte('created_at', todayStartIso)
       .order('created_at', { ascending: false })
       .limit(10000),
   ]);
@@ -1506,6 +1508,12 @@ function formatRankingDateKeyInTimeZone(value: string | Date, timeZone = 'Asia/S
   return `${year}-${month}-${day}`;
 }
 
+function todayStartIsoInTimeZone(timeZone = 'Asia/Shanghai') {
+  const key = formatRankingDateKeyInTimeZone(new Date(), timeZone);
+  if (!key) return new Date().toISOString();
+  return new Date(`${key}T00:00:00+08:00`).toISOString();
+}
+
 export async function getGenerationRankings(): Promise<{
   today: GenerationRankingEntry[];
   total: GenerationRankingEntry[];
@@ -1529,6 +1537,9 @@ export async function getGenerationRankings(): Promise<{
     // ignore malformed / missing API key setting
   }
   const todayMap = new Map<string, GenerationRankingEntry>();
+  const todayStartIso = todayKey
+    ? new Date(`${todayKey}T00:00:00+08:00`).toISOString()
+    : new Date().toISOString();
   const pageSize = 1000;
 
   for (let offset = 0; ; offset += pageSize) {
@@ -1536,6 +1547,7 @@ export async function getGenerationRankings(): Promise<{
       .from('generations')
       .select('user_id, username, credits_used, created_at')
       .neq('username', 'demo')
+      .gte('created_at', todayStartIso)
       .order('id', { ascending: true })
       .range(offset, offset + pageSize - 1);
     if (error) break;

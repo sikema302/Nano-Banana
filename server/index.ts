@@ -649,8 +649,6 @@ const SCHAT_BASE_URL = normalizeEnvValue(process.env.SCHAT_BASE_URL || 'https://
 const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
 const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
 const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || '香蕉nano banana-2');
-const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || '即梦seedream 4');
-const GROK_IMAGE_MODEL = 'grok-image';
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 
 // Uselg(FluxPort) 生图渠道：标准(STANDARD/1K)用 STANDARD key，2K/4K 用 HD key。
@@ -760,16 +758,6 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
-  },
-  seedreamRoutes: {
-    '1K': [],
-    '2K': [{ id: 'schat-seedream-4', enabled: false }],
-    '4K': [{ id: 'schat-seedream-4', enabled: false }],
-  },
-  grokImageRoutes: {
-    '1K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
-    '2K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
-    '4K': [],
   },
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
@@ -957,18 +945,6 @@ const models = [
     name: 'Nano Banana Pro',
     description: '谷歌最强生图模型！',
     creditsCost: 24,
-  },
-  {
-    id: 'Seedream_4',
-    name: 'Seedream 4',
-    description: '即梦 Seedream 4 生图模型',
-    creditsCost: 18,
-  },
-  {
-    id: 'Grok_Image',
-    name: 'Grok Image',
-    description: 'xAI Grok 图像生成',
-    creditsCost: 22,
   },
   {
     id: 'gpt-image-2-adobe',
@@ -1250,7 +1226,20 @@ async function getDiskUsagePercent() {
   }
 }
 
+let imageStorageStatsCache: { at: number; value: ImageStorageStats } | null = null;
+const IMAGE_STORAGE_STATS_CACHE_TTL_MS = 60_000;
+
 async function getImageStorageStats(): Promise<ImageStorageStats> {
+  const cached = imageStorageStatsCache;
+  if (cached && Date.now() - cached.at < IMAGE_STORAGE_STATS_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const value = await computeImageStorageStats();
+  imageStorageStatsCache = { at: Date.now(), value };
+  return value;
+}
+
+async function computeImageStorageStats(): Promise<ImageStorageStats> {
   if (IS_VERCEL) {
     return {
       uploadsTotalBytes: 0,
@@ -2092,8 +2081,6 @@ function normalizeImageSize(value: string, modelId: string) {
     if (value === '2K' || value === '4K') return value;
     return 'STANDARD';
   }
-  if (modelId === 'Seedream_4') return value === '4K' ? '4K' : '2K';
-  if (modelId === 'Grok_Image') return value === '1K' ? '1K' : '2K';
   if (modelId === 'gpt-image-2-adobe') return '1K';
   if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
   if (value === '1K') return '1K';
@@ -2259,8 +2246,6 @@ function modelNameFromId(modelId: string) {
 
 function normalizeModelId(modelId: string) {
   const normalized = normalizeString(modelId).toLowerCase();
-  if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
-  if (['grok-image', 'grok_image'].includes(normalized)) return 'Grok_Image';
   const bananaAliases = [
     'nano-banana-pro',
     'nano_banana_pro',
@@ -2285,8 +2270,6 @@ function normalizePublicModelId(modelId: string) {
   if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalized)) {
     return 'gpt-image-2';
   }
-  if (['seedream-4', 'seedream_4', 'seedream4'].includes(normalized)) return 'Seedream_4';
-  if (['grok-image', 'grok_image'].includes(normalized)) return 'Grok_Image';
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
@@ -5390,30 +5373,6 @@ async function callConfiguredImageChannel(
     }
   }
 
-  if (input.modelId === 'Seedream_4' && channelId === 'schat-seedream-4') {
-    return callMeasuredImageChannel(
-      input,
-      traceId,
-      'Schat · Seedream 4',
-      SCHAT_SEEDREAM_4_MODEL,
-      () => generateSchatImage(input, {
-        baseUrl: SCHAT_BASE_URL,
-        apiKey: SCHAT_API_KEY,
-        model: SCHAT_SEEDREAM_4_MODEL,
-        timeoutMs: SCHAT_TIMEOUT_MS,
-      }),
-    );
-  }
-
-  if (input.modelId === 'Grok_Image' && channelId === 'junliai-grok' && imageProviderRouter) {
-    return imageProviderRouter.generate({
-      ...input,
-      providerRouting: 'junliai_only',
-      upstreamModelOverride: GROK_IMAGE_MODEL,
-      traceId,
-    });
-  }
-
   const error = new Error(`Image channel ${channelId} is unavailable`) as Error & { safeToFallback: boolean };
   error.safeToFallback = true;
   throw error;
@@ -5439,17 +5398,13 @@ async function callImageGeneration(input: ImageGenerationInput) {
   const resolution = routingResolution(effectiveInput.imageSize);
   let configuredChannels: string[] = effectiveInput.modelId === 'Nano_Banana_Pro'
     ? enabledProviderIds(routing.bananaRoutes[resolution])
-    : effectiveInput.modelId === 'Seedream_4'
-      ? enabledProviderIds(routing.seedreamRoutes[resolution])
-      : effectiveInput.modelId === 'Grok_Image'
-        ? enabledProviderIds(routing.grokImageRoutes[resolution])
-        : effectiveInput.modelId === 'gpt-image-2-adobe'
-          ? enabledProviderIds(routing.image2Routes[resolution])
-              .filter((channelId) => channelId === 'junliai-firefly')
-          : enabledProviderIds(routing.image2Routes[resolution])
-            .filter((channelId) => channelId !== 'junliai-gpt-image-25'
-              || effectiveInput.modelId === 'GPT-image-2.5-Flare'
-              || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
+    : effectiveInput.modelId === 'gpt-image-2-adobe'
+      ? enabledProviderIds(routing.image2Routes[resolution])
+          .filter((channelId) => channelId === 'junliai-firefly')
+      : enabledProviderIds(routing.image2Routes[resolution])
+        .filter((channelId) => channelId !== 'junliai-gpt-image-25'
+          || effectiveInput.modelId === 'GPT-image-2.5-Flare'
+          || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
   // 旧配置可能没有新渠道，normalize 会把它追加到末尾；2.5 的 1K
   // 必须稳定按“变体主渠道 -> 通用 gpt-image-2.5”顺序自动切换。
   if (resolution === '1K' && (effectiveInput.modelId === 'GPT-image-2.5-Flare' || effectiveInput.modelId === 'GPT-image-2.5-Sunburst')) {
@@ -6017,11 +5972,9 @@ function isReferenceImageInput(value: string) {
 }
 
 function maxReferenceImageCountForModel(modelId?: string) {
-  return modelId === 'Grok_Image'
-    ? 3
-    : modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
-      ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
-      : MAX_REFERENCE_IMAGE_COUNT;
+  return modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+    : MAX_REFERENCE_IMAGE_COUNT;
 }
 
 function validateReferenceImageSources(referenceImages: string[], modelId?: string) {
@@ -6030,7 +5983,7 @@ function validateReferenceImageSources(referenceImages: string[], modelId?: stri
     throw new Error(`A maximum of ${maxCount} reference images is supported`);
   }
 
-  const maxMB = modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+  const maxMB = MAX_REFERENCE_IMAGE_MB;
   const maxBytes = maxMB * 1024 * 1024;
 
   for (const source of referenceImages) {
@@ -6070,8 +6023,8 @@ function probeReferenceImageSize(url: string): Promise<number | null> {
   });
 }
 
-async function validateReferenceImageUrlSizes(referenceImages: string[], modelId?: string) {
-  const maxMB = modelId === 'Seedream_4' ? 20 : MAX_REFERENCE_IMAGE_MB;
+async function validateReferenceImageUrlSizes(referenceImages: string[], _modelId?: string) {
+  const maxMB = MAX_REFERENCE_IMAGE_MB;
   const maxBytes = maxMB * 1024 * 1024;
   const urls = referenceImages
     .map((item) => normalizeString(item))
@@ -6468,11 +6421,6 @@ async function start() {
         ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
         maxImages: 10,
       },
-      'grok-image': {
-        imageSizes: ['1K', '2K'],
-        ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
-        maxImages: 3,
-      },
     },
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
@@ -6480,11 +6428,9 @@ async function start() {
       return input.modelId === 'Nano_Banana_Pro'
         ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
           || isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
-        : input.modelId === 'Grok_Image'
-          ? isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok')
-          : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
-            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
-            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
+        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
+          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
+          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
@@ -6493,9 +6439,6 @@ async function start() {
         return upstreamModel === 'nano-banana-2'
           ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
           : isProviderEnabled(routing.bananaRoutes[resolution], 'junliai');
-      }
-      if (input.modelId === 'Grok_Image') {
-        return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
       // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，其余走 junliai-economy
       if (upstreamModel.startsWith('firefly-gpt-image-2') || upstreamModel.endsWith('-firefly')) {
@@ -7578,7 +7521,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'seedream-4'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
       });
       return;
     }
@@ -8183,7 +8126,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'seedream-4'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
       });
       return;
     }
@@ -9933,12 +9876,6 @@ async function start() {
       if (req.body?.bananaRoutes && typeof req.body.bananaRoutes === 'object') {
         patch.bananaRoutes = req.body.bananaRoutes;
       }
-      if (req.body?.seedreamRoutes && typeof req.body.seedreamRoutes === 'object') {
-        patch.seedreamRoutes = req.body.seedreamRoutes;
-      }
-      if (req.body?.grokImageRoutes && typeof req.body.grokImageRoutes === 'object') {
-        patch.grokImageRoutes = req.body.grokImageRoutes;
-      }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });
         return;
@@ -9994,15 +9931,8 @@ async function start() {
     }
   });
 
-  app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res) => {
+  app.get('/api/admin/dashboard-summary', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const [imageStorage, providerMetricRows, providerRiskRows, routing] = await Promise.all([
-        getImageStorageStats(),
-        providerMetrics?.getToday() || Promise.resolve([]),
-        providerRiskMonitor?.getToday() || Promise.resolve([]),
-        providerRouting!.get(),
-      ]);
-
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const [adminCredits, dashboardCounts] = await Promise.all([
@@ -10027,10 +9957,6 @@ async function start() {
             recordCount: dashboardCounts.recordCount,
             usedInviteCodeCount: dashboardCounts.usedInviteCodeCount,
           },
-          imageStorage,
-          providerMetrics: providerMetricRows,
-          providerRisks: providerRiskRows,
-          providerRouting: routing,
           adminCredits,
           visionaryDocSync: getVisionaryDocSyncStatus(),
         });
@@ -10061,10 +9987,6 @@ async function start() {
             recordCount,
             usedInviteCodeCount: usedInviteCount,
           },
-          imageStorage,
-          providerMetrics: providerMetricRows,
-          providerRisks: providerRiskRows,
-          providerRouting: routing,
           adminCredits: getAdminCreditSummary(db),
           visionaryDocSync: getVisionaryDocSyncStatus(),
         };
@@ -10072,7 +9994,19 @@ async function start() {
 
       res.json(payload);
     } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch admin dashboard failed' });
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch admin dashboard summary failed' });
+    }
+  });
+
+  app.get('/api/admin/provider-health', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const [providerMetricRows, providerRiskRows] = await Promise.all([
+        providerMetrics?.getToday() || Promise.resolve([]),
+        providerRiskMonitor?.getToday() || Promise.resolve([]),
+      ]);
+      res.json({ providerMetrics: providerMetricRows, providerRisks: providerRiskRows });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch provider health failed' });
     }
   });
 

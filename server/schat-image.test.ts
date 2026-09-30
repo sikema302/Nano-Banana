@@ -103,7 +103,7 @@ test('uses the configured banana model as a compatible 1K channel', async () => 
   assert.equal(body.size, '1280x720');
 });
 
-test('maps Seedream 2K and 4K ratios to explicit pixel sizes', () => {
+test('maps 2K and 4K ratios to explicit pixel sizes', () => {
   assert.equal(schatImageSize('2K', '3:2'), '2400x1600');
   assert.equal(schatImageSize('2K', '9:16'), '1152x2048');
   assert.equal(schatImageSize('4K', '16:9'), '4096x2304');
@@ -119,7 +119,7 @@ test('sends multiple reference images through repeated image[] fields', async ()
   }, {
     baseUrl: 'https://www.schat.top/v1',
     apiKey: 'secret',
-    model: '即梦seedream 4',
+    model: 'gpt-image-2',
     fetchImpl: async (url, init) => {
       assert.equal(String(url), 'https://www.schat.top/v1/images/edits');
       requestBody = init?.body as FormData;
@@ -127,7 +127,7 @@ test('sends multiple reference images through repeated image[] fields', async ()
     },
   });
 
-  assert.equal(requestBody?.get('model'), '即梦seedream 4');
+  assert.equal(requestBody?.get('model'), 'gpt-image-2');
   assert.equal(requestBody?.get('size'), '2048x2048');
   assert.equal(requestBody?.getAll('image[]').length, 2);
   assert.equal(requestBody?.getAll('image').length, 0);

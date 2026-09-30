@@ -488,8 +488,7 @@ export function createImageProviderRouter(options: RouterOptions) {
       (input.modelId === 'gpt-image-2'
         || input.modelId === 'GPT-image-2.5-Flare'
         || input.modelId === 'GPT-image-2.5-Sunburst'
-        || input.modelId === 'Nano_Banana_Pro'
-        || input.modelId === 'Grok_Image') &&
+        || input.modelId === 'Nano_Banana_Pro') &&
       candidates.length > 0;
     if (!primaryEligible) {
       if (junliaiOnly) {
