@@ -79,7 +79,7 @@ class FakeGate implements WorkAdmissionGate {
 test('queues work while pressured and respects global and per-kind concurrency', async () => {
   const gate = new FakeGate();
   gate.setPaused(true);
-  const queue = new ResourceAwareWorkQueue(gate, 2, 5, { video: 1 });
+  const queue = new ResourceAwareWorkQueue(gate, 2, 5, { heavy: 1 });
   const started: string[] = [];
   const releases = new Map<string, () => void>();
   const work = (id: string, kind: string) => queue.enqueue(id, kind, async () => {
@@ -87,21 +87,21 @@ test('queues work while pressured and respects global and per-kind concurrency',
     await new Promise<void>((resolve) => releases.set(id, resolve));
   });
 
-  const first = work('video-1', 'video');
-  const second = work('video-2', 'video');
+  const first = work('heavy-1', 'heavy');
+  const second = work('heavy-2', 'heavy');
   const third = work('image-1', 'image');
   assert.deepEqual(started, []);
-  assert.equal(queue.position('video-1'), 1);
+  assert.equal(queue.position('heavy-1'), 1);
 
   gate.setPaused(false);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(started, ['video-1', 'image-1']);
+  assert.deepEqual(started, ['heavy-1', 'image-1']);
   releases.get('image-1')?.();
-  releases.get('video-1')?.();
+  releases.get('heavy-1')?.();
   await Promise.all([first, third]);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(started, ['video-1', 'image-1', 'video-2']);
-  releases.get('video-2')?.();
+  assert.deepEqual(started, ['heavy-1', 'image-1', 'heavy-2']);
+  releases.get('heavy-2')?.();
   await second;
   queue.dispose();
 });

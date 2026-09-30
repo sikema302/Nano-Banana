@@ -3,7 +3,6 @@ import {
   normalizeGptImagePricing,
   type GptImagePricing,
 } from './model-pricing.js';
-import type { VideoDurationSeconds, VideoModelId, VideoResolution } from './video-pricing.js';
 
 export type NanoBananaCreditPricing = {
   oneK: number;
@@ -22,8 +21,6 @@ export type GrokImageCreditPricing = {
   twoK: number;
 };
 
-export type VideoCreditPricing = Record<VideoModelId, Partial<Record<`${VideoResolution}:${VideoDurationSeconds}`, number>>>;
-
 export type GptImage2AdobeCreditPricing = {
   oneK: number;
 };
@@ -36,7 +33,6 @@ export type ModelCreditPricing = {
   nanoBanana: NanoBananaCreditPricing;
   seedream: SeedreamCreditPricing;
   grokImage: GrokImageCreditPricing;
-  video: VideoCreditPricing;
   updatedAt: string;
 };
 
@@ -67,41 +63,6 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     oneK: 20,
     twoK: 22,
   },
-  video: {
-    'gemini-veo31': {
-      '720p:4': 150,
-      '720p:6': 200,
-      '720p:8': 250,
-      '1080p:4': 200,
-      '1080p:6': 250,
-      '1080p:8': 300,
-    },
-    'grok-video': {
-      '720p:6': 60,
-      '720p:10': 100,
-      '720p:15': 150,
-    },
-    'seedance2.5': Object.fromEntries(
-      Array.from({ length: 26 }, (_, index) => {
-        const seconds = index + 4;
-        const documentCredits = 5 + 4 + index * 4;
-        return [`720p:${seconds}`, Math.ceil((documentCredits / 3) * 20)];
-      }),
-    ),
-    'sd2.0fast': Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => {
-        const seconds = index + 4;
-        const credits = seconds * 50;
-        return [`480p:${seconds}`, credits];
-      }).concat(
-        Array.from({ length: 12 }, (_, index) => {
-          const seconds = index + 4;
-          const credits = seconds * 50;
-          return [`720p:${seconds}`, credits];
-        }),
-      ),
-    ),
-  },
   updatedAt: '',
 };
 
@@ -124,14 +85,6 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
     ? source.gptImage2Adobe
     : {};
-  const video = source.video && typeof source.video === 'object' ? source.video : {};
-  const normalizeVideoModel = (modelId: VideoModelId) => {
-    const defaults = DEFAULT_MODEL_CREDIT_PRICING.video[modelId];
-    const candidate = video[modelId] && typeof video[modelId] === 'object' ? video[modelId] : {};
-    return Object.fromEntries(
-      Object.entries(defaults).map(([key, fallback]) => [key, positiveCredit(candidate[key as keyof typeof candidate], Number(fallback))]),
-    );
-  };
 
   return {
     gptImage2: normalizeGptImagePricing(source.gptImage2),
@@ -153,12 +106,6 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     grokImage: {
       oneK: positiveCredit(grokImage.oneK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.oneK),
       twoK: positiveCredit(grokImage.twoK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.twoK),
-    },
-    video: {
-      'gemini-veo31': normalizeVideoModel('gemini-veo31'),
-      'grok-video': normalizeVideoModel('grok-video'),
-      'seedance2.5': normalizeVideoModel('seedance2.5'),
-      'sd2.0fast': normalizeVideoModel('sd2.0fast'),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };
@@ -196,13 +143,4 @@ export function getConfiguredImageCredits(
     return imageSize === '1K' ? pricing.grokImage.oneK : pricing.grokImage.twoK;
   }
   return 1;
-}
-
-export function getConfiguredVideoCredits(
-  pricing: ModelCreditPricing,
-  modelId: VideoModelId,
-  resolution: VideoResolution,
-  seconds: VideoDurationSeconds,
-) {
-  return Number(pricing.video[modelId]?.[`${resolution}:${seconds}`] || 0);
 }

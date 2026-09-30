@@ -58,10 +58,6 @@ const defaults: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: true }],
     '4K': [],
   },
-  junliaiGeminiVeo31: true,
-  junliaiGrokVideo: true,
-  schatSeedance25: true,
-  junliaiSd2Fast: false,
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
@@ -134,7 +130,6 @@ test('migrates legacy switches into every compatible resolution route', async ()
       get: async () => JSON.stringify({
         junliaiGptImage2: false,
         junliaiNanoBanana: false,
-        junliaiFireflyVideo: true,
       }),
       set: async () => undefined,
     },

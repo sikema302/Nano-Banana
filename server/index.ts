@@ -54,16 +54,8 @@ import {
 import { createImageChannelFailover } from './image-channel-failover.js';
 import { normalizePublicApiProviderRouting } from './public-api-routing.js';
 import {
-  supportsVideoConfiguration,
-  type VideoDurationSeconds,
-  type VideoModelId,
-  type VideoRatio,
-  type VideoResolution,
-} from '../src/lib/video-pricing.js';
-import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
-  getConfiguredVideoCredits,
   normalizeModelCreditPricing,
   type ModelCreditPricing,
 } from '../src/lib/model-credit-config.js';
@@ -507,10 +499,6 @@ const GENERATION_MAX_CONCURRENCY = Math.max(
   1,
   Math.floor(Math.min(GENERATION_MAX_PENDING, boundedEnvNumber('GENERATION_MAX_CONCURRENCY', 25, 1, 1_000))),
 );
-const VIDEO_MAX_CONCURRENCY = Math.max(
-  1,
-  Math.floor(Math.min(GENERATION_MAX_CONCURRENCY, boundedEnvNumber('VIDEO_MAX_CONCURRENCY', 3, 1, 1_000))),
-);
 const RESOURCE_SAMPLE_INTERVAL_MS = boundedEnvNumber('RESOURCE_SAMPLE_INTERVAL_MS', 2_000, 500, 60_000);
 const resourceCpuPausePercent = boundedEnvNumber(
   'RESOURCE_CPU_PAUSE_PERCENT',
@@ -586,7 +574,6 @@ const generationWorkQueue = new ResourceAwareWorkQueue(
   generationResourceMonitor,
   GENERATION_MAX_CONCURRENCY,
   GENERATION_MAX_PENDING,
-  { video: VIDEO_MAX_CONCURRENCY },
 );
 
 type AdminAutomationOperation = {
@@ -664,8 +651,6 @@ const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_
 const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || '香蕉nano banana-2');
 const SCHAT_SEEDREAM_4_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDREAM_4_MODEL || '即梦seedream 4');
 const GROK_IMAGE_MODEL = 'grok-image';
-const SCHAT_SEEDANCE_25_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_25_MODEL || 'sd2-5-720p');
-const SCHAT_SEEDANCE_2_FAST_MODEL = normalizeEnvValue(process.env.SCHAT_SEEDANCE_2_FAST_MODEL || 'sd2.0fast（可音频，过真人）');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 
 // Uselg(FluxPort) 生图渠道：标准(STANDARD/1K)用 STANDARD key，2K/4K 用 HD key。
@@ -730,17 +715,6 @@ const IMAGE_CHANNEL_RETRY_COOLDOWN_MS = Math.max(
   5_000,
   Number(process.env.IMAGE_CHANNEL_RETRY_COOLDOWN_MS || 30_000),
 );
-const VIDEO_MODEL_GEMINI_ID = 'gemini-veo31';
-const VIDEO_MODEL_GROK_ID = 'grok-video';
-const VIDEO_MODEL_SEEDANCE_25_ID = 'seedance2.5';
-const VIDEO_MODEL_SD2_FAST_ID = 'sd2.0fast';
-const VIDEO_MODEL_LABELS: Record<string, string> = {
-  [VIDEO_MODEL_GEMINI_ID]: 'Gemini Veo 3.1',
-  [VIDEO_MODEL_GROK_ID]: 'Grok Video',
-  [VIDEO_MODEL_SEEDANCE_25_ID]: 'Seedance 2.5',
-  [VIDEO_MODEL_SD2_FAST_ID]: 'seedance 2.0 fast',
-};
-const VIDEO_JOB_TIMEOUT_MS = 30 * 60_000;
 const JUNLIAI_CIRCUIT_SETTING_KEY = 'junliai_circuit_state_v3';
 const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   image2Routes: {
@@ -797,10 +771,6 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
     '4K': [],
   },
-  junliaiGeminiVeo31: JUNLIAI_PRIMARY_ENABLED,
-  junliaiGrokVideo: JUNLIAI_PRIMARY_ENABLED,
-  schatSeedance25: false,
-  junliaiSd2Fast: false,
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -5541,156 +5511,6 @@ async function callImageGeneration(input: ImageGenerationInput) {
   throw new Error(sawServiceFailure ? 'IMAGE_SERVICE_UNAVAILABLE' : 'IMAGE_MODEL_BUSY');
 }
 
-function videoSize(ratio: string, resolution: string) {
-  const sizes: Record<string, Record<string, string>> = {
-    '480p': { '21:9': '1120x480', '16:9': '854x480', '4:3': '640x480', '1:1': '480x480', '3:4': '480x640', '9:16': '480x854' },
-    '720p': { '21:9': '1680x720', '16:9': '1280x720', '4:3': '960x720', '1:1': '720x720', '3:4': '720x960', '9:16': '720x1280' },
-    '1080p': { '21:9': '2520x1080', '16:9': '1920x1080', '4:3': '1440x1080', '1:1': '1080x1080', '3:4': '1080x1440', '9:16': '1080x1920' },
-  };
-  return sizes[resolution]?.[ratio] || sizes['720p']['16:9'];
-}
-
-function dataUrlBlob(value: string) {
-  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
-  if (!match) throw new Error('Invalid video reference image');
-  const bytes = match[2]
-    ? Buffer.from(match[3].replace(/\s+/g, ''), 'base64')
-    : Buffer.from(decodeURIComponent(match[3]));
-  return new Blob([bytes], { type: match[1] || 'image/png' });
-}
-
-async function parseJunliaiVideoResponse(response: globalThis.Response) {
-  const text = await response.text();
-  let payload: Record<string, unknown> = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch {
-    payload = {};
-  }
-  if (!response.ok) {
-    throw new Error(
-      stringifyApiErrorValue(payload) ||
-      `Video provider returned HTTP ${response.status}: ${text.slice(0, 240)}`,
-    );
-  }
-  return payload;
-}
-
-async function createJunliaiVideoTask(input: {
-  modelId: VideoModelId;
-  prompt: string;
-  ratio: string;
-  resolution: string;
-  seconds: VideoDurationSeconds;
-  referenceImages: ReferenceUploadInput[];
-  audioReferences?: ReferenceUploadInput[];
-  realPerson?: boolean;
-}) {
-  const isSeedance = input.modelId === VIDEO_MODEL_SEEDANCE_25_ID;
-  const isSd2Fast = input.modelId === VIDEO_MODEL_SD2_FAST_ID;
-  const useSchat = isSeedance || isSd2Fast;
-  const baseUrl = (useSchat ? SCHAT_BASE_URL : JUNLIAI_BASE_URL).replace(/\/+$/, '');
-  const apiKey = useSchat ? SCHAT_API_KEY : JUNLIAI_API_KEY;
-  const providerModel = isSd2Fast
-    ? SCHAT_SEEDANCE_2_FAST_MODEL
-    : isSeedance
-      ? SCHAT_SEEDANCE_25_MODEL
-      : input.modelId;
-  const url = `${baseUrl}/videos`;
-  const headers: Record<string, string> = {
-    Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
-  };
-  let body: BodyInit;
-  const hasReferences = input.referenceImages.length > 0 || (isSd2Fast && input.audioReferences && input.audioReferences.length > 0);
-  if (hasReferences) {
-    const form = new FormData();
-    form.set('model', providerModel);
-    form.set('prompt', input.prompt);
-    form.set('seconds', String(input.seconds));
-    form.set('size', videoSize(input.ratio, input.resolution));
-    form.set('response_format', 'url');
-    const maxRefImages = isSd2Fast ? 9 : 2;
-    input.referenceImages.slice(0, maxRefImages).forEach((item, index) => {
-      form.append('input_reference', dataUrlBlob(item.data), item.name || `reference-${index + 1}.png`);
-    });
-    if (isSd2Fast && input.audioReferences) {
-      input.audioReferences.slice(0, 3).forEach((item, index) => {
-        form.append('input_audio', dataUrlBlob(item.data), item.name || `audio-${index + 1}.mp3`);
-      });
-    }
-    if (isSd2Fast && input.realPerson) {
-      form.set('input_real_person', 'true');
-    }
-    body = form;
-  } else {
-    headers['Content-Type'] = 'application/json';
-    const jsonBody: Record<string, string> = {
-      model: providerModel,
-      prompt: input.prompt,
-      seconds: String(input.seconds),
-      size: videoSize(input.ratio, input.resolution),
-      response_format: 'url',
-    };
-    if (isSd2Fast && input.realPerson) {
-      jsonBody.input_real_person = 'true';
-    }
-    body = JSON.stringify(jsonBody);
-  }
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body,
-    signal: AbortSignal.timeout(60_000),
-  });
-  const payload = await parseJunliaiVideoResponse(response);
-  const taskId = normalizeString(payload.id);
-  if (!taskId) throw new Error('Video provider returned no task id');
-  return { taskId, payload, baseUrl, apiKey };
-}
-
-async function archiveJunliaiVideo(taskId: string, videoUrl: string, baseUrl: string, apiKey: string) {
-  const headers = videoUrl
-    ? undefined
-    : { Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}` };
-  const source = videoUrl || `${baseUrl}/videos/${encodeURIComponent(taskId)}/content`;
-  const response = await fetch(source, { headers, signal: AbortSignal.timeout(5 * 60_000) });
-  if (!response.ok) throw new Error(`Video download failed (${response.status})`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength < 1_024) throw new Error('Video provider returned an empty video');
-  const fileName = `generated-video-${Date.now()}-${randomHex(4)}.mp4`;
-  await fs.writeFile(path.join(GENERATED_DIR, fileName), buffer);
-  return `/uploads/generated/${fileName}`;
-}
-
-async function waitForJunliaiVideo(taskId: string, baseUrl: string, apiKey: string, onProgress: (progress: number) => void) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < VIDEO_JOB_TIMEOUT_MS) {
-    const response = await fetch(
-      `${baseUrl}/videos/${encodeURIComponent(taskId)}`,
-      {
-        headers: {
-          Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`,
-        },
-        signal: AbortSignal.timeout(30_000),
-      },
-    );
-    const payload = await parseJunliaiVideoResponse(response);
-    const status = normalizeString(payload.status).toLowerCase();
-    const progress = Math.max(12, Math.min(95, Number(payload.progress || 0)));
-    onProgress(Number.isFinite(progress) ? progress : 20);
-    if (status === 'completed' || status === 'succeeded') {
-      const data = Array.isArray(payload.data) ? payload.data[0] as Record<string, unknown> | undefined : undefined;
-      const url = normalizeString(payload.url || payload.video_url || data?.url);
-      return archiveJunliaiVideo(taskId, url, baseUrl, apiKey);
-    }
-    if (status === 'failed' || status === 'cancelled') {
-      throw new Error(stringifyApiErrorValue(payload) || 'Video generation failed');
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-  }
-  throw new Error('Video generation timed out');
-}
-
 async function callVisionaryAsyncGeneration({
   prompt,
   modelId,
@@ -8906,384 +8726,6 @@ async function start() {
     res.json({ job: publicGenerationJob(job) });
   });
 
-  type VideoGenerationJob = {
-    id: string;
-    userId: string;
-    username: string;
-    status: 'queued' | 'processing' | 'succeeded' | 'failed';
-    progress: number;
-    prompt: string;
-    ratio: VideoRatio;
-    resolution: VideoResolution;
-    modelId: VideoModelId;
-    seconds: VideoDurationSeconds;
-    referenceImages: ReferenceUploadInput[];
-    audioReferences?: ReferenceUploadInput[];
-    realPerson?: boolean;
-    createdAt: string;
-    updatedAt: string;
-    completedAt?: string;
-    videoPath?: string;
-    error?: string;
-    creditsRemaining?: number;
-    creditReservation?: { bucket: CreditBucket; amount: number };
-    creditDebit?: CreditDebit;
-    creditRefunded?: boolean;
-  };
-
-  const videoJobs = new Map<string, VideoGenerationJob>();
-  const pruneVideoJobs = () => {
-    const cutoff = Date.now() - 4 * 60 * 60_000;
-    for (const [id, job] of videoJobs) {
-      // 活跃任务可能仍持有积分预留，不能因 TTL 清理后变成“无预留免费执行”。
-      if ((job.status === 'succeeded' || job.status === 'failed') && new Date(job.updatedAt).getTime() < cutoff) {
-        videoJobs.delete(id);
-      }
-    }
-  };
-
-  function publicVideoJob(req: Request, job: VideoGenerationJob) {
-    const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, job.modelId, job.resolution, job.seconds);
-    return {
-      id: job.id,
-      status: job.status,
-      progress: job.status === 'succeeded' ? 100 : job.progress,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      completedAt: job.completedAt,
-      videoUrl: job.videoPath ? toPublicAssetUrl(req, job.videoPath) : undefined,
-      modelId: job.modelId,
-      modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
-      error: job.error,
-      creditsUsed: job.status === 'succeeded' ? creditsUsed : 0,
-      creditsRemaining: job.creditsRemaining,
-      queuePosition: job.status === 'queued' ? generationWorkQueue.position(job.id) : 0,
-      resourcePaused: job.status === 'queued' && generationResourceMonitor.isPaused(),
-    };
-  }
-
-  async function runVideoJob(jobId: string) {
-    const job = videoJobs.get(jobId);
-    if (!job) return;
-    const requestStartedAt = Date.now();
-    const metricConfiguration = `${job.resolution} / ${job.seconds}s / ${job.ratio}`;
-    const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, job.modelId, job.resolution, job.seconds);
-    const recordVideoRequest = async (modelId: string, success: boolean, durationMs: number, errorMessage = '', videoPath = '') => {
-      try {
-        const requestId = await recordGenerationRequest({
-          modelId,
-          provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
-          configuration: metricConfiguration,
-          durationMs,
-          success,
-          errorMessage,
-          sourceModel: VIDEO_MODEL_LABELS[modelId] || modelId,
-          prompt: job.prompt,
-          requestContext: {
-            userId: job.userId,
-            username: job.username,
-            creditsUsed,
-          },
-        });
-        if (success && requestId && videoPath) {
-          await updateGenerationRequestImage(requestId, videoPath);
-        }
-      } catch (recordError) {
-        console.warn('[video-generation] failed to save request record:', recordError);
-      }
-    };
-    const update = (patch: Partial<VideoGenerationJob>) => {
-      Object.assign(job, patch, { updatedAt: nowIso() });
-    };
-    update({ status: 'processing', progress: 8 });
-    try {
-      const created = await createJunliaiVideoTask(job);
-      update({ progress: 12 });
-      const videoPath = await waitForJunliaiVideo(created.taskId, created.baseUrl, created.apiKey, (progress) => update({ progress }));
-      const apiRequestMs = Math.max(0, Date.now() - requestStartedAt);
-      // 历史落库是成功交付的一部分。先写历史，再提交扣款；落库失败时只释放预留，绝不扣分。
-      if (USE_SUPABASE) {
-        const db = await getSupabaseDb();
-        await db.insertGeneration({
-          userId: job.userId,
-          username: job.username,
-          prompt: job.prompt,
-          modelId: job.modelId,
-          modelName: VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
-          dimensions: job.ratio,
-          imageSize: job.resolution,
-          imagePath: videoPath,
-          creditsUsed,
-          apiRequestMs,
-          referenceImages: [],
-          createdAt: job.createdAt,
-        });
-      } else {
-        await withWriteDb((db) => {
-          ensureSchema(db);
-          db.run(
-            `
-              INSERT INTO generations (
-                user_id, username, prompt, model_id, model_name, dimensions,
-                image_size, image_path, credits_used, api_request_ms, reference_images, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `,
-            [
-              job.userId,
-              job.username,
-              job.prompt,
-              job.modelId,
-              VIDEO_MODEL_LABELS[job.modelId] || job.modelId,
-              job.ratio,
-              job.resolution,
-              videoPath,
-              creditsUsed,
-              apiRequestMs,
-              '[]',
-              job.createdAt,
-            ],
-          );
-        });
-      }
-
-      if (job.creditReservation) {
-        const charged = await debitUserCredits(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
-        job.creditDebit = charged.debit;
-        releaseCreditReservation(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
-        job.creditReservation = undefined;
-        creditAudit('debit', job.userId, job.username, creditBucketForModel(job.modelId), creditsUsed, { modelId: job.modelId, video: true });
-      }
-
-      // 统计为派生数据，失败时不影响已写入的成功历史和后续交付。
-      try {
-        if (USE_SUPABASE) {
-          const db = await getSupabaseDb();
-          await db.incrementGenerationCount(job.userId, job.username, creditsUsed, job.createdAt);
-        } else {
-          await withWriteDb((db) => {
-            ensureSchema(db);
-            db.run(
-              `
-                INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-                VALUES (?, ?, 1, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                  username = excluded.username,
-                  generations_total = generations_total + 1,
-                  credits_total = credits_total + excluded.credits_total,
-                  updated_at = excluded.updated_at
-              `,
-              [job.userId, job.username, creditsUsed, job.createdAt],
-            );
-          });
-        }
-      } catch (statsError) {
-        console.warn('[video-generation] failed to update generation stats:', statsError);
-      }
-      const creditsRemaining = (await getUserCreditDetails(job.userId)).remainingCredits;
-      void providerMetrics?.record({
-        modelId: job.modelId,
-        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
-        configuration: metricConfiguration,
-        durationMs: apiRequestMs,
-        success: true,
-      });
-      await recordVideoRequest(job.modelId, true, apiRequestMs, '', videoPath);
-      update({ status: 'succeeded', progress: 100, videoPath, creditsRemaining, completedAt: nowIso() });
-    } catch (error) {
-      console.error('[video-generation]', error);
-      let creditsRemaining: number | undefined;
-      if (job.creditDebit && !job.creditRefunded) {
-        try {
-          const refunded = await refundUserCreditsWithRetry(job.userId, job.creditDebit);
-          job.creditRefunded = true;
-          creditsRemaining = refunded.remainingCredits;
-          if (USE_SUPABASE) {
-            const db = await getSupabaseDb();
-            await db.syncInviteCodeBalanceForUser(job.userId);
-          } else {
-            await withWriteDb((db) => {
-              ensureSchema(db);
-              syncInviteCodeBalanceForUser(db, job.userId);
-            });
-          }
-        } catch (refundError) {
-          console.error('[video-generation] failed to refund credits after task failure:', refundError);
-        }
-      } else if (job.creditReservation) {
-        releaseCreditReservation(job.userId, job.creditReservation.bucket, job.creditReservation.amount);
-        creditAudit('release', job.userId, job.username, job.creditReservation.bucket, job.creditReservation.amount, { modelId: job.modelId, video: true });
-        job.creditReservation = undefined;
-      }
-      const durationMs = Math.max(0, Date.now() - requestStartedAt);
-      const errorMessage = sanitizeExternalErrorMessage(
-        error instanceof Error ? error.message : 'Video generation failed',
-        '视频生成失败，本次不会扣除积分',
-      );
-      void providerMetrics?.record({
-        modelId: job.modelId,
-        provider: job.modelId === VIDEO_MODEL_SEEDANCE_25_ID || job.modelId === VIDEO_MODEL_SD2_FAST_ID ? 'Schat' : 'Junliai',
-        configuration: metricConfiguration,
-        durationMs,
-        success: false,
-      });
-      await recordVideoRequest(job.modelId, false, durationMs, errorMessage);
-      update({
-        status: 'failed',
-        error: errorMessage,
-        creditsRemaining,
-        completedAt: nowIso(),
-      });
-    }
-  }
-
-  app.post('/api/generate/video/jobs', requireAuth, async (req, res) => {
-    pruneVideoJobs();
-    const modelId = normalizeString(req.body?.modelId) as VideoModelId;
-    const prompt = normalizeString(req.body?.prompt).slice(0, 8_000);
-    const ratio = normalizeString(req.body?.ratio) as VideoGenerationJob['ratio'];
-    const resolution = normalizeString(req.body?.resolution) as VideoGenerationJob['resolution'];
-    const seconds = Number(req.body?.seconds) as VideoDurationSeconds;
-    const rawReferences = Array.isArray(req.body?.referenceImages) ? req.body.referenceImages : [];
-    const isSd2Fast = modelId === VIDEO_MODEL_SD2_FAST_ID;
-    const maxRefImages = isSd2Fast ? 9 : 2;
-    const maxRefBytes = isSd2Fast ? 32_000_000 : 28_000_000;
-    const referenceImages = rawReferences.slice(0, maxRefImages).map((item: unknown, index: number) => {
-      const value = asPlainObject(item);
-      return {
-        name: normalizeString(value.name) || `video-reference-${index + 1}.png`,
-        mimeType: normalizeString(value.mimeType) || 'image/png',
-        data: normalizeString(value.data),
-      };
-    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:image/') && item.data.length <= maxRefBytes);
-    const rawAudioReferences = isSd2Fast && Array.isArray(req.body?.audioReferences) ? req.body.audioReferences : [];
-    const audioReferences = rawAudioReferences.slice(0, 3).map((item: unknown, index: number) => {
-      const value = asPlainObject(item);
-      return {
-        name: normalizeString(value.name) || `audio-reference-${index + 1}.mp3`,
-        mimeType: normalizeString(value.mimeType) || 'audio/mpeg',
-        data: normalizeString(value.data),
-      };
-    }).filter((item: ReferenceUploadInput) => item.data.startsWith('data:audio/') && item.data.length <= 16_000_000);
-    const realPerson = isSd2Fast ? Boolean(req.body?.realPerson) : false;
-    if (!prompt) {
-      res.status(400).json({ error: '请输入视频提示词' });
-      return;
-    }
-    if (!supportsVideoConfiguration(modelId, resolution, ratio, seconds)) {
-      res.status(400).json({ error: '当前视频模型不支持所选比例、分辨率或时长' });
-      return;
-    }
-    const routing = await providerRouting!.get();
-    const routeEnabled = modelId === VIDEO_MODEL_GEMINI_ID
-      ? routing.junliaiGeminiVeo31
-      : modelId === VIDEO_MODEL_SEEDANCE_25_ID
-        ? routing.schatSeedance25
-        : modelId === VIDEO_MODEL_SD2_FAST_ID
-          ? routing.junliaiSd2Fast
-          : routing.junliaiGrokVideo;
-    if (!routeEnabled) {
-      res.status(503).json({ error: `管理员已关闭 ${VIDEO_MODEL_LABELS[modelId] || modelId} 接口` });
-      return;
-    }
-    const videoApiKey = (modelId === VIDEO_MODEL_SEEDANCE_25_ID || modelId === VIDEO_MODEL_SD2_FAST_ID) ? SCHAT_API_KEY : JUNLIAI_API_KEY;
-    if (!videoApiKey) {
-      res.status(503).json({ error: '视频生成接口尚未配置' });
-      return;
-    }
-    if (!generationWorkQueue.canAccept()) {
-      res.status(429).json({ error: 'Generation queue is busy. Please retry shortly.' });
-      return;
-    }
-    let reservedGenerationCredit: { bucket: CreditBucket; amount: number } | undefined;
-    try {
-      const credits = await getUserCreditDetails(req.authUser!.userId);
-      const creditsUsed = getConfiguredVideoCredits(activeModelCreditPricing, modelId, resolution, seconds);
-      if (availableCreditsForBucket(credits.creditBalances, 'general') < creditsUsed) {
-        res.status(402).json({ error: `当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分` });
-        return;
-      }
-      if (!reserveCreditFor(req.authUser!.userId, 'general', creditsUsed, credits.creditBalances)) {
-        throw new Error(`当前积分不足，${resolution} 视频需要 ${creditsUsed} 积分`);
-      }
-      reservedGenerationCredit = { bucket: 'general', amount: creditsUsed };
-      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, 'general', creditsUsed, { modelId, resolution, video: true });
-      const now = nowIso();
-      const job: VideoGenerationJob = {
-        id: `video_${Date.now()}_${randomHex(6)}`,
-        userId: req.authUser!.userId,
-        username: req.authUser!.username,
-        status: 'queued',
-        progress: 3,
-        modelId,
-        prompt,
-        ratio,
-        resolution,
-        seconds,
-        referenceImages,
-        audioReferences: audioReferences.length > 0 ? audioReferences : undefined,
-        realPerson: realPerson || undefined,
-        creditReservation: reservedGenerationCredit,
-        createdAt: now,
-        updatedAt: now,
-      };
-      videoJobs.set(job.id, job);
-      void generationWorkQueue.enqueue(job.id, 'video', () => runVideoJob(job.id)).catch(async (error) => {
-        const current = videoJobs.get(job.id);
-        if (!current) return;
-        let creditsRemaining: number | undefined;
-        if (current.creditDebit && !current.creditRefunded) {
-          try {
-            const refunded = await refundUserCreditsWithRetry(current.userId, current.creditDebit);
-            current.creditRefunded = true;
-            creditsRemaining = refunded.remainingCredits;
-            if (USE_SUPABASE) {
-              const db = await getSupabaseDb();
-              await db.syncInviteCodeBalanceForUser(current.userId);
-            } else {
-              await withWriteDb((db) => {
-                ensureSchema(db);
-                syncInviteCodeBalanceForUser(db, current.userId);
-              });
-            }
-          } catch (refundError) {
-            console.error('[video-generation] failed to refund queued task credits:', refundError);
-          }
-        } else if (current.creditReservation) {
-          releaseCreditReservation(current.userId, current.creditReservation.bucket, current.creditReservation.amount);
-          creditAudit('release', current.userId, current.username, current.creditReservation.bucket, current.creditReservation.amount, { modelId: current.modelId, video: true, error: imageErrorText(error) });
-          current.creditReservation = undefined;
-        }
-        Object.assign(current, {
-          status: 'failed',
-          error: error instanceof QueueCapacityError
-            ? 'Generation queue is busy. Please retry shortly.'
-            : 'The task could not be started. Please retry shortly.',
-          creditsRemaining,
-          completedAt: nowIso(),
-          updatedAt: nowIso(),
-        });
-      });
-      res.status(202).json({ job: publicVideoJob(req, job) });
-    } catch (error) {
-      if (reservedGenerationCredit) {
-        releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
-        creditAudit('release', req.authUser!.userId, req.authUser!.username, reservedGenerationCredit.bucket, reservedGenerationCredit.amount, { modelId, video: true, error: imageErrorText(error) });
-        reservedGenerationCredit = undefined;
-      }
-      res.status(500).json({ error: error instanceof Error ? error.message : '创建视频任务失败' });
-    }
-  });
-
-  app.get('/api/generate/video/jobs/:id', requireAuth, (req, res) => {
-    pruneVideoJobs();
-    const job = videoJobs.get(normalizeString(req.params.id));
-    if (!job || job.userId !== req.authUser!.userId) {
-      res.status(404).json({ error: '视频任务不存在' });
-      return;
-    }
-    res.json({ job: publicVideoJob(req, job) });
-  });
-
   app.post('/api/generate', requireAuth, async (req, res) => {
     const queuedJobId = normalizeString(req.headers['x-pixory-generation-job']);
     const queuedJob = generationJobs.get(queuedJobId);
@@ -10496,18 +9938,6 @@ async function start() {
       }
       if (req.body?.grokImageRoutes && typeof req.body.grokImageRoutes === 'object') {
         patch.grokImageRoutes = req.body.grokImageRoutes;
-      }
-      if (typeof req.body?.junliaiGeminiVeo31 === 'boolean') {
-        patch.junliaiGeminiVeo31 = req.body.junliaiGeminiVeo31;
-      }
-      if (typeof req.body?.junliaiGrokVideo === 'boolean') {
-        patch.junliaiGrokVideo = req.body.junliaiGrokVideo;
-      }
-      if (typeof req.body?.schatSeedance25 === 'boolean') {
-        patch.schatSeedance25 = req.body.schatSeedance25;
-      }
-      if (typeof req.body?.junliaiSd2Fast === 'boolean') {
-        patch.junliaiSd2Fast = req.body.junliaiSd2Fast;
       }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });

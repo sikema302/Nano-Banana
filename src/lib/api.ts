@@ -80,23 +80,6 @@ export interface GenerationJobInfo {
   resourcePaused?: boolean;
 }
 
-export interface VideoGenerationJobInfo {
-  id: string;
-  status: 'queued' | 'processing' | 'succeeded' | 'failed';
-  progress: number;
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string;
-  videoUrl?: string;
-  modelId?: string;
-  modelName?: string;
-  error?: string;
-  creditsUsed?: number;
-  creditsRemaining?: number;
-  queuePosition?: number;
-  resourcePaused?: boolean;
-}
-
 export interface SavedImage {
   id: number;
   prompt: string;
@@ -265,10 +248,6 @@ export interface ProviderRoutingConfig {
   bananaRoutes: Record<ProviderResolution, Array<ProviderChannel<BananaProviderId>>>;
   seedreamRoutes: Record<ProviderResolution, Array<ProviderChannel<SeedreamProviderId>>>;
   grokImageRoutes: Record<ProviderResolution, Array<ProviderChannel<GrokImageProviderId>>>;
-  junliaiGeminiVeo31: boolean;
-  junliaiGrokVideo: boolean;
-  schatSeedance25: boolean;
-  junliaiSd2Fast: boolean;
 }
 
 export interface AdminRecordsStats {
@@ -1037,31 +1016,6 @@ export async function fetchGenerateImageJob(jobId: string) {
       image: result.job.image ? normalizeGeneratedImage(result.job.image) : undefined,
     },
   };
-}
-
-export async function startGenerateVideoJob(payload: {
-  modelId: 'gemini-veo31' | 'grok-video' | 'seedance2.5' | 'sd2.0fast';
-  prompt: string;
-  ratio: '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
-  resolution: '480p' | '720p' | '1080p';
-  seconds: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29;
-  referenceImages: Array<{ name: string; mimeType: string; data: string }>;
-  audioReferences?: Array<{ name: string; mimeType: string; data: string }>;
-  realPerson?: boolean;
-}) {
-  return request<{ job: VideoGenerationJobInfo }>(
-    '/api/generate/video/jobs',
-    { method: 'POST', body: JSON.stringify(payload) },
-    true,
-  );
-}
-
-export async function fetchGenerateVideoJob(jobId: string) {
-  return request<{ job: VideoGenerationJobInfo }>(
-    `/api/generate/video/jobs/${encodeURIComponent(jobId)}`,
-    {},
-    true,
-  );
 }
 
 export async function fetchUserImages(category?: ImageCategory) {

@@ -109,7 +109,6 @@ function publicRows(rows: StoredMetricRow[]): ProviderMetricRow[] {
     const normalized = modelId.toLowerCase();
     if (normalized === 'gpt-image-2') return 0;
     if (normalized.includes('banana')) return 1;
-    if (normalized.includes('video')) return 2;
     return 3;
   };
   const providerOrder = (provider: string) => {

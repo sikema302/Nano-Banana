@@ -73,7 +73,6 @@ import {
   fetchUserHistory,
   fetchUserImages,
   fetchGenerateImageJob,
-  fetchGenerateVideoJob,
   getStoredUser,
   login,
   loginWithInvite,
@@ -96,7 +95,6 @@ import {
   updateAdminProviderRouting,
   updateAdminModelCreditPricing,
   startGenerateImageJob,
-  startGenerateVideoJob,
   type AdminDashboardStats,
   type AdminGenerationRanking,
   type AdminRecordsStats,
@@ -105,7 +103,6 @@ import {
   type CreditBalances,
   type GeneratedImagePayload,
   type GenerationJobInfo,
-  type VideoGenerationJobInfo,
   type GenerationRecord,
   type ImageCategory,
   type InviteCodeInfo,
@@ -131,7 +128,6 @@ import {
 import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
-  getConfiguredVideoCredits,
   type ModelCreditPricing,
 } from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
@@ -144,14 +140,6 @@ import {
 } from './lib/reference-image-limits';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
-import {
-  getVideoModelConfig,
-  VIDEO_GENERATION_MODELS,
-  type VideoDurationSeconds,
-  type VideoModelId,
-  type VideoRatio,
-  type VideoResolution,
-} from './lib/video-pricing';
 import ChatView from './ChatView';
 import BatchCreateView from './BatchCreateView';
 
@@ -317,10 +305,6 @@ const defaultProviderRouting: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: true }],
     '4K': [],
   },
-  junliaiGeminiVeo31: true,
-  junliaiGrokVideo: true,
-  schatSeedance25: false,
-  junliaiSd2Fast: false,
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
@@ -1259,533 +1243,6 @@ function SidePanel({
   );
 }
 
-function VideoCreateView({
-  user,
-  providerRouting,
-  modelCreditPricing,
-  onSwitchImage,
-  onLogin,
-  onPurchase,
-  onCreditsChange,
-}: {
-  user: UserInfo | null;
-  providerRouting: ProviderRoutingConfig;
-  modelCreditPricing: ModelCreditPricing;
-  onSwitchImage: () => void;
-  onLogin: () => void;
-  onPurchase: () => void;
-  onCreditsChange: (creditsRemaining: number) => void;
-}) {
-  const [prompt, setPrompt] = useState('');
-  const [modelId, setModelId] = useState<VideoModelId>('sd2.0fast');
-  const [ratio, setRatio] = useState<VideoRatio>('16:9');
-  const [resolution, setResolution] = useState<VideoResolution>('720p');
-  const [seconds, setSeconds] = useState<VideoDurationSeconds>(4);
-  const modelConfig = getVideoModelConfig(modelId);
-  const creditsNeeded = getConfiguredVideoCredits(modelCreditPricing, modelId, resolution, seconds);
-  const availableVideoCredits = getAvailableUserCredits(user, 'general');
-  const isSd2Fast = modelId === 'sd2.0fast';
-  const [references, setReferences] = useState<UploadPreview[]>([]);
-  const [audioReferences, setAudioReferences] = useState<UploadPreview[]>([]);
-  const [realPerson, setRealPerson] = useState(false);
-  const [job, setJob] = useState<VideoGenerationJobInfo | null>(null);
-  const [videoUrl, setVideoUrl] = useState('');
-  const [recentVideos, setRecentVideos] = useState<string[]>([]);
-  const [error, setError] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [downloadingVideo, setDownloadingVideo] = useState(false);
-  const pollingRunRef = useRef(0);
-
-  useEffect(() => () => {
-    pollingRunRef.current += 1;
-  }, []);
-
-  const isVideoModelEnabled = (candidate: VideoModelId) => candidate === 'gemini-veo31'
-    ? providerRouting.junliaiGeminiVeo31
-    : candidate === 'seedance2.5'
-      ? providerRouting.schatSeedance25
-      : candidate === 'sd2.0fast'
-        ? providerRouting.junliaiSd2Fast
-        : providerRouting.junliaiGrokVideo;
-
-  function selectVideoModel(nextModelId: VideoModelId) {
-    const next = getVideoModelConfig(nextModelId);
-    setModelId(nextModelId);
-    setRatio((current) => next.ratios.includes(current) ? current : next.ratios[0]);
-    setResolution((current) => next.resolutions.includes(current) ? current : next.resolutions[0]);
-    setSeconds(next.durations[0]);
-    setError('');
-  }
-
-  useEffect(() => {
-    if (isVideoModelEnabled(modelId)) return;
-    const next = VIDEO_GENERATION_MODELS.find((candidate) => isVideoModelEnabled(candidate.id));
-    if (next) selectVideoModel(next.id);
-  }, [modelId, providerRouting.junliaiGrokVideo, providerRouting.junliaiGeminiVeo31, providerRouting.schatSeedance25, providerRouting.junliaiSd2Fast]);
-
-  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
-    const files: File[] = event.target.files ? Array.from(event.target.files) : [];
-    event.target.value = '';
-    setError('');
-
-    const maxImages = isSd2Fast ? 9 : 2;
-    const maxMB = isSd2Fast ? 30 : 20;
-    const maxBytes = maxMB * 1024 * 1024;
-
-    const remaining = Math.max(0, maxImages - references.length);
-    if (remaining === 0) {
-      setError(`最多上传 ${maxImages} 张参考图`);
-      return;
-    }
-
-    const selected = files.slice(0, remaining);
-    const oversized = selected.find((file) => file.size > maxBytes);
-    if (oversized) {
-      setError(`${oversized.name} 超过 ${maxMB}MB，请压缩后再上传`);
-      return;
-    }
-
-    try {
-      const next = await Promise.all(selected.map((file) => fileToBase64(file, maxBytes, maxMB)));
-      setReferences((current) => [...current, ...next].slice(0, maxImages));
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : '参考图读取失败');
-    }
-  }
-
-  async function handleAudioUpload(event: ChangeEvent<HTMLInputElement>) {
-    const files: File[] = event.target.files ? Array.from(event.target.files) : [];
-    event.target.value = '';
-    setError('');
-
-    const maxAudio = 3;
-    const maxMB = 15;
-    const maxBytes = maxMB * 1024 * 1024;
-
-    const remaining = Math.max(0, maxAudio - audioReferences.length);
-    if (remaining === 0) {
-      setError('最多上传 3 个音频文件');
-      return;
-    }
-
-    const selected = files.slice(0, remaining);
-    const oversized = selected.find((file) => file.size > maxBytes);
-    if (oversized) {
-      setError(`${oversized.name} 超过 ${maxMB}MB，请压缩后再上传`);
-      return;
-    }
-
-    try {
-      const next = await Promise.all(selected.map((file) => fileToBase64(file, maxBytes, maxMB)));
-      setAudioReferences((current) => [...current, ...next].slice(0, maxAudio));
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : '音频文件读取失败');
-    }
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!user) {
-      onLogin();
-      return;
-    }
-
-    const normalizedPrompt = prompt.trim();
-    if (!normalizedPrompt) {
-      setError('请先填写视频提示词');
-      return;
-    }
-
-    if (availableVideoCredits < creditsNeeded) {
-      setError(`积分不足，${resolution} 视频需要 ${creditsNeeded} 积分`);
-      return;
-    }
-
-    const runId = pollingRunRef.current + 1;
-    pollingRunRef.current = runId;
-    setError('');
-    setVideoUrl('');
-    setGenerating(true);
-
-    try {
-      const started = await startGenerateVideoJob({
-        modelId,
-        prompt: normalizedPrompt,
-        ratio,
-        resolution,
-        seconds,
-        referenceImages: references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-        ...(isSd2Fast ? {
-          audioReferences: audioReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-          realPerson,
-        } : {}),
-      });
-      setJob(started.job);
-
-      let currentJob = started.job;
-      while (pollingRunRef.current === runId && currentJob.status !== 'succeeded' && currentJob.status !== 'failed') {
-        await new Promise((resolve) => window.setTimeout(resolve, 4_000));
-        if (pollingRunRef.current !== runId) return;
-        const result = await fetchGenerateVideoJob(currentJob.id);
-        currentJob = result.job;
-        setJob(currentJob);
-      }
-
-      if (pollingRunRef.current !== runId) return;
-      if (currentJob.status === 'failed') {
-        throw new Error(currentJob.error || '视频生成失败，请稍后重试');
-      }
-      if (!currentJob.videoUrl) {
-        throw new Error('视频已生成，但暂时无法读取结果');
-      }
-
-      setVideoUrl(currentJob.videoUrl);
-      setRecentVideos((current) => [currentJob.videoUrl!, ...current.filter((item) => item !== currentJob.videoUrl)].slice(0, 6));
-      if (typeof currentJob.creditsRemaining === 'number') {
-        onCreditsChange(currentJob.creditsRemaining);
-      }
-    } catch (generationError) {
-      setError(generationError instanceof Error ? generationError.message : '视频生成失败，请稍后重试');
-    } finally {
-      if (pollingRunRef.current === runId) setGenerating(false);
-    }
-  }
-
-  const progress = Math.max(0, Math.min(100, Math.round(job?.progress || 0)));
-  const videoFrameClass = ratio === '9:16'
-    ? 'aspect-[9/16] max-h-full'
-    : ratio === '1:1'
-      ? 'aspect-square max-h-full'
-      : 'aspect-video w-full';
-
-  return (
-    <div className="col-span-full grid min-h-0 grid-cols-1 space-y-4 lg:h-full lg:grid-cols-[2fr_3fr_2fr] lg:space-y-0">
-      <aside className="app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2">
-        <form className="flex min-h-full flex-col gap-2" onSubmit={handleSubmit}>
-          <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
-            <button
-              className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
-              type="button"
-              onClick={onSwitchImage}
-            >
-              <ImagePlus size={13} />
-              生图
-            </button>
-            <button
-              className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
-              type="button"
-            >
-              <Film size={13} />
-              生视频
-            </button>
-          </div>
-
-          <section className="space-y-1.5">
-            <div className="px-0.5 text-[11px] font-extrabold text-zinc-400">模型</div>
-            <select
-              className="input min-h-[42px] w-full px-3 py-2 text-[12px] font-bold text-zinc-100 outline-none"
-              disabled={generating}
-              value={modelId}
-              onChange={(event) => selectVideoModel(event.target.value as VideoModelId)}
-            >
-              {VIDEO_GENERATION_MODELS.filter(m => m.id !== 'seedance2.5').map((model) => (
-                <option className="bg-[#111111]" disabled={!isVideoModelEnabled(model.id)} key={model.id} value={model.id}>
-                  {model.name}
-                </option>
-              ))}
-            </select>
-            <p className="px-0.5 text-[9px] leading-4 text-zinc-500">{modelConfig.description}</p>
-          </section>
-
-          <section className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
-              <span>视频提示词</span>
-              <span className="text-[10px] text-zinc-500">{prompt.length} / 8000</span>
-            </div>
-            <textarea
-              className="input h-[92px] resize-none px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
-              placeholder="描述想要的画面、镜头运动、光线与氛围..."
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value.slice(0, 8000))}
-            />
-          </section>
-
-          <div className="grid grid-cols-2 gap-2">
-            <section className="space-y-1.5">
-              <div className="text-[11px] font-extrabold text-zinc-400">画面比例</div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {modelConfig.ratios.map((item) => (
-                  <button
-                    key={item}
-                    className={ratio === item
-                      ? 'min-h-0 rounded-lg border border-white bg-white px-1.5 py-2 text-[11px] font-black text-black'
-                      : 'btn-secondary min-h-0 rounded-lg px-1.5 py-2 text-[11px] font-black text-zinc-400'}
-                    type="button"
-                    onClick={() => setRatio(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </section>
-            <section className="space-y-1.5">
-              <div className="text-[11px] font-extrabold text-zinc-400">分辨率</div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {modelConfig.resolutions.map((item) => (
-                  <button
-                    key={item}
-                    className={resolution === item
-                      ? 'min-h-0 rounded-lg border border-white bg-white px-1.5 py-1.5 text-[11px] font-black text-black'
-                      : 'btn-secondary min-h-0 rounded-lg px-1.5 py-1.5 text-[11px] font-black text-zinc-400'}
-                    type="button"
-                    onClick={() => setResolution(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </section>
-          </div>
-
-          <section className="space-y-1.5">
-            <div className="text-[11px] font-extrabold text-zinc-400">时长</div>
-            <div className="flex flex-wrap gap-1.5">
-              {modelConfig.durations.map((item) => (
-                <button
-                  key={item}
-                  className={seconds === item
-                    ? 'inline-flex min-h-0 items-center justify-center rounded-lg border border-white bg-white px-3.5 py-2 text-[12px] font-black text-black'
-                    : 'btn-secondary min-h-0 rounded-lg px-3.5 py-2 text-[12px] font-black text-zinc-400'}
-                  type="button"
-                  aria-pressed={seconds === item}
-                  onClick={() => setSeconds(item)}
-                >
-                  {item}s
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {isSd2Fast ? (
-            <label className="flex items-center gap-2 text-[11px] font-extrabold text-zinc-400">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 accent-violet-500"
-                checked={realPerson}
-                onChange={(e) => setRealPerson(e.target.checked)}
-              />
-              过真人请勾选
-            </label>
-          ) : null}
-
-          {isSd2Fast ? (
-            <section className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
-                <span>参考素材（最多12个·图片≤30MB, 视频≤50MB, 音频≤15MB）</span>
-              </div>
-              <div className="space-y-2">
-                <div>
-                  <div className="mb-1 flex items-center justify-between text-[10px] text-zinc-500">
-                    <span>图片</span>
-                    <span>{references.length} / 9</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {references.length < 9 ? (
-                      <label className="flex h-[64px] w-[64px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
-                        <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
-                        <Plus size={18} />
-                      </label>
-                    ) : null}
-                    {references.map((item) => (
-                      <button
-                        key={item.id}
-                        className="group relative h-[64px] w-[64px] overflow-hidden rounded-xl border border-white/10"
-                        type="button"
-                        title="点击删除"
-                        onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
-                      >
-                        <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 flex items-center justify-between text-[10px] text-zinc-500">
-                    <span>音频</span>
-                    <span>{audioReferences.length} / 3</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {audioReferences.length < 3 ? (
-                      <label className="flex h-[64px] w-[64px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
-                        <input className="hidden" type="file" accept="audio/*" multiple onChange={handleAudioUpload} />
-                        <Plus size={18} />
-                      </label>
-                    ) : null}
-                    {audioReferences.map((item) => (
-                      <button
-                        key={item.id}
-                        className="group relative flex h-[64px] w-[64px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-zinc-800/50 text-[10px] font-bold text-zinc-300"
-                        type="button"
-                        title="点击删除"
-                        onClick={() => setAudioReferences((current) => current.filter((target) => target.id !== item.id))}
-                      >
-                        <Music size={16} />
-                        <span className="absolute bottom-1 truncate px-1 text-[8px]">{item.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <section className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold text-zinc-400">
-                <span>参考图（最多 2 张 · 首帧/末帧 · 单张 ≤20MB）</span>
-                <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / 2</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {references.length < 2 ? (
-                  <label className="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-white/12 bg-white/[0.018] p-0 text-zinc-500 transition hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-white">
-                    <input className="hidden" type="file" accept="image/*" multiple onChange={handleUpload} />
-                    <Plus size={20} />
-                  </label>
-                ) : null}
-                {references.map((item, index) => (
-                  <button
-                    key={item.id}
-                    className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-white/10"
-                    type="button"
-                    title="点击删除"
-                    onClick={() => setReferences((current) => current.filter((target) => target.id !== item.id))}
-                  >
-                    <img alt={item.name} className="h-full w-full object-cover transition group-hover:opacity-60" src={item.previewUrl} />
-                    <span className="absolute inset-x-1 bottom-1 rounded bg-black/70 py-0.5 text-[9px] font-bold text-white">{index === 0 ? '首帧' : '末帧'}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          <div className="mt-auto space-y-2">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
-              <span>使用积分：<span className="text-white">{creditsNeeded}</span>/<span className="text-white">{availableVideoCredits}</span></span>
-              <button
-                className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
-                type="button"
-                onClick={onPurchase}
-              >
-                点击在线购买积分(25%优惠)
-              </button>
-            </div>
-            {error ? <div className="app-alert app-alert-error">{error}</div> : null}
-            <button
-              className="btn-primary flex w-full items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={generating || !user || availableVideoCredits < creditsNeeded}
-              type="submit"
-            >
-              {generating ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              {generating ? '生成中...' : user ? `生成 · ${creditsNeeded} 积分` : '登录后生成'}
-            </button>
-          </div>
-        </form>
-      </aside>
-
-      <section className="min-h-[520px] overflow-hidden border-r border-white/8 px-4 py-4 lg:min-h-0">
-        <div className="flex h-full min-h-0 flex-col rounded-[24px] border border-white/8 bg-[radial-gradient(circle_at_top,rgba(124,58,237,0.08),transparent_42%),rgba(255,255,255,0.012)] p-4">
-          <div className="flex items-center justify-between gap-3 border-b border-white/8 pb-3">
-            <div>
-              <h2 className="text-[15px] font-black text-white">视频结果</h2>
-              <p className="mt-1 text-[11px] text-zinc-500">生成完成后自动保存到本站，避免临时链接失效。</p>
-            </div>
-            {videoUrl ? (
-              <button
-                className="btn-secondary inline-flex min-h-0 items-center gap-1.5 px-3 py-2 text-[12px] font-bold disabled:cursor-wait disabled:opacity-60"
-                type="button"
-                disabled={downloadingVideo}
-                onClick={() => {
-                  if (downloadingVideo) return;
-                  setDownloadingVideo(true);
-                  void downloadAsset(videoUrl, 'pixory-video')
-                    .catch((downloadError) => {
-                      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
-                    })
-                    .finally(() => setDownloadingVideo(false));
-                }}
-              >
-                {downloadingVideo ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
-                {downloadingVideo ? '下载中…' : '下载'}
-              </button>
-            ) : null}
-          </div>
-
-          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden py-4">
-            {videoUrl ? (
-              <video className={`${videoFrameClass} rounded-2xl bg-black object-contain shadow-[0_24px_70px_rgba(0,0,0,0.45)]`} src={videoUrl} controls playsInline />
-            ) : (
-              <div className="flex max-w-sm flex-col items-center text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-violet-400/20 bg-violet-500/10 text-violet-200">
-                  {generating ? <LoaderCircle className="animate-spin" size={28} /> : <Film size={28} />}
-                </div>
-                <div className="mt-5 text-[16px] font-black text-zinc-200">{generating ? '正在生成你的视频' : '等待你的下一段灵感'}</div>
-                <p className="mt-2 text-[12px] leading-6 text-zinc-500">
-                  {generating ? 'Firefly 正在渲染，通常需要几分钟，请保持页面打开。' : '填写提示词并选择画幅，生成结果会在这里播放。'}
-                </p>
-              </div>
-            )}
-
-            {generating ? (
-              <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-white/10 bg-black/70 p-3 backdrop-blur">
-                <div className="flex items-center justify-between text-[11px] font-bold text-zinc-300">
-                  <span>{job?.status === 'processing' ? '正在渲染' : '正在排队'}</span>
-                  <span>{progress > 0 ? `${progress}%` : '请稍候'}</span>
-                </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#7c3aed,#a855f7)] transition-all duration-500" style={{ width: `${progress || 6}%` }} />
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <aside className="custom-scrollbar overflow-y-auto px-3 py-3 sm:px-4 lg:h-full lg:pb-[calc(env(safe-area-inset-bottom)+12px)]">
-        <div className="space-y-4">
-          <section>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-violet-200"><Film size={15} /></div>
-                <h2 className="text-[15px] font-black text-white">本次作品</h2>
-              </div>
-              <span className="text-[11px] text-zinc-500">{recentVideos.length}</span>
-            </div>
-            <div className="mt-3 min-h-[180px] rounded-[22px] border border-white/8 bg-white/[0.025] p-3">
-              {recentVideos.length > 0 ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {recentVideos.map((item, index) => (
-                    <button className="group relative aspect-video overflow-hidden rounded-xl border border-white/10 bg-black" type="button" key={item} onClick={() => setVideoUrl(item)}>
-                      <video className="h-full w-full object-cover opacity-80 transition group-hover:opacity-100" src={item} muted preload="metadata" />
-                      <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-bold text-white">作品 {recentVideos.length - index}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex min-h-[154px] items-center justify-center px-5 text-center text-[12px] leading-6 text-zinc-500">生成的视频会集中显示在这里。</div>
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-[22px] border border-white/8 bg-white/[0.025] p-4">
-            <h3 className="text-[13px] font-black text-zinc-200">提示词建议</h3>
-            <p className="mt-2 text-[11px] leading-6 text-zinc-500">按“主体 + 动作 + 镜头运动 + 光线 + 风格”描述，生成效果通常更稳定。</p>
-            <div className="mt-3 rounded-xl bg-black/25 px-3 py-2.5 text-[11px] leading-5 text-zinc-400">示例：金色麦田里的橘猫向镜头奔跑，低机位跟拍，黄昏逆光，电影感。</div>
-          </section>
-        </div>
-      </aside>
-    </div>
-  );
-}
-
 function HomeView({
   onNavigate,
   onStartImage,
@@ -1802,9 +1259,9 @@ function HomeView({
       icon: <ImagePlus size={25} />,
     },
     {
-      title: 'AI 视频创作',
-      description: '支持文生视频与参考图生视频，提供 720P、1080P 输出。',
-      icon: <Film size={25} />,
+      title: '批量图片生成',
+      description: '一次提交多张任务，队列化稳定出图，适合规模化创作。',
+      icon: <Layers3 size={25} />,
     },
     {
       title: '稳定 API 接入',
@@ -1824,17 +1281,15 @@ function HomeView({
             </div>
             <h1 className="mt-5 text-4xl font-black leading-[1.16] tracking-tight text-white sm:text-5xl lg:text-[48px]">
               一站完成 AI 图片
-              <span className="block bg-[linear-gradient(90deg,#c4b5fd_0%,#f0abfc_52%,#67e8f9_100%)] bg-clip-text text-transparent">与视频创作</span>
+              <span className="block bg-[linear-gradient(90deg,#c4b5fd_0%,#f0abfc_52%,#67e8f9_100%)] bg-clip-text text-transparent">创作与批量出图</span>
             </h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-zinc-400 sm:text-lg">
-              从一张图片到一段动态影像，PIXORY 支持文生图、图生图、文生视频与参考图生视频。
+              PIXORY 支持文生图、图生图与批量生成，多模型自由切换，一站式完成视觉创作。
             </p>
             <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-bold">
               <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">多模型图片生成</span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-fuchsia-400/20 bg-fuchsia-500/10 px-3 py-1.5 text-fuchsia-200">
-                <Film size={12} /> AI 视频已上线
-              </span>
-              <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">720P · 1080P</span>
+              <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">1K · 2K · 4K</span>
+              <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-zinc-300">批量任务队列</span>
             </div>
             <div className="mt-6 flex flex-wrap gap-3">
               <button
@@ -1862,29 +1317,29 @@ function HomeView({
 
           <div className="rounded-[26px] bg-white/[0.035] p-3 shadow-[0_24px_70px_rgba(0,0,0,0.24)] ring-1 ring-inset ring-white/[0.07] sm:p-4">
             <div className="mb-3 flex items-center justify-between px-1">
-              <h2 className="text-sm font-black text-white sm:text-base">图片与视频创作</h2>
+              <h2 className="text-sm font-black text-white sm:text-base">图片创作</h2>
               <div className="flex gap-2 text-[10px] font-bold text-zinc-400 sm:text-[11px]">
                 <span className="rounded-full bg-black/25 px-2.5 py-1">GPT Image 2</span>
-                <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-200">Gemini Veo 3.1</span>
+                <span className="rounded-full bg-black/25 px-2.5 py-1">Nano Banana Pro</span>
               </div>
             </div>
             <div className="group relative overflow-hidden rounded-[18px] bg-black">
               <img
-                alt="PIXORY AI 图片与视频创作"
+                alt="PIXORY AI 图片创作"
                 className="aspect-[16/9] max-h-[360px] w-full object-cover transition duration-700 group-hover:scale-[1.02]"
                 src="/images/pixory-showcase.webp"
               />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 bg-[linear-gradient(180deg,transparent_0%,rgba(7,7,12,0.9)_100%)] px-4 pb-4 pt-16">
                 <div className="flex items-center gap-3">
                   <span className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white backdrop-blur-md">
-                    <Film size={18} />
+                    <ImagePlus size={18} />
                   </span>
                   <span>
-                    <span className="block text-xs font-black text-white sm:text-sm">让静态画面动起来</span>
-                    <span className="mt-0.5 block text-[10px] text-zinc-300 sm:text-[11px]">文生视频 · 参考图生视频</span>
+                    <span className="block text-xs font-black text-white sm:text-sm">让创意一键成像</span>
+                    <span className="mt-0.5 block text-[10px] text-zinc-300 sm:text-[11px]">文生图 · 图生图</span>
                   </span>
                 </div>
-                <span className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-[10px] font-black text-white backdrop-blur-md">5 秒高清输出</span>
+                <span className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-[10px] font-black text-white backdrop-blur-md">1K · 2K · 4K</span>
               </div>
             </div>
           </div>
@@ -1909,7 +1364,7 @@ function HomeView({
         <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-1 py-3 text-xs text-zinc-600">
           <div className="flex items-center gap-3">
             <span className="text-sm font-black tracking-[0.14em] text-zinc-300">PIXORY</span>
-            <span>专业 AI 图片与视频创作服务</span>
+            <span>专业 AI 图片创作服务</span>
           </div>
           <span>产品服务 · API 文档 · 服务条款 · 隐私政策 · 联系我们</span>
         </footer>
@@ -3388,15 +2843,6 @@ function AdminModelCreditPanel({
   const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
   };
-  const setVideo = (modelId: VideoModelId, key: string, value: number) => {
-    setDraft((current) => ({
-      ...current,
-      video: {
-        ...current.video,
-        [modelId]: { ...current.video[modelId], [key]: value },
-      },
-    }));
-  };
   const creditInput = (value: number, onChange: (value: number) => void) => (
     <input
       className="input w-28 text-right font-black"
@@ -3500,24 +2946,6 @@ function AdminModelCreditPanel({
             {row('AI 增强附加', '开启中文文字增强时额外收取', creditInput(draft.nanoBanana.enhancement, (value) => setBanana('enhancement', value)))}
           </div>
         </section>
-
-        {([
-          ['gemini-veo31', 'Gemini Veo 3.1', ['720p:4', '720p:6', '720p:8', '1080p:4', '1080p:6', '1080p:8']],
-          ['grok-video', 'Grok Video', ['720p:6', '720p:10', '720p:15']],
-          ['seedance2.5', 'Seedance 2.5', Array.from({ length: 26 }, (_, index) => `720p:${index + 4}`)],
-        ] as const).map(([modelId, title, tiers]) => (
-          <section key={modelId} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-            <h3 className="font-black text-violet-100">{title}</h3>
-            <p className="mt-1 text-[11px] text-zinc-500">视频与其他非图片模型仅扣通用积分。</p>
-            <div className="mt-3">
-              {tiers.map((tier) => row(
-                tier.replace(':', ' · ') + ' 秒',
-                '分辨率与时长组合',
-                creditInput(Number(draft.video[modelId]?.[tier] || 1), (value) => setVideo(modelId, tier, value)),
-              ))}
-            </div>
-          </section>
-        ))}
       </div>
       {draft.updatedAt ? <p className="mt-4 text-right text-[11px] text-zinc-600">最近保存：{new Date(draft.updatedAt).toLocaleString('zh-CN')}</p> : null}
     </div>
@@ -4390,51 +3818,6 @@ function AdminView({
                   </section>
                 ))}
               </div>
-              <div className="mt-5 border-t border-white/8 pt-4">
-                <div className="mb-3 text-xs font-black text-zinc-300">视频线路开关</div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {([
-                    { key: 'junliaiGeminiVeo31', title: 'Gemini Veo 3.1' },
-                    { key: 'junliaiFireflyVideo', title: 'Firefly Video' },
-                    { key: 'schatSeedance25', title: 'Schat · Seedance 2.5' },
-                    { key: 'junliaiSd2Fast', title: 'seedance 2.0 fast' },
-                  ] as const).map((route) => {
-                    const enabled = providerRouting[route.key];
-                    const updating = updatingProviderRoute === route.key;
-                    return (
-                      <article key={route.key} className="flex items-center justify-between rounded-[16px] border border-white/8 bg-black/25 p-3">
-                        <div>
-                          <div className="text-xs font-bold text-white">{route.title}</div>
-                          <div className="mt-1 text-[10px] text-zinc-500">{enabled ? '已启用' : '已停用'}</div>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={enabled}
-                          disabled={updatingProviderRoute !== null}
-                          className={`relative h-7 w-12 rounded-full border transition ${
-                            enabled ? 'border-emerald-300/40 bg-emerald-500' : 'border-white/15 bg-zinc-800'
-                          } ${updating ? 'opacity-50' : ''}`}
-                          onClick={async () => {
-                            setUpdatingProviderRoute(route.key);
-                            try {
-                              await onUpdateProviderRouting({ [route.key]: !enabled });
-                            } catch (error) {
-                              onNotice(error instanceof Error ? error.message : '接口开关更新失败');
-                            } finally {
-                              setUpdatingProviderRoute(null);
-                            }
-                          }}
-                        >
-                          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
-                            enabled ? 'left-[22px]' : 'left-0.5'
-                          }`} />
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
             <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
@@ -5072,7 +4455,7 @@ function AdminView({
                     <table className="min-w-[1080px] w-full table-fixed text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
-                          <th className="w-24 px-3 py-2 font-medium">图片/视频</th>
+                          <th className="w-24 px-3 py-2 font-medium">图片</th>
                           <th className="px-3 py-2 font-medium">用户</th>
                           <th className="px-3 py-2 font-medium">请求结果</th>
                           <th className="px-3 py-2 font-medium">参考图类型</th>
@@ -5247,7 +4630,7 @@ function AdminView({
               {([
                 ['gpt', 'GPT 积分', '只能用于 GPT 模型'],
                 ['banana', 'Banana 积分', '只能用于 Banana 模型'],
-                ['general', '通用积分', '可以用于所有模型、视频和聊天'],
+                ['general', '通用积分', '可以用于所有模型和聊天'],
               ] as const).map(([key, label, hint]) => (
                 <label key={key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
                   <span className="flex items-center justify-between text-xs"><strong className="text-zinc-200">{label}</strong><span className="text-zinc-600">{hint}</span></span>
@@ -5716,15 +5099,8 @@ export default function App() {
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }
-    if (!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && !providerRouting.schatSeedance25 && creationMode === 'video') {
-      setCreationMode('image');
-    }
   }, [
-    creationMode,
     imageSize,
-    providerRouting.junliaiGeminiVeo31,
-    providerRouting.junliaiFireflyVideo,
-    providerRouting.schatSeedance25,
     providerRouting.image2Routes,
     providerRouting.bananaRoutes,
     providerRouting.seedreamRoutes,
@@ -7671,21 +7047,23 @@ export default function App() {
           }
         >
           {activeTab === 'create' && creationMode === 'video' ? (
-            <VideoCreateView
-              user={user}
-              providerRouting={providerRouting}
-              modelCreditPricing={modelCreditPricing}
-              onSwitchImage={() => setCreationMode('image')}
-              onLogin={() => {
-                setAuthMode('login');
-                setAuthOpen(true);
-              }}
-              onPurchase={openPurchasePage}
-              onCreditsChange={(creditsRemaining) => {
-                setUser((current) => current ? { ...current, creditsRemaining } : current);
-                void fetchMe().then(setUser).catch(() => undefined);
-              }}
-            />
+            <section className="app-panel flex min-h-0 flex-col items-center justify-center gap-3 px-6 py-16 text-center lg:col-span-3 lg:h-full lg:rounded-none lg:border-0">
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-fuchsia-400/25 bg-[linear-gradient(135deg,rgba(168,85,247,0.18),rgba(236,72,153,0.13))] text-fuchsia-100">
+                <Film size={26} />
+              </span>
+              <h2 className="text-lg font-black text-white">生视频功能调整中</h2>
+              <p className="max-w-sm text-sm leading-6 text-zinc-400">
+                视频模型与接口正在重新配置，暂时无法生成视频。可先返回生图继续创作。
+              </p>
+              <button
+                className="btn-primary mt-1 min-w-36 justify-center gap-2 px-5 py-2.5 text-sm font-bold"
+                type="button"
+                onClick={() => setCreationMode('image')}
+              >
+                <ImagePlus size={16} />
+                返回生图
+              </button>
+            </section>
           ) : null}
 
           <aside className={activeTab === 'create' && creationMode === 'image' ? 'app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
@@ -7699,14 +7077,8 @@ export default function App() {
                   生图
                 </button>
                 <button
-                  className={`flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black transition ${
-                    providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo || providerRouting.schatSeedance25
-                      ? 'text-zinc-500 hover:text-zinc-200'
-                      : 'cursor-not-allowed text-zinc-700'
-                  }`}
+                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
                   type="button"
-                  disabled={!providerRouting.junliaiGeminiVeo31 && !providerRouting.junliaiFireflyVideo && !providerRouting.schatSeedance25}
-                  title={providerRouting.junliaiGeminiVeo31 || providerRouting.junliaiFireflyVideo || providerRouting.schatSeedance25 ? undefined : '管理员已关闭全部视频接口'}
                   onClick={() => setCreationMode('video')}
                 >
                   <Film size={13} />
