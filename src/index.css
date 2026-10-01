@@ -589,3 +589,35 @@
     transform: translateX(130%);
   }
 }
+
+/* React Flow 深色主题覆盖（匹配 PIXORY 深色） */
+.react-flow {
+  --xy-background-color: #0b0b10;
+  --xy-background-pattern-color: #3d3d5e;
+  --xy-edge-stroke: #2a2a3a;
+  --xy-edge-stroke-selected: #5f5ac7;
+  --xy-connectionline-stroke: #5f5ac7;
+  --xy-minimap-background-color: #141420;
+  --xy-controls-button-background-color: #1c1c2a;
+  --xy-controls-button-background-color-hover: #232339;
+  --xy-controls-button-color: #a1a1aa;
+  --xy-controls-button-color-hover: #ffffff;
+  --xy-controls-button-border-color: #2a2a3a;
+}
+
+.react-flow__node {
+  color: #ffffff;
+}
+
+.react-flow__controls {
+  border: 1px solid #2a2a3a;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+
+.react-flow__minimap {
+  border: 1px solid #2a2a3a;
+  border-radius: 10px;
+  overflow: hidden;
+}

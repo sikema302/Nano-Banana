@@ -304,7 +304,7 @@ function toImageRow(row: Record<string, unknown>): ImageRow {
   };
 }
 
-async function getNextNumericId(tableName: 'users' | 'generations' | 'images' | 'generation_requests'): Promise<number> {
+async function getNextNumericId(tableName: 'users' | 'generations' | 'images' | 'generation_requests' | 'canvases'): Promise<number> {
   const { data, error } = await getSupabase()
     .from(tableName)
     .select('id')
@@ -1836,6 +1836,109 @@ export async function deleteImage(imageId: string, userId: string): Promise<void
     .eq('id', imageId)
     .eq('user_id', userId);
   if (error) throw new Error(`Delete image failed: ${error.message}`);
+}
+
+// ─── 画布操作 ───────────────────────────────────────────────────────
+
+type CanvasRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  data: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function toCanvasRow(row: Record<string, unknown>): CanvasRow {
+  return {
+    id: normalizeSupabaseId(row.id),
+    user_id: normalizeSupabaseId(row.user_id),
+    name: String(row.name || ''),
+    data: String(row.data || '{}'),
+    created_at: String(row.created_at || ''),
+    updated_at: String(row.updated_at || ''),
+  };
+}
+
+export async function insertCanvas(record: {
+  userId: string;
+  name: string;
+  data: string;
+}): Promise<CanvasRow> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('canvases');
+    const now = nowIso();
+    const { data, error } = await getSupabase()
+      .from('canvases')
+      .insert({
+        id,
+        user_id: record.userId,
+        name: record.name,
+        data: record.data,
+        created_at: now,
+        updated_at: now,
+      })
+      .select('*')
+      .single();
+
+    if (!error && data) {
+      return toCanvasRow(data as Record<string, unknown>);
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Insert canvas failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  throw new Error('Insert canvas failed: unable to allocate a unique canvas id');
+}
+
+export async function getCanvases(userId: string): Promise<CanvasRow[]> {
+  const { data, error } = await getSupabase()
+    .from('canvases')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
+  if (error) throw new Error(`Fetch canvases failed: ${error.message}`);
+  return (data || []).map((row) => toCanvasRow(row as Record<string, unknown>));
+}
+
+export async function getCanvasById(canvasId: string, userId: string): Promise<CanvasRow | null> {
+  const { data, error } = await getSupabase()
+    .from('canvases')
+    .select('*')
+    .eq('id', canvasId)
+    .eq('user_id', userId)
+    .single();
+  if (error || !data) return null;
+  return toCanvasRow(data as Record<string, unknown>);
+}
+
+export async function updateCanvas(
+  canvasId: string,
+  userId: string,
+  patch: { name?: string; data?: string },
+): Promise<boolean> {
+  const updates: Record<string, unknown> = { updated_at: nowIso() };
+  if (typeof patch.name === 'string') updates.name = patch.name;
+  if (typeof patch.data === 'string') updates.data = patch.data;
+
+  const { error } = await getSupabase()
+    .from('canvases')
+    .update(updates)
+    .eq('id', canvasId)
+    .eq('user_id', userId);
+  if (error) return false;
+  return true;
+}
+
+export async function deleteCanvas(canvasId: string, userId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('canvases')
+    .delete()
+    .eq('id', canvasId)
+    .eq('user_id', userId);
+  if (error) throw new Error(`Delete canvas failed: ${error.message}`);
 }
 
 // ─── 设置操作 ───────────────────────────────────────────────────────

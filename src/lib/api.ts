@@ -1025,6 +1025,34 @@ export async function fetchUserHistory() {
   return { history: result.history.map(normalizeGenerationRecord) };
 }
 
+export interface CanvasInfo {
+  id: string;
+  name: string;
+  data: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchCanvases() {
+  return request<{ canvases: CanvasInfo[] }>('/api/canvases', {}, true);
+}
+
+export async function createCanvas(name: string) {
+  return request<{ canvas: CanvasInfo | null }>('/api/canvases', { method: 'POST', body: JSON.stringify({ name }) }, true);
+}
+
+export async function fetchCanvas(id: string) {
+  return request<{ canvas: CanvasInfo }>(`/api/canvases/${encodeURIComponent(id)}`, {}, true);
+}
+
+export async function updateCanvas(id: string, patch: { name?: string; data?: unknown }) {
+  return request<{ canvas: CanvasInfo | null }>(`/api/canvases/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) }, true);
+}
+
+export async function deleteCanvas(id: string) {
+  return request<{ ok: boolean }>(`/api/canvases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
+}
+
 export async function fetchAdminOverview(params: {
   recordsPage?: number;
   recordsPageSize?: number;

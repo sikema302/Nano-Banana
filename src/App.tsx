@@ -33,6 +33,7 @@ import {
   TicketPercent,
   UserRound,
   WalletCards,
+  Workflow,
   X,
 } from 'lucide-react';
 import {
@@ -143,6 +144,7 @@ import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
 import ChatView from './ChatView';
 import BatchCreateView from './BatchCreateView';
+import CanvasView from './CanvasView';
 
 interface UploadPreview {
   id: string;
@@ -184,13 +186,14 @@ const defaultModels: ModelInfo[] = [
 type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9' | '5:4' | '4:5' | '3:1' | '1:4';
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
-type AppTab = 'home' | 'create' | 'batchCreate' | 'chat' | 'history' | 'apiDocs' | 'admin';
+type AppTab = 'home' | 'create' | 'batchCreate' | 'canvas' | 'chat' | 'history' | 'apiDocs' | 'admin';
 type AdminSection = 'dashboard' | 'modelCredits' | 'notifications' | 'invites' | 'users' | 'records' | 'apiKeys';
 
 const APP_TAB_PATHS: Record<AppTab, string> = {
   home: '/',
   create: '/create',
   batchCreate: '/batch-create',
+  canvas: '/canvas',
   chat: '/chat',
   history: '/history',
   apiDocs: '/apidoc',
@@ -204,6 +207,7 @@ function getTabPath(tab: AppTab) {
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
   if (pathname === '/batch-create') return 'batchCreate';
+  if (pathname === '/canvas') return 'canvas';
   if (pathname === '/chat') return 'home';
   if (pathname === '/history') return 'history';
   if (pathname === '/apidoc') return 'apiDocs';
@@ -6529,6 +6533,7 @@ export default function App() {
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
     { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} /> },
+    { id: 'canvas', label: '画布', icon: <Workflow size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
     { id: 'admin', label: '后台管理', icon: <ShieldCheck size={15} />, hidden: !user?.isAdmin },
@@ -7180,6 +7185,61 @@ export default function App() {
               onGenerationComplete={() => {
                 void loadHistory();
                 if (user?.isAdmin) void loadAdminSection('dashboard');
+              }}
+            />
+          ) : activeTab === 'canvas' ? (
+            <CanvasView
+              user={user}
+              models={models}
+              onLogin={() => {
+                setAuthMode('login');
+                setAuthOpen(true);
+              }}
+              onCreditsChange={(creditsRemaining) => {
+                setUser((current) => (current ? { ...current, creditsRemaining } : current));
+                void fetchMe().then(setUser).catch(() => undefined);
+              }}
+              onGenerationComplete={() => {
+                void loadHistory();
+                if (user?.isAdmin) void loadAdminSection('dashboard');
+              }}
+              onSaveImage={async (image, category) => {
+                try {
+                  const response = await moveImage({
+                    image: {
+                      prompt: image.prompt,
+                      modelName: image.modelName,
+                      dimensions: image.dimensions,
+                      imageSize: image.imageSize,
+                      imagePath: image.imagePath,
+                      referenceImages: image.referenceImages,
+                      createdAt: image.createdAt,
+                    },
+                    category,
+                  });
+                  if (!response.image) return false;
+                  const saved = response.image;
+                  setFavorites((current) =>
+                    category === 'favorite' ? [saved, ...current.filter((item) => item.id !== saved.id)] : current.filter((item) => item.id !== saved.id),
+                  );
+                  setBackup((current) =>
+                    category === 'backup' ? [saved, ...current.filter((item) => item.id !== saved.id)] : current.filter((item) => item.id !== saved.id),
+                  );
+                  setDiscarded((current) =>
+                    category === 'discarded' ? [saved, ...current.filter((item) => item.id !== saved.id)] : current.filter((item) => item.id !== saved.id),
+                  );
+                  setNotice(
+                    category === 'favorite'
+                      ? '已加入收藏区'
+                      : category === 'backup'
+                        ? '已移入备份区'
+                        : '已移入丢弃区',
+                  );
+                  return true;
+                } catch (error) {
+                  setNotice(error instanceof Error ? error.message : '图片保存失败');
+                  return false;
+                }
               }}
             />
           ) : activeTab === 'history' ? (

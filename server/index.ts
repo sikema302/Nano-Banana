@@ -2724,6 +2724,17 @@ function ensureSchema(db: SqlDatabase) {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS canvases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS generations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -11612,6 +11623,220 @@ async function start() {
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Delete failed' });
+    }
+  });
+
+  // Canvas CRUD
+
+  function parseCanvasData(raw: string): unknown {
+    if (!raw) return {};
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+
+  function toCanvasDto(row: Record<string, unknown>) {
+    return {
+      id: String(row.id ?? ''),
+      name: typeof row.name === 'string' && row.name ? row.name : 'Untitled Canvas',
+      data: parseCanvasData(typeof row.data === 'string' ? row.data : '{}'),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : '',
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : '',
+    };
+  }
+
+  app.get('/api/canvases', requireAuth, async (req, res) => {
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const canvases = await db.getCanvases(userId);
+        res.json({ canvases: canvases.map(toCanvasDto) });
+        return;
+      }
+
+      const canvases = await withReadDb((db) => {
+        ensureSchema(db);
+        return runQuery<Record<string, unknown>>(
+          db,
+          `
+            SELECT id, name, data, created_at, updated_at
+            FROM canvases
+            WHERE user_id = ?
+            ORDER BY datetime(updated_at) DESC, id DESC
+          `,
+          [userId],
+        );
+      });
+
+      res.json({ canvases: canvases.map(toCanvasDto) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch canvases failed' });
+    }
+  });
+
+  app.post('/api/canvases', requireAuth, async (req, res) => {
+    const name = normalizeString(req.body?.name) || 'Untitled Canvas';
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const canvas = await db.insertCanvas({ userId, name, data: '{}' });
+        res.json({ canvas: toCanvasDto(canvas) });
+        return;
+      }
+
+      const canvas = await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          `
+            INSERT INTO canvases (user_id, name, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+          `,
+          [userId, name, '{}', nowIso(), nowIso()],
+        );
+
+        return getOne<Record<string, unknown>>(
+          db,
+          `
+            SELECT id, name, data, created_at, updated_at
+            FROM canvases
+            WHERE id = ?
+          `,
+          [lastInsertId(db)],
+        );
+      });
+
+      res.json({ canvas: canvas ? toCanvasDto(canvas) : null });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Create canvas failed' });
+    }
+  });
+
+  app.get('/api/canvases/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const canvas = await db.getCanvasById(id, userId);
+        if (!canvas) {
+          res.status(404).json({ error: 'Canvas not found' });
+          return;
+        }
+        res.json({ canvas: toCanvasDto(canvas) });
+        return;
+      }
+
+      const canvas = await withReadDb((db) => {
+        ensureSchema(db);
+        return getOne<Record<string, unknown>>(
+          db,
+          `
+            SELECT id, name, data, created_at, updated_at
+            FROM canvases
+            WHERE id = ? AND user_id = ?
+          `,
+          [id, userId],
+        );
+      });
+
+      if (!canvas) {
+        res.status(404).json({ error: 'Canvas not found' });
+        return;
+      }
+      res.json({ canvas: toCanvasDto(canvas) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch canvas failed' });
+    }
+  });
+
+  app.put('/api/canvases/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const userId = req.authUser!.userId;
+    const updatedName = req.body?.name === undefined ? undefined : normalizeString(req.body.name);
+    const updatedData = req.body?.data === undefined ? undefined : JSON.stringify(req.body.data ?? {});
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const patch: { name?: string; data?: string } = {};
+        if (updatedName !== undefined) patch.name = updatedName;
+        if (updatedData !== undefined) patch.data = updatedData;
+        const ok = await db.updateCanvas(id, userId, patch);
+        if (!ok) {
+          res.status(404).json({ error: 'Canvas not found' });
+          return;
+        }
+        const canvas = await db.getCanvasById(id, userId);
+        res.json({ canvas: canvas ? toCanvasDto(canvas) : null });
+        return;
+      }
+
+      const canvas = await withWriteDb((db) => {
+        ensureSchema(db);
+        const existing = getOne<Record<string, unknown>>(
+          db,
+          'SELECT id FROM canvases WHERE id = ? AND user_id = ?',
+          [id, userId],
+        );
+        if (!existing) return null;
+
+        if (updatedName !== undefined || updatedData !== undefined) {
+          const fields: string[] = [];
+          const values: unknown[] = [];
+          if (updatedName !== undefined) {
+            fields.push('name = ?');
+            values.push(updatedName);
+          }
+          if (updatedData !== undefined) {
+            fields.push('data = ?');
+            values.push(updatedData);
+          }
+          fields.push('updated_at = ?');
+          values.push(nowIso());
+          values.push(id, userId);
+          db.run(`UPDATE canvases SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+        }
+
+        return getOne<Record<string, unknown>>(
+          db,
+          'SELECT id, name, data, created_at, updated_at FROM canvases WHERE id = ? AND user_id = ?',
+          [id, userId],
+        );
+      });
+
+      if (!canvas) {
+        res.status(404).json({ error: 'Canvas not found' });
+        return;
+      }
+      res.json({ canvas: toCanvasDto(canvas) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Update canvas failed' });
+    }
+  });
+
+  app.delete('/api/canvases/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.deleteCanvas(id, userId);
+        res.json({ ok: true });
+        return;
+      }
+
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run('DELETE FROM canvases WHERE id = ? AND user_id = ?', [id, userId]);
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Delete canvas failed' });
     }
   });
 
