@@ -48,6 +48,7 @@ import {
   deletePublicApiKey,
   deleteInviteCode as deleteInviteCodeRequest,
   deleteInviteCodesBatch,
+  downloadArchiveAsZip,
   downloadAsset,
   deductPublicApiKeyCredits,
   deductAdminUserCredits,
@@ -703,6 +704,23 @@ function getModelSuccessRate(modelId: string) {
   return '';
 }
 
+// 每个模型专属的悬停辉光色，用于模型选择下拉的视觉识别。
+const MODEL_THEME: Record<string, { glow: string }> = {
+  'gpt-image-2': { glow: 'rgba(168,85,247,0.45)' },
+  'GPT-image-2.5-Flare': { glow: 'rgba(251,146,60,0.45)' },
+  'GPT-image-2.5-Sunburst': { glow: 'rgba(244,63,94,0.45)' },
+  'Nano_Banana_Pro': { glow: 'rgba(16,185,129,0.45)' },
+  'gpt-image-2-adobe': { glow: 'rgba(56,189,248,0.45)' },
+};
+
+function getModelTheme(modelId: string) {
+  return MODEL_THEME[modelId] ?? { glow: 'rgba(148,163,184,0.4)' };
+}
+
+function getModelLogo(modelId: string) {
+  return modelId === 'Nano_Banana_Pro' ? '/images/model-nano-banana.svg' : '/images/model-gpt.svg';
+}
+
 function CreditsSummary({
   user,
   selectedModel,
@@ -1068,7 +1086,9 @@ function SidePanel({
   onMove,
   onDelete,
   onBatchDownload,
+  actions,
   loggedIn,
+  accentColor = 'zinc',
 }: {
   title: string;
   count: number;
@@ -1081,8 +1101,38 @@ function SidePanel({
   onMove?: (item: SavedImage) => void;
   onDelete?: (item: SavedImage) => void;
   onBatchDownload?: (items: SavedImage[]) => void;
+  actions?: Array<{
+    key: string;
+    label: string;
+    icon?: ReactNode;
+    tone?: 'default' | 'emerald' | 'sky' | 'danger';
+    loading?: boolean;
+    onClick: (selectedItems: SavedImage[]) => void;
+  }>;
   loggedIn: boolean;
+  accentColor?: 'violet' | 'sky' | 'zinc';
 }) {
+  const accentMap = {
+    violet: {
+      iconBg: 'bg-violet-500/15 text-violet-300',
+      btn: 'text-violet-300 hover:text-violet-200 hover:bg-violet-500/10',
+    },
+    sky: {
+      iconBg: 'bg-sky-500/15 text-sky-300',
+      btn: 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10',
+    },
+    zinc: {
+      iconBg: 'bg-zinc-500/15 text-zinc-400',
+      btn: 'text-rose-300 hover:text-rose-200 hover:bg-rose-500/10',
+    },
+  };
+  const accent = accentMap[accentColor];
+  const actionToneMap = {
+    default: accent.btn,
+    emerald: 'text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/10',
+    sky: 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10',
+    danger: 'text-rose-300 hover:text-rose-200 hover:bg-rose-500/10',
+  };
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   // items 变化时清掉已不存在的选中项，避免误触已删除/已移走的图片
@@ -1107,6 +1157,9 @@ function SidePanel({
 
   const selectedItems = items.filter((item) => selectedIds.has(item.id));
   const hasSelection = selectedIds.size > 0;
+  const hasActions = Boolean(actions && actions.length > 0);
+  // 未选中时对整个分区生效，选中后只作用于选中项
+  const actionTargets = hasSelection ? selectedItems : items;
   const batchLabel = hasSelection
     ? `下载 (${selectedIds.size})`
     : (actionLabel ?? '');
@@ -1120,30 +1173,58 @@ function SidePanel({
   const batchLoading = actionLoading && !hasSelection;
 
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <span className="rounded-md border border-white/8 bg-white/[0.03] p-1.5 text-zinc-300">{icon}</span>
+          <span className={`flex h-7 w-7 items-center justify-center rounded-full ${accent.iconBg}`}>{icon}</span>
           <div className="flex items-center gap-2">
-            <h3 className="text-[12px] font-bold tracking-[0.08em] text-white">{title}</h3>
-            <span className="text-[11px] text-zinc-500">{count}</span>
+            <h3 className="text-[13px]! font-black! tracking-wide text-white">{title}</h3>
+            <span className="text-[11px] text-zinc-500">{count}张</span>
           </div>
         </div>
 
-        {actionLabel && (onAction || onBatchDownload) ? (
+        {hasActions ? (
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {actions!.map((action) => (
+              <button
+                key={action.key}
+                className={`inline-flex min-h-0 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1 py-1 text-[10px] font-semibold transition disabled:cursor-wait disabled:opacity-50 ${actionToneMap[action.tone ?? 'default']}`}
+                type="button"
+                onClick={() => action.onClick(actionTargets)}
+                disabled={Boolean(action.loading) || items.length === 0}
+              >
+                {action.loading ? <LoaderCircle size={11} className="animate-spin" /> : action.icon}
+                {action.label}
+              </button>
+            ))}
+          </div>
+        ) : actionLabel && (onAction || onBatchDownload) ? (
           <button
-            className="btn-secondary inline-flex min-h-0 items-center gap-1.5 px-3 py-1.5 text-xs disabled:cursor-wait disabled:opacity-60"
+            className={`inline-flex min-h-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${accent.btn} disabled:cursor-wait disabled:opacity-50`}
             type="button"
             onClick={batchAction}
             disabled={batchLoading}
           >
-            {batchLoading ? <LoaderCircle size={13} className="animate-spin" /> : null}
+            {batchLoading ? <LoaderCircle size={12} className="animate-spin" /> : null}
             {batchLabel}
           </button>
         ) : null}
       </div>
 
-      <div className="card card-static p-2">
+      {hasActions && hasSelection ? (
+        <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-zinc-500">
+          <span>已选 {selectedIds.size} 张，操作仅作用于选中项</span>
+          <button
+            className="rounded-md px-1.5 py-0.5 text-[11px] text-zinc-400 transition hover:bg-white/5 hover:text-zinc-200"
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            取消选择
+          </button>
+        </div>
+      ) : null}
+
+      <div className="rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
         {items.length > 0 ? (
           <div className="grid min-w-0 grid-cols-1 gap-2 pb-1 xl:grid-cols-2">
             {items.map((item) => {
@@ -1153,7 +1234,7 @@ function SidePanel({
                   {/* 头部：图片固定不跟随下方横滑 */}
                   <div className="relative">
                     <img alt={item.prompt} className="h-16 w-full rounded-lg object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
-                    {loggedIn && onBatchDownload ? (
+                    {loggedIn && (onBatchDownload || hasActions) ? (
                       <button
                         type="button"
                         aria-label={isSelected ? '取消选中' : '选中'}
@@ -1209,7 +1290,7 @@ function SidePanel({
             })}
           </div>
         ) : (
-          <div className="flex min-h-[112px] items-center justify-center px-5 text-center text-sm leading-7 text-zinc-500">
+          <div className="flex min-h-[120px] items-center justify-center px-5 text-center text-[13px] leading-6 text-zinc-600">
             {emptyText}
           </div>
         )}
@@ -4783,6 +4864,7 @@ export default function App() {
   const currentImageRef = useRef<DisplayImage | null>(null);
   const downloadingRef = useRef(new Set<string>());
   const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
+  const [packagingMode, setPackagingMode] = useState<'original' | 'compressed' | null>(null);
 
   const sideFavoriteItems = user ? favorites : [];
   const sideBackupItems = user ? backup : [];
@@ -4793,6 +4875,10 @@ export default function App() {
   const showGptQuality = selectedModel === 'gpt-image-2' || isGptImage2_5;
   // GPT-image-2 的 STANDARD、GPT-image-2.5 的 1K 都是上游"标准"档，不支持 quality
   const disableGptQuality = showGptQuality && (imageSize === 'STANDARD' || (isGptImage2_5 && imageSize === '1K'));
+  // gpt-image-2 Adobe 仅对指定账号开放，其余用户在选择器中隐藏
+  const visibleModels = (user?.username || '').toLowerCase() === 'lh1173444'
+    ? models
+    : models.filter((item) => item.id !== 'gpt-image-2-adobe');
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
   const selectedModelCredits = getModelCredits(selectedModelInfo, {
     imageSize,
@@ -6271,6 +6357,56 @@ export default function App() {
     }
   }
 
+  // 打包下载：由服务端把多张图合成一个 zip 再返回，避免逐张触发浏览器下载
+  async function downloadPanelArchive(
+    items: SavedImage[],
+    mode: 'original' | 'compressed',
+    label: string,
+  ) {
+    if (!user || items.length === 0 || packagingMode) return;
+    setPackagingMode(mode);
+    try {
+      await downloadArchiveAsZip(
+        items.map((item) => item.imageUrl),
+        items.map((item) => item.prompt),
+        mode,
+        `pixory-${label}-${Date.now()}`,
+      );
+      setNotice(`已打包 ${items.length} 张图片`);
+    } catch (error) {
+      console.error('[downloadPanelArchive] 打包下载失败:', error);
+      setNotice(error instanceof Error ? error.message : '打包下载失败');
+    } finally {
+      setPackagingMode(null);
+    }
+  }
+
+  // 「全部舍弃」= 移入丢弃区（可恢复），不是永久删除
+  async function discardAll(items: SavedImage[], fromLabel: string) {
+    if (!user || items.length === 0) return;
+    if (!window.confirm(`确定把${fromLabel}的 ${items.length} 张图片移入丢弃区？移入后仍可从丢弃区找回。`)) {
+      return;
+    }
+
+    try {
+      const results = await Promise.all(
+        items.map((item) => moveImage({ imageId: item.id, category: 'discarded' })),
+      );
+      const movedImages = results
+        .map((response) => response.image)
+        .filter((image): image is SavedImage => Boolean(image));
+      const movedIds = new Set(items.map((item) => item.id));
+
+      setFavorites((current) => current.filter((item) => !movedIds.has(item.id)));
+      setBackup((current) => current.filter((item) => !movedIds.has(item.id)));
+      setDiscarded((current) => [...movedImages, ...current.filter((item) => !movedIds.has(item.id))]);
+
+      setNotice(`已移入丢弃区 ${movedImages.length || items.length} 张`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '移入丢弃区失败');
+    }
+  }
+
   async function runDownload(url: string) {
     if (!url) return;
     if (downloadingRef.current.has(url)) return; // 同一张图正在下载时忽略重复点击，避免重复下载
@@ -6355,15 +6491,6 @@ export default function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除失败');
     }
-  }
-
-  function handleMergeAll() {
-    const merged = [...backup, ...discarded];
-    window.alert(
-      merged.length
-        ? `共 ${merged.length} 张图片：\n\n${merged.map((item, index) => `${index + 1}. ${item.prompt}`).join('\n')}`
-        : '备份区和丢弃区当前没有图片可合并。',
-    );
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
@@ -6586,7 +6713,7 @@ export default function App() {
             </button>
             {/* 购买积分按钮 - 头部导航栏 */}
             <button
-              className="hidden min-h-0 items-center rounded-md px-1.5 py-1 text-[11px] font-black text-orange-300 transition hover:bg-orange-400/10 hover:text-orange-200 md:inline-flex"
+              className="hidden min-h-0 items-center rounded-md px-1.5 py-1 text-[13px] font-black! text-orange-300 transition hover:bg-orange-400/10 hover:text-orange-200 md:inline-flex"
               type="button"
               onClick={openPurchasePage}
             >
@@ -6594,7 +6721,7 @@ export default function App() {
             </button>
             {user && user.canRedeemInvite !== false && !user.username.toLowerCase().startsWith('invite-') ? (
               <button
-                className="inline-flex min-h-0 items-center rounded-md px-1.5 py-1 text-[11px] font-black text-amber-200 transition hover:bg-amber-400/10 hover:text-amber-100"
+                className="inline-flex min-h-0 items-center rounded-md px-1.5 py-1 text-[13px] font-black! text-amber-300 transition hover:bg-amber-400/10 hover:text-amber-100"
                 type="button"
                 onClick={() => {
                   setRedeemInviteError('');
@@ -6765,44 +6892,77 @@ export default function App() {
                   }}
                 >
                   <button
-                    className="input flex min-h-[40px] w-full items-center py-2 pl-3 pr-28 text-left"
+                    className="group input flex min-h-[44px] w-full items-center gap-2.5 py-1.5 pl-2.5 pr-10 text-left transition hover:border-white/20"
                     type="button"
                     aria-haspopup="listbox"
                     aria-expanded={modelMenuOpen}
                     onClick={() => setModelMenuOpen((current) => !current)}
                   >
-                    <span className="text-[12px] font-semibold text-zinc-100">{selectedModelInfo?.name}</span>
-                    <span className="ml-2 text-[9px] font-medium text-zinc-500">{selectedModelInfo?.description}</span>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+                      <img src={getModelLogo(selectedModel)} alt={selectedModelInfo?.name ?? ''} className="h-full w-full object-contain" />
+                    </span>
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-[12px] font-semibold leading-4 text-zinc-100">{selectedModelInfo?.name}</span>
+                        {selectedModelSuccessRate ? (
+                          <span className="shrink-0 rounded-full bg-emerald-950/80 px-1.5 py-0.5 text-[9px] font-black leading-4 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.16)]">
+                            {selectedModelSuccessRate}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="truncate text-[9px] font-medium leading-3 text-zinc-500">{selectedModelInfo?.description}</span>
+                    </span>
                     <ChevronDown
                       size={15}
                       className={`absolute right-3 text-zinc-400 transition-transform ${modelMenuOpen ? 'rotate-180' : ''}`}
                     />
                   </button>
-                  {selectedModelSuccessRate ? (
-                    <span className="pointer-events-none absolute right-10 top-1/2 -translate-y-1/2 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[11px] font-black leading-4 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.16)]">
-                      {selectedModelSuccessRate}
-                    </span>
-                  ) : null}
                   {modelMenuOpen ? (
-                    <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-white/10 bg-[#111111] p-1 shadow-2xl" role="listbox">
-                      {models.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          role="option"
-                          aria-selected={selectedModel === item.id}
-                          className={`flex w-full items-center rounded-lg px-3 py-2.5 text-left transition ${
-                            selectedModel === item.id ? 'bg-white/10' : 'hover:bg-white/[0.06]'
-                          }`}
-                          onClick={() => {
-                            handleModelSelect(item.id);
-                            setModelMenuOpen(false);
-                          }}
-                        >
-                          <span className="text-[13px] font-semibold text-zinc-100">{item.name}</span>
-                          <span className="ml-2 text-[10px] font-medium text-zinc-500">{item.description}</span>
-                        </button>
-                      ))}
+                    <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 space-y-1 overflow-hidden rounded-2xl border border-white/10 bg-[#141414]/95 p-1.5 shadow-2xl backdrop-blur-xl" role="listbox">
+                      {visibleModels.map((item) => {
+                        const theme = getModelTheme(item.id);
+                        const isActive = selectedModel === item.id;
+                        const itemRate = getModelSuccessRate(item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="option"
+                            aria-selected={isActive}
+                            className={`group flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-all duration-150 ${
+                              isActive
+                                ? 'bg-violet-500/[0.12] ring-1 ring-violet-500/70'
+                                : 'hover:bg-white/[0.04] hover:ring-1 hover:ring-violet-400/30'
+                            }`}
+                            onClick={() => {
+                              handleModelSelect(item.id);
+                              setModelMenuOpen(false);
+                            }}
+                          >
+                            <span className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                              <span
+                                className={`absolute inset-0 rounded-xl blur-md transition-opacity duration-200 ${isActive ? 'opacity-60' : 'opacity-0 group-hover:opacity-50'}`}
+                                style={{ backgroundColor: theme.glow }}
+                              />
+                              <img src={getModelLogo(item.id)} alt={item.name} className="relative h-9 w-9 rounded-xl object-contain transition-transform duration-200 group-hover:scale-110" />
+                              {isActive ? (
+                                <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white ring-2 ring-[#141414]">
+                                  <Check size={9} strokeWidth={3.5} />
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate text-[13px] font-semibold text-zinc-100">{item.name}</span>
+                                {itemRate ? (
+                                  <span className="shrink-0 rounded-full bg-emerald-950/80 px-1.5 py-0.5 text-[9px] font-black leading-4 text-emerald-300">{itemRate}</span>
+                                ) : null}
+                              </span>
+                              <span className="mt-0.5 block truncate text-[10px] font-medium text-zinc-500">{item.description}</span>
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
@@ -7092,18 +7252,18 @@ export default function App() {
                 <div className="card p-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-black text-white">{'\u6570\u91cf'}</span>
-                    <div className="flex items-center overflow-hidden rounded-lg border border-amber-500/50 bg-[#2a1c0c]">
+                    <div className="flex items-center overflow-hidden rounded-lg border border-white/10 bg-[#1c1c2a]">
                       <button
-                        className="flex h-8 w-8 items-center justify-center text-amber-200/90 transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center text-zinc-300 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
                         type="button"
                         disabled={batchCount <= 1}
                         onClick={() => setBatchCount((current) => Math.max(1, current - 1))}
                       >
                         <Minus size={15} />
                       </button>
-                      <span className="flex h-8 w-9 items-center justify-center border-x border-amber-500/50 text-[12px] font-black text-white">{batchCount}</span>
+                      <span className="flex h-8 w-9 items-center justify-center border-x border-white/10 text-[12px] font-black text-white">{batchCount}</span>
                       <button
-                        className="flex h-8 w-8 items-center justify-center text-amber-200/90 transition hover:bg-white/5 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center text-zinc-300 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
                         type="button"
                         disabled={batchCount >= MAX_BATCH_COUNT}
                         onClick={() => setBatchCount((current) => Math.min(MAX_BATCH_COUNT, current + 1))}
@@ -7169,7 +7329,7 @@ export default function App() {
           ) : activeTab === 'batchCreate' ? (
             <BatchCreateView
               user={user}
-              models={models}
+              models={visibleModels}
               gptImagePricing={gptImagePricing}
               modelCreditPricing={modelCreditPricing}
               providerRouting={providerRouting}
@@ -7190,7 +7350,7 @@ export default function App() {
           ) : activeTab === 'canvas' ? (
             <CanvasView
               user={user}
-              models={models}
+              models={visibleModels}
               onLogin={() => {
                 setAuthMode('login');
                 setAuthOpen(true);
@@ -7332,16 +7492,33 @@ export default function App() {
             <SidePanel
               title="收藏区"
               count={sideFavoriteItems.length}
-              icon={<Star size={14} className="text-violet-300" />}
-              actionLabel="下载"
-              onAction={() => {
-                const target = sideFavoriteItems[0];
-                if (target) {
-                  void downloadDisplayImage(target);
-                }
-              }}
-              onBatchDownload={(selectedItems) => void downloadBatchImages(selectedItems)}
-              actionLoading={Boolean(sideFavoriteItems[0] && downloadingUrl === sideFavoriteItems[0].imageUrl)}
+              icon={<Star size={14} />}
+              accentColor="violet"
+              actions={[
+                {
+                  key: 'pack',
+                  label: '打包下载',
+                  icon: <Download size={11} />,
+                  tone: 'emerald',
+                  loading: packagingMode === 'original',
+                  onClick: (targets) => void downloadPanelArchive(targets, 'original', '收藏区'),
+                },
+                {
+                  key: 'pack-compressed',
+                  label: '压缩下载',
+                  icon: <Download size={11} />,
+                  tone: 'sky',
+                  loading: packagingMode === 'compressed',
+                  onClick: (targets) => void downloadPanelArchive(targets, 'compressed', '收藏区压缩'),
+                },
+                {
+                  key: 'discard',
+                  label: '全部舍弃',
+                  icon: <Trash2 size={11} />,
+                  tone: 'danger',
+                  onClick: (targets) => void discardAll(targets, '收藏区'),
+                },
+              ]}
               items={sideFavoriteItems}
               emptyText="看到满意的图，就把它放进这里。"
               onMove={moveSavedImageToMain}
@@ -7352,9 +7529,17 @@ export default function App() {
             <SidePanel
               title="备份区"
               count={sideBackupItems.length}
-              icon={<Bookmark size={14} className="text-pink-300" />}
-              actionLabel="全部合并"
-              onAction={handleMergeAll}
+              icon={<Bookmark size={14} />}
+              accentColor="sky"
+              actions={[
+                {
+                  key: 'discard',
+                  label: '全部舍弃',
+                  icon: <Trash2 size={11} />,
+                  tone: 'danger',
+                  onClick: (targets) => void discardAll(targets, '备份区'),
+                },
+              ]}
               items={sideBackupItems}
               emptyText="暂时拿不准的图，先放这里备用。"
               onMove={moveSavedImageToMain}
@@ -7365,8 +7550,9 @@ export default function App() {
             <SidePanel
               title="丢弃区"
               count={sideDiscardedItems.length}
-              icon={<Trash2 size={14} className="text-zinc-400" />}
+              icon={<Trash2 size={14} />}
               actionLabel="清空"
+              accentColor="zinc"
               onAction={() => {
                 if (user) {
                   void clearCategory('discarded');

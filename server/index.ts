@@ -41,7 +41,8 @@ import {
   generationFailureMessage,
   resolveGenerationFailureStage,
 } from './generation-failure.js';
-import { isConnectionTerminatedError, shouldFastFailover } from './pooled-fetch.js';
+import { isConnectionTerminatedError, pooledFetch, shouldFastFailover } from './pooled-fetch.js';
+import { buildZipArchive, sanitizeZipEntryName, uniqueZipEntryName } from './zip-archive.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
@@ -9228,6 +9229,184 @@ async function start() {
       logTiming(0, 0, 0, false);
       if (!res.headersSent) {
         sendDownloadFailure(req, res, 502, '下载失败，请稍后重试');
+      } else {
+        res.destroy();
+      }
+    }
+  });
+
+  const MAX_ZIP_SOURCES = 30;
+  const MAX_ZIP_TOTAL_BYTES = 200 * 1024 * 1024;
+  const MAX_ZIP_COMPRESSED_EDGE = 2048;
+  const MAX_ZIP_SOURCE_TIMEOUT_MS = 60_000;
+  const ZIP_SOURCE_CONCURRENCY = 4;
+  // 只对确定能安全重编码的位图做压缩；gif 可能是动图，svg/avif/视频一律原样保留
+  const ZIP_COMPRESSIBLE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+
+  // 把已通过归属校验的资源读成 Buffer：内联 data: → 本地 uploads/ → R2 远程
+  async function readOwnedAssetForArchive(req: Request, storedSource: string) {
+    const inlineAsset = parseInlineDataAsset(storedSource);
+    if (inlineAsset) return inlineAsset;
+
+    const localPath = resolveLocalAssetPath(req, storedSource);
+    if (localPath) {
+      const buffer = await fs.readFile(localPath).catch(() => null);
+      if (buffer && buffer.length > 0) {
+        return { buffer, contentType: mimeTypeFromImagePath(localPath) };
+      }
+    }
+
+    const remoteUrl = resolveRemoteAssetUrl(req, storedSource);
+    if (!remoteUrl) return null;
+    try {
+      const upstream = await pooledFetch(remoteUrl, {}, {
+        baseUrl: new URL(remoteUrl).origin,
+        maxConcurrent: ZIP_SOURCE_CONCURRENCY,
+        timeoutMs: MAX_ZIP_SOURCE_TIMEOUT_MS,
+      });
+      if (!upstream.ok) return null;
+
+      const upstreamType = normalizeString(upstream.headers.get('content-type')).split(';')[0].toLowerCase();
+      const contentType = /^(?:image|video)\//.test(upstreamType) ? upstreamType : mimeTypeFromImagePath(remoteUrl);
+      if (!/^(?:image|video)\//.test(contentType)) return null;
+
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      return buffer.length > 0 ? { buffer, contentType } : null;
+    } catch (error) {
+      console.warn('[asset-download-zip] remote read failed:', error);
+      return null;
+    }
+  }
+
+  // 压缩模式：长边压到 2048 以内后重编码；有透明通道走 png，其余走 jpeg
+  async function compressImageForArchive(asset: { buffer: Buffer; contentType: string }) {
+    if (!ZIP_COMPRESSIBLE_TYPES.has(asset.contentType)) return asset;
+
+    try {
+      const hasAlpha = (await sharp(asset.buffer, { failOn: 'none' }).metadata()).hasAlpha === true;
+      const resized = sharp(asset.buffer, { failOn: 'none', limitInputPixels: 100_000_000 })
+        .rotate()
+        .resize({
+          width: MAX_ZIP_COMPRESSED_EDGE,
+          height: MAX_ZIP_COMPRESSED_EDGE,
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      const buffer = hasAlpha
+        ? await resized.png({ compressionLevel: 9, palette: true }).toBuffer()
+        : await resized.jpeg({ quality: 72, mozjpeg: true }).toBuffer();
+      return { buffer, contentType: hasAlpha ? 'image/png' : 'image/jpeg' };
+    } catch (error) {
+      // sharp 解不动的格式直接原样入包，不让一张图毁掉整包
+      console.warn('[asset-download-zip] compress failed, keeping original:', error);
+      return asset;
+    }
+  }
+
+  app.post('/api/user/assets/download-zip', requireDownloadAuth, async (req, res) => {
+    const sources = (Array.isArray(req.body?.sources) ? req.body.sources : [])
+      .map((value: unknown) => normalizeString(value))
+      .filter((value: string): value is string => Boolean(value));
+    if (sources.length === 0) {
+      sendDownloadFailure(req, res, 400, '没有可打包的图片');
+      return;
+    }
+    if (sources.length > MAX_ZIP_SOURCES) {
+      sendDownloadFailure(req, res, 413, `一次最多打包 ${MAX_ZIP_SOURCES} 张图片`);
+      return;
+    }
+
+    const mode = normalizeString(req.body?.mode) === 'compressed' ? 'compressed' : 'original';
+    const requestedNames: unknown[] = Array.isArray(req.body?.names) ? req.body.names : [];
+    const startedAt = Date.now();
+    let lookupMs = 0;
+    let readMs = 0;
+    let failedCount = 0;
+
+    const logZipTiming = (bytes: number, ok: boolean, totalMs: number) => {
+      recordDownloadTiming({
+        userId: req.authUser?.userId ?? '',
+        bytes,
+        lookupMs,
+        readMs,
+        totalMs,
+        ok,
+      });
+    };
+
+    try {
+      const collected = await mapWithConcurrency(sources, ZIP_SOURCE_CONCURRENCY, async (source, index) => {
+        try {
+          const lookupStartedAt = Date.now();
+          const storedSource = await findOwnedAssetSource(req, source);
+          lookupMs += Date.now() - lookupStartedAt;
+          // 归属校验：只允许打包当前用户自己的资源，查不到一律跳过
+          if (!storedSource) return null;
+
+          const readStartedAt = Date.now();
+          const asset = await readOwnedAssetForArchive(req, storedSource);
+          readMs += Date.now() - readStartedAt;
+          if (!asset) return null;
+
+          const finalAsset = mode === 'compressed' ? await compressImageForArchive(asset) : asset;
+          return { index, ...finalAsset };
+        } catch (error) {
+          console.warn('[asset-download-zip] source failed:', error);
+          return null;
+        }
+      });
+
+      const available = collected.filter((item): item is { index: number; buffer: Buffer; contentType: string } => Boolean(item));
+      failedCount = sources.length - available.length;
+      if (available.length === 0) {
+        sendDownloadFailure(req, res, 404, '这些图片暂时都无法打包，请稍后重试');
+        logZipTiming(0, false, Date.now() - startedAt);
+        return;
+      }
+
+      const totalBytes = available.reduce((sum, item) => sum + item.buffer.length, 0);
+      if (totalBytes > MAX_ZIP_TOTAL_BYTES) {
+        sendDownloadFailure(req, res, 413, '图片总量过大，请分批打包');
+        logZipTiming(0, false, Date.now() - startedAt);
+        return;
+      }
+
+      const usedNames = new Set<string>();
+      const entries = available.map((item) => {
+        const prompt = normalizeString(requestedNames[item.index]);
+        const baseName = sanitizeZipEntryName(
+          `${String(item.index + 1).padStart(2, '0')}-${prompt || 'image'}`,
+          `image-${item.index + 1}`,
+        );
+        const extension = fileExtensionFromMimeType(item.contentType);
+        return {
+          name: uniqueZipEntryName(`${baseName}.${extension}`, usedNames),
+          data: item.buffer,
+        };
+      });
+
+      const archive = buildZipArchive(entries);
+      const requestedName = normalizeString(req.body?.suggestedName)
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^\.+|\.+$/g, '')
+        .slice(0, 120) || `pixory-images-${Date.now()}`;
+
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${requestedName}.zip"`);
+      res.setHeader('Content-Length', String(archive.length));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.send(archive);
+
+      const totalMs = Date.now() - startedAt;
+      logZipTiming(archive.length, true, totalMs);
+      console.log(
+        `[asset-download-zip] userId=${req.authUser?.userId ?? ''} mode=${mode} entries=${entries.length} skipped=${failedCount} bytes=${archive.length} total=${totalMs}ms`,
+      );
+    } catch (error) {
+      console.error('[asset-download-zip]', error);
+      logZipTiming(0, false, Date.now() - startedAt);
+      if (!res.headersSent) {
+        sendDownloadFailure(req, res, 502, '打包失败，请稍后重试');
       } else {
         res.destroy();
       }

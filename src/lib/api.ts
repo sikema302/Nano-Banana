@@ -437,8 +437,8 @@ async function fetchDirectBlobWithFallback(source: string): Promise<Blob> {
   }
 }
 
-function triggerBlobDownload(source: string, blob: Blob, suggestedName: string): void {
-  const extension = fileExtensionForDownload(source, blob.type);
+function triggerBlobDownload(source: string, blob: Blob, suggestedName: string, extensionOverride?: string): void {
+  const extension = extensionOverride || fileExtensionForDownload(source, blob.type);
   const baseName = suggestedName.replace(/\.[a-zA-Z0-9]{2,5}$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -556,6 +556,43 @@ export async function downloadAsset(
 
   const blob = await fetchDirectBlobWithFallback(source);
   triggerBlobDownload(source, blob, suggestedName);
+  return blob;
+}
+
+// 打包 N 张图比单图慢得多，不能沿用单图的 60s 超时
+const ARCHIVE_TIMEOUT_MS = 180_000;
+
+// 由服务端把多张图片合成一个 zip 再落盘，避免逐张触发 N 次浏览器下载
+export async function downloadArchiveAsZip(
+  sources: string[],
+  names: string[],
+  mode: 'original' | 'compressed',
+  suggestedName: string,
+): Promise<Blob> {
+  if (sources.length === 0) throw new Error('没有可打包的图片');
+
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  const response = await fetchWithTimeout(
+    toApiUrl('/api/user/assets/download-zip'),
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ sources, names, mode, suggestedName }),
+    },
+    ARCHIVE_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => '');
+    console.error('[downloadArchiveAsZip] 打包失败 status:', response.status, 'response:', responseText);
+    throw new Error(getApiErrorMessage(parseJsonPayload(responseText), responseText) || '打包下载失败');
+  }
+
+  const blob = await response.blob();
+  triggerBlobDownload('', blob, suggestedName, 'zip');
   return blob;
 }
 
