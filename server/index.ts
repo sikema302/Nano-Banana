@@ -1542,6 +1542,93 @@ async function withRecordingRetry(task: () => Promise<void>) {
   }
 }
 
+// 公共 API Key 生图成功后，把历史（generations）与累计统计（user_generation_stats）一并写入。
+// 这里沿用 generation_requests 的伪 id（`api-key:<id>` / `api-<id>`），排名接口会据此把
+// 账户模式 key 的请求映射回真实的 owner（见 /api/admin/generation-ranking 的 ownerByApiKeyUserId），
+// 从而让今日排名与总排名口径一致，且不会与启动时的 backfill 去重（user_id + image_path）产生重复计数。
+async function recordPublicGenerationHistory(record: {
+  userId: string;
+  username: string;
+  prompt: string;
+  modelId: string;
+  modelName: string;
+  dimensions: string;
+  imageSize: string;
+  imagePath: string;
+  creditsUsed: number;
+  apiRequestMs?: number;
+  referenceImages: string[];
+  createdAt: string;
+  requestId?: string;
+}): Promise<void> {
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await withRecordingRetry(() => db.insertGeneration(record));
+    try {
+      await db.incrementGenerationCount(record.userId, record.username, record.creditsUsed, record.createdAt);
+    } catch (statsError) {
+      console.warn('[public-generate] failed to update generation stats after history insert:', statsError);
+    }
+    return;
+  }
+
+  try {
+    await withRecordingRetry(() => withWriteDb((db) => {
+      ensureSchema(db);
+      db.run(
+        `
+          INSERT INTO generations (
+            user_id, username, prompt, model_id, model_name, dimensions,
+            image_size, image_path, credits_used, api_request_ms, reference_images, created_at, request_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          record.userId,
+          record.username,
+          record.prompt,
+          record.modelId,
+          record.modelName,
+          record.dimensions,
+          record.imageSize,
+          record.imagePath,
+          record.creditsUsed,
+          Math.max(0, Math.floor(record.apiRequestMs || 0)),
+          serializeReferenceImages(record.referenceImages),
+          record.createdAt,
+          record.requestId || '',
+        ],
+      );
+    }));
+  } catch (insertError) {
+    const insertMessage = insertError instanceof Error ? insertError.message : String(insertError);
+    // 同一 request_id 已写入过（重复执行/并发），跳过本次统计累加，避免二次计数。
+    if (!record.requestId || !/UNIQUE constraint failed:.*request_id/i.test(insertMessage)) {
+      throw insertError;
+    }
+    return;
+  }
+
+  try {
+    await withWriteDb((db) => {
+      ensureSchema(db);
+      db.run(
+        `
+          INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+          VALUES (?, ?, 1, ?, ?)
+          ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            generations_total = generations_total + 1,
+            credits_total = credits_total + excluded.credits_total,
+            updated_at = excluded.updated_at
+        `,
+        [record.userId, record.username, record.creditsUsed, record.createdAt],
+      );
+    });
+  } catch (statsError) {
+    console.warn('[public-generate] failed to update generation stats after history insert:', statsError);
+  }
+}
+
 // 上游出图成功后诊断记录已写入 success；后续环节失败时同步修正为 failed，保持与 generations 表口径一致。
 // 注意：message 是「给后台看的人话结论」，detail 是「真实技术根因」，两者必须分开传。
 // 早期实现把 detail 也写成 message，导致上游/转存环节的真实报错（HTTP 状态、ECONNRESET 等）
@@ -7576,6 +7663,24 @@ async function start() {
           requestContext,
         });
         const imagePath = await persistPublicImageSource(generatedImageSource);
+        if (imagePath) {
+          await recordPublicGenerationHistory({
+            userId: requestContext.userId,
+            username: requestContext.username,
+            prompt,
+            modelId,
+            modelName,
+            dimensions: ratio,
+            imageSize,
+            imagePath,
+            creditsUsed,
+            referenceImages,
+            createdAt,
+            requestId: requestContext.successfulRequestId,
+          }).catch((historyError) => {
+            console.error('[public-generate] failed to record generation history:', historyError);
+          });
+        }
 
         res.json({
           image: toPublicGeneratedImagePayload(req, {
@@ -8050,6 +8155,25 @@ async function start() {
           };
           return completed;
         });
+        // 只有图片落成持久地址（https/本地 uploads）才算有效历史，transient 结果不记入排名与统计。
+        if (durableImageSource && current) {
+          await recordPublicGenerationHistory({
+            userId: `api-key:${current.apiKeyId}`,
+            username: `api-${current.apiKeyId}`,
+            prompt: current.prompt,
+            modelId: current.modelId,
+            modelName: current.modelName,
+            dimensions: current.dimensions,
+            imageSize: current.imageSize,
+            imagePath: durableImageSource,
+            creditsUsed: current.creditsUsed,
+            referenceImages: current.referenceImages,
+            createdAt: nowIso(),
+            requestId: requestContext.successfulRequestId,
+          }).catch((historyError) => {
+            console.error('[public-generate] failed to record generation history:', historyError);
+          });
+        }
         await cleanupTemporaryReferenceImages(current?.temporaryReferenceImages || []);
         return;
       }
@@ -9304,7 +9428,7 @@ async function start() {
   }
 
   app.post('/api/user/assets/download-zip', requireDownloadAuth, async (req, res) => {
-    const sources = (Array.isArray(req.body?.sources) ? req.body.sources : [])
+    const sources: string[] = (Array.isArray(req.body?.sources) ? req.body.sources : [])
       .map((value: unknown) => normalizeString(value))
       .filter((value: string): value is string => Boolean(value));
     if (sources.length === 0) {
