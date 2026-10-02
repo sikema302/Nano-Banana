@@ -35,7 +35,7 @@ import {
   verifyPublicGeneratedImage,
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
-import { classifyPublicImageError, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
+import { classifyPublicImageError, extractUpstreamErrorMessage, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
 import {
   generationFailureDetail,
   generationFailureMessage,
@@ -1544,7 +1544,8 @@ async function withRecordingRetry(task: () => Promise<void>) {
 
 // 公共 API Key 生图成功后，把历史（generations）与累计统计（user_generation_stats）一并写入。
 // 这里沿用 generation_requests 的伪 id（`api-key:<id>` / `api-<id>`），排名接口会据此把
-// 账户模式 key 的请求映射回真实的 owner（见 /api/admin/generation-ranking 的 ownerByApiKeyUserId），
+// 绑定了 owner 的 key 的请求映射回真实的 owner（见 /api/admin/generation-ranking 与
+// /api/admin/users 的合并口径，二者都必须只看 ownerUserId、不看 billingMode），
 // 从而让今日排名与总排名口径一致，且不会与启动时的 backfill 去重（user_id + image_path）产生重复计数。
 async function recordPublicGenerationHistory(record: {
   userId: string;
@@ -4998,6 +4999,11 @@ function sanitizeExternalErrorMessage(value: string, fallback = '图像服务返
     return '图像服务暂时不可用，请稍后重试';
   }
 
+  // 上游把整段 JSON 错误报文塞进来时（如 `... 422 {"error":{"message":"当前提示词暂时无法生成，
+  // 请更换提示词后重试"}} (HTTP 502)`），只展示其中的 message，不展示外层包装。
+  const embedded = extractUpstreamErrorMessage(value);
+  if (embedded) return embedded;
+
   if (
     lower.includes('502 bad gateway') ||
     lower.includes('503 service unavailable') ||
@@ -8157,9 +8163,12 @@ async function start() {
         });
         // 只有图片落成持久地址（https/本地 uploads）才算有效历史，transient 结果不记入排名与统计。
         if (durableImageSource && current) {
+          // username 统一用 key 名，与同步路径保持一致；key 已被删除时退回 id。
+          const keyRecords = await readPublicApiKeyRecords().catch(() => [] as PublicApiKeyRecord[]);
+          const historyKey = keyRecords.find((item) => item.id === current.apiKeyId);
           await recordPublicGenerationHistory({
             userId: `api-key:${current.apiKeyId}`,
-            username: `api-${current.apiKeyId}`,
+            username: `api-${historyKey?.name || current.apiKeyId}`.slice(0, 80),
             prompt: current.prompt,
             modelId: current.modelId,
             modelName: current.modelName,
@@ -10345,7 +10354,10 @@ async function start() {
         );
         const ownerByApiKeyUserId = new Map<string, { userId: string; username: string }>();
         for (const key of apiKeys) {
-          if (key.billingMode === 'account' && key.ownerUserId) {
+          // 与 /api/admin/users 的合并口径保持一致：只要绑定了 owner 就归并，
+          // 不能额外要求 billingMode === 'account'，否则带 owner 的 legacy key
+          // 会在用户页算到 owner 头上、在排名里却拆成 api-xxx 单独一行。
+          if (key.ownerUserId) {
             ownerByApiKeyUserId.set(`api-key:${key.id}`, {
               userId: key.ownerUserId,
               username: key.ownerUsername || key.name,

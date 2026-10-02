@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyPublicImageError, publicImageErrorMessage } from './public-image-error.js';
+import { classifyPublicImageError, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
 
 test('classifies sensitive prompts without exposing provider details', () => {
   assert.deepEqual(classifyPublicImageError('nano-banana content_policy violation from upstream'), {
@@ -78,6 +78,33 @@ test('separates real service failures from congestion and hides routing', () => 
   assert.notEqual(busy, '当前模型太拥挤了，请稍后重试或试试其他模型');
   // 纯技术噪声（清洗后只剩状态码/连接词）仍回退到中性文案。
   assert.equal(publicImageErrorMessage('some unknown upstream glitch'), 'some unknown glitch');
+});
+
+test('extracts the embedded upstream JSON message instead of the raw envelope', () => {
+  const raw = 'request failed: 任务已明确失败: custom rejected request parameters: 422 '
+    + '{"error":{"code":10001,"message":"当前提示词暂时无法生成，请更换提示词后重试","type":"invalid_request_error"}} (HTTP 502)';
+  // 用户端：不再被外层包装的 HTTP 502 带偏成「太拥挤」。
+  assert.equal(publicImageErrorMessage(raw), '当前提示词暂时无法生成，请更换提示词后重试');
+  assert.deepEqual(classifyPublicImageError(raw), {
+    category: 'busy',
+    message: '当前提示词暂时无法生成，请更换提示词后重试',
+  });
+  // 后台展示（result_message）：同样只展示 message。
+  assert.equal(sanitizeUpstreamErrorForDisplay(raw), '当前提示词暂时无法生成，请更换提示词后重试');
+});
+
+test('decodes escaped JSON string content in the embedded message', () => {
+  assert.equal(
+    publicImageErrorMessage('failed: {"error":{"message":"第一行\\n第二行 \\"引号\\""}}'),
+    '第一行 第二行 "引号"',
+  );
+});
+
+test('never surfaces internal or technical embedded messages to users', () => {
+  assert.equal(
+    publicImageErrorMessage('failed: {"error":{"message":"database connection terminated unexpectedly"}}'),
+    '图像服务暂时不可用，请稍后重试',
+  );
 });
 
 test('keeps API key and credit request errors actionable without internal details', () => {

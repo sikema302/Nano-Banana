@@ -1525,7 +1525,8 @@ export async function getGenerationRankings(): Promise<{
     const parsedApiKeys = JSON.parse(rawApiKeys);
     if (Array.isArray(parsedApiKeys)) {
       for (const key of parsedApiKeys as Array<{ id?: string; billingMode?: string; ownerUserId?: string; ownerUsername?: string; name?: string }>) {
-        if (key && key.billingMode === 'account' && key.ownerUserId) {
+        // 与 /api/admin/users 的合并口径一致：绑定 owner 即归并，不额外要求 account 模式。
+        if (key && key.ownerUserId) {
           ownerByApiKeyUserId.set(`api-key:${key.id}`, {
             userId: String(key.ownerUserId),
             username: String(key.ownerUsername || key.name || ''),
