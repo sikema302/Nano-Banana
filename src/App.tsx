@@ -1446,6 +1446,41 @@ function HomeView({
   );
 }
 
+// 提示词单元格：仅当文字在当前宽度下展示不下（出现截断）时，才显示「展开」按钮。
+function PromptCell({ text, onExpand }: { text: string; onExpand: () => void }) {
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const [overflow, setOverflow] = useState(false);
+
+  useEffect(() => {
+    const node = textRef.current;
+    if (!node) return;
+    const check = () => setOverflow(node.scrollWidth > node.clientWidth + 1);
+    check();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', check);
+      return () => window.removeEventListener('resize', check);
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <div className="flex items-center gap-2">
+      <span ref={textRef} className="min-w-0 flex-1 truncate text-white">{text}</span>
+      {overflow ? (
+        <button
+          className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:border-white/25 hover:text-white"
+          type="button"
+          onClick={onExpand}
+        >
+          展开
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function HistoryView({
   records,
   onPreview,
@@ -1511,16 +1546,7 @@ function HistoryView({
                     </button>
                   </td>
                   <td className="max-w-[420px] px-3 py-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-white">{item.prompt}</span>
-                      <button
-                        className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:border-white/25 hover:text-white"
-                        type="button"
-                        onClick={() => setExpandedPrompt(item.prompt)}
-                      >
-                        展开
-                      </button>
-                    </div>
+                    <PromptCell text={item.prompt} onExpand={() => setExpandedPrompt(item.prompt)} />
                   </td>
                   <td className="px-3 py-1.5">{item.modelName}</td>
                   <td className="px-3 py-1.5">
@@ -7147,22 +7173,18 @@ export default function App() {
                         const isHighQuality = item.value === 'high';
 
                         return (
-                          <button
-                            key={item.value}
-                            className={`group relative flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-2 py-0 text-[10px]! font-bold! ${
-                              active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
-                            } ${disableGptQuality ? 'cursor-not-allowed opacity-45' : ''}`}
-                            type="button"
-                            disabled={disableGptQuality}
-                            aria-describedby={isHighQuality ? 'gpt-high-quality-tip' : undefined}
-                            onClick={() => setGptQuality(item.value)}
-                          >
-                            <span className="block whitespace-nowrap leading-none">{item.label}</span>
-                            {isHighQuality ? (
-                              <>
-                                <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-orange-400/80 bg-[linear-gradient(180deg,#b94f16_0%,#8f2f0c_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-orange-100 shadow-[0_3px_10px_rgba(194,65,12,0.32)]">
-                                  {'\u9ad8\u8d28'}
-                                </span>
+                          <div key={item.value} className="relative min-w-0 overflow-visible">
+                            <button
+                              className={`group relative flex h-10 w-full min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-2 py-0 text-[10px]! font-bold! ${
+                                active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
+                              } ${disableGptQuality ? 'cursor-not-allowed opacity-45' : ''}`}
+                              type="button"
+                              disabled={disableGptQuality}
+                              aria-describedby={isHighQuality ? 'gpt-high-quality-tip' : undefined}
+                              onClick={() => setGptQuality(item.value)}
+                            >
+                              <span className="block whitespace-nowrap leading-none">{item.label}</span>
+                              {isHighQuality ? (
                                 <span
                                   id="gpt-high-quality-tip"
                                   role="tooltip"
@@ -7173,9 +7195,14 @@ export default function App() {
                                   ))}
                                   <span className="absolute -bottom-1.5 right-7 h-3 w-3 rotate-45 border-b border-r border-white/15 bg-[#090909]" />
                                 </span>
-                              </>
+                              ) : null}
+                            </button>
+                            {isHighQuality ? (
+                              <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-[#ea580c] bg-[#ea580c] px-1.5 py-0 text-[9px] font-black leading-4 text-white">
+                                {'\u9ad8\u8d28'}
+                              </span>
                             ) : null}
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
