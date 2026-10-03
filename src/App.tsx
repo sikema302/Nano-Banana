@@ -790,10 +790,10 @@ function StageCard({
   const currentBatch = progress ? Math.min(progress.completed + 1, progress.total) : 1;
 
   return (
-    <article className="stage-card relative flex min-h-[108px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[108px] sm:flex-row sm:p-3">
+    <article className="stage-card relative flex min-h-[88px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[88px] sm:flex-row sm:p-3">
       <div
-        className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[112px] ${
-          loading ? 'border-pink-300/25 bg-pink-300/10' : 'border-white/8 bg-black/45'
+        className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[62px] ${
+          loading ? 'border-pink-300/25 bg-pink-300/10' : item ? 'border-white/8 bg-black/45' : 'border-transparent bg-[rgba(0,0,0,0.35)]'
         }`}
       >
         {loading ? (
@@ -805,8 +805,8 @@ function StageCard({
             <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
           </button>
         ) : (
-          <div className="flex h-full w-full items-center justify-center border border-dashed border-white/10 text-[11px] font-black text-zinc-300">
-            空闲中
+          <div className="flex h-full w-full items-center justify-center text-[13px] font-bold text-zinc-100">
+            等待中
           </div>
         )}
       </div>
@@ -912,7 +912,7 @@ function StageCard({
           ) : null}
         </div>
       ) : (
-        <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[18px] border border-white/6 bg-black/45 px-4 py-3 text-[12px] font-black text-zinc-200 sm:ml-3 sm:py-0">
+        <div className="relative flex min-w-0 flex-1 items-center justify-center rounded-[12px] bg-[rgba(0,0,0,0.28)] px-4 py-3 text-[10px] font-black text-white sm:ml-3 sm:py-0">
           等待下单...
         </div>
       )}
@@ -1110,20 +1110,28 @@ function SidePanel({
     onClick: (selectedItems: SavedImage[]) => void;
   }>;
   loggedIn: boolean;
-  accentColor?: 'violet' | 'sky' | 'zinc';
+  accentColor?: 'amber' | 'violet' | 'sky' | 'zinc';
 }) {
   const accentMap = {
+    amber: {
+      iconBg: 'bg-amber-500/15 text-amber-300',
+      btn: 'text-amber-300 hover:text-amber-200 hover:bg-amber-500/10',
+      edge: 'from-amber-500/14 via-transparent to-transparent',
+    },
     violet: {
       iconBg: 'bg-violet-500/15 text-violet-300',
       btn: 'text-violet-300 hover:text-violet-200 hover:bg-violet-500/10',
+      edge: 'from-violet-500/14 via-transparent to-transparent',
     },
     sky: {
       iconBg: 'bg-sky-500/15 text-sky-300',
       btn: 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10',
+      edge: 'from-sky-500/14 via-transparent to-transparent',
     },
     zinc: {
       iconBg: 'bg-zinc-500/15 text-zinc-400',
       btn: 'text-rose-300 hover:text-rose-200 hover:bg-rose-500/10',
+      edge: 'from-zinc-500/12 via-transparent to-transparent',
     },
   };
   const accent = accentMap[accentColor];
@@ -1173,7 +1181,15 @@ function SidePanel({
   const batchLoading = actionLoading && !hasSelection;
 
   return (
-    <section className="flex flex-col gap-1.5">
+    <section
+      className="flex flex-col gap-1.5 p-2.5"
+      style={{
+        background: 'rgba(0, 0, 0, 0.7)',
+        border: '1px solid rgba(255, 255, 255, 0.06)',
+        borderRadius: 24,
+        boxShadow: '0 24px 80px rgba(0, 0, 0, 0.45)',
+      }}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className={`flex h-7 w-7 items-center justify-center rounded-full ${accent.iconBg}`}>{icon}</span>
@@ -1188,7 +1204,7 @@ function SidePanel({
             {actions!.map((action) => (
               <button
                 key={action.key}
-                className={`inline-flex min-h-0 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1 py-1 text-[10px] font-semibold transition disabled:cursor-wait disabled:opacity-50 ${actionToneMap[action.tone ?? 'default']}`}
+                className={`inline-flex min-h-0 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1 py-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${actionToneMap[action.tone ?? 'default']}`}
                 type="button"
                 onClick={() => action.onClick(actionTargets)}
                 disabled={Boolean(action.loading) || items.length === 0}
@@ -1200,7 +1216,7 @@ function SidePanel({
           </div>
         ) : actionLabel && (onAction || onBatchDownload) ? (
           <button
-            className={`inline-flex min-h-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${accent.btn} disabled:cursor-wait disabled:opacity-50`}
+            className={`inline-flex min-h-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${accent.btn} disabled:cursor-not-allowed disabled:opacity-50`}
             type="button"
             onClick={batchAction}
             disabled={batchLoading}
@@ -1224,7 +1240,7 @@ function SidePanel({
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
+      <div className="relative overflow-hidden rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
         {items.length > 0 ? (
           <div className="grid min-w-0 grid-cols-1 gap-2 pb-1 xl:grid-cols-2">
             {items.map((item) => {
@@ -1294,6 +1310,7 @@ function SidePanel({
             {emptyText}
           </div>
         )}
+        <div className={`pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t ${accent.edge}`} />
       </div>
     </section>
   );
@@ -1438,6 +1455,7 @@ function HistoryView({
 }) {
   const [sortKey, setSortKey] = useState<'createdAt' | 'creditsUsed' | 'modelName'>('createdAt');
   const [page, setPage] = useState(1);
+  const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const pageSize = 12;
   const sortedRecords = [...records].sort((left, right) => {
     if (sortKey === 'creditsUsed') return right.creditsUsed - left.creditsUsed;
@@ -1449,14 +1467,14 @@ function HistoryView({
   const pageRecords = sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <section className="page-shell min-h-0 overflow-auto py-4 lg:h-full lg:overflow-hidden">
-      <div className="card flex min-h-[420px] flex-col lg:h-full lg:min-h-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
-          <h2 className="text-sm font-semibold text-white">历史记录</h2>
-          <div className="flex items-center gap-2 text-xs text-zinc-400">
+    <section className="page-shell min-h-0 overflow-auto py-3 lg:h-full lg:overflow-hidden">
+      <div className="card flex min-h-[360px] flex-col lg:h-full lg:min-h-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 px-3 py-2">
+          <h2 className="text-[13px] font-semibold text-white">历史记录</h2>
+          <div className="flex items-center gap-2 text-[11px] text-zinc-400">
             <span>排序</span>
             <select
-              className="input min-h-0 px-2 py-1 text-xs"
+              className="input min-h-0 px-2 py-1 text-[11px]"
               value={sortKey}
               onChange={(event) => {
                 setSortKey(event.target.value as 'createdAt' | 'creditsUsed' | 'modelName');
@@ -1470,21 +1488,21 @@ function HistoryView({
         </div>
         <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
         {records.length > 0 ? (
-          <table className="min-w-[640px] text-left text-xs sm:min-w-full">
-            <thead className="sticky top-0 bg-[#090909] text-zinc-500">
+          <table className="min-w-[640px] text-left text-[11px] sm:min-w-full">
+            <thead className="sticky top-0 z-10 bg-[#090909] text-zinc-500">
               <tr className="border-b border-white/8">
-                <th className="px-4 py-2 font-medium">图片</th>
-                <th className="px-4 py-2 font-medium">提示词</th>
-                <th className="px-4 py-2 font-medium">模型</th>
-                <th className="px-4 py-2 font-medium">比例</th>
-                <th className="px-4 py-2 font-medium">时间</th>
+                <th className="px-3 py-1.5 font-medium">图片</th>
+                <th className="px-3 py-1.5 font-medium">提示词</th>
+                <th className="px-3 py-1.5 font-medium">模型</th>
+                <th className="px-3 py-1.5 font-medium">比例</th>
+                <th className="px-3 py-1.5 font-medium">时间</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
               {pageRecords.map((item) => (
-                <tr key={item.id} className="h-14 text-zinc-300">
-                  <td className="px-4 py-2">
-                    <button className="h-10 w-10 overflow-hidden rounded-lg bg-black" type="button" onClick={() => onPreview(item)}>
+                <tr key={item.id} className="text-zinc-300">
+                  <td className="px-3 py-1.5">
+                    <button className="h-8 w-8 overflow-hidden rounded-md bg-black" type="button" onClick={() => onPreview(item)}>
                       {isVideoAssetUrl(item.imageUrl) ? (
                         <video className="h-full w-full object-cover" src={item.imageUrl} muted preload="metadata" />
                       ) : (
@@ -1492,30 +1510,67 @@ function HistoryView({
                       )}
                     </button>
                   </td>
-                  <td className="max-w-[520px] truncate px-4 py-2 text-white">{item.prompt}</td>
-                  <td className="px-4 py-2">{item.modelName}</td>
-                  <td className="px-4 py-2">
+                  <td className="max-w-[420px] px-3 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-white">{item.prompt}</span>
+                      <button
+                        className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:border-white/25 hover:text-white"
+                        type="button"
+                        onClick={() => setExpandedPrompt(item.prompt)}
+                      >
+                        展开
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-3 py-1.5">{item.modelName}</td>
+                  <td className="px-3 py-1.5">
                     {item.dimensions}
                     {item.imageSize ? ` / ${item.imageSize}` : ''}
                   </td>
-                  <td className="px-4 py-2">{formatTime(item.createdAt)}</td>
+                  <td className="px-3 py-1.5">{formatTime(item.createdAt)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-500">暂无生图记录</div>
+          <div className="flex h-full items-center justify-center text-[13px] text-zinc-500">暂无生图记录</div>
         )}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 px-4 py-3 text-xs text-zinc-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 px-3 py-2 text-[11px] text-zinc-400">
           <span>共 {records.length} 条</span>
           <div className="flex items-center gap-2">
-            <button className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={currentPage <= 1} type="button" onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
+            <button className="rounded-lg border border-white/10 px-2.5 py-1 disabled:opacity-40" disabled={currentPage <= 1} type="button" onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
             <span>{currentPage} / {totalPages}</span>
-            <button className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={currentPage >= totalPages} type="button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>下一页</button>
+            <button className="rounded-lg border border-white/10 px-2.5 py-1 disabled:opacity-40" disabled={currentPage >= totalPages} type="button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>下一页</button>
           </div>
         </div>
       </div>
+
+      {expandedPrompt !== null ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setExpandedPrompt(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#111111] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.6)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-[13px] font-bold text-white">完整提示词</h3>
+              <button
+                className="rounded-md border border-white/15 px-3 py-1 text-[11px] font-medium text-zinc-200 transition hover:border-white/30 hover:text-white"
+                type="button"
+                onClick={() => setExpandedPrompt(null)}
+              >
+                收起
+              </button>
+            </div>
+            <p className="mt-3 max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-100">
+              {expandedPrompt}
+            </p>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -6295,10 +6350,10 @@ export default function App() {
 
       setNotice(
         category === 'favorite'
-          ? '已加入收藏区'
+          ? '已加入收藏'
           : category === 'backup'
-            ? '已移入备份区'
-            : '已移入丢弃区',
+            ? '已移入备用'
+            : '已移入舍弃',
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '图片保存失败');
@@ -6340,23 +6395,6 @@ export default function App() {
     }
   }
 
-  async function clearCategory(category: ImageCategory) {
-    const target = category === 'backup' ? backup : discarded;
-    if (!user || target.length === 0) return;
-
-    try {
-      await Promise.all(target.map((item) => deleteImage(item.id)));
-
-      if (category === 'backup') {
-        setBackup([]);
-      } else {
-        setDiscarded([]);
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '清空失败');
-    }
-  }
-
   // 打包下载：由服务端把多张图合成一个 zip 再返回，避免逐张触发浏览器下载
   async function downloadPanelArchive(
     items: SavedImage[],
@@ -6381,10 +6419,10 @@ export default function App() {
     }
   }
 
-  // 「全部舍弃」= 移入丢弃区（可恢复），不是永久删除
+  // 「全部舍弃」= 移入舍弃区（可恢复），不是永久删除
   async function discardAll(items: SavedImage[], fromLabel: string) {
     if (!user || items.length === 0) return;
-    if (!window.confirm(`确定把${fromLabel}的 ${items.length} 张图片移入丢弃区？移入后仍可从丢弃区找回。`)) {
+    if (!window.confirm(`确定把${fromLabel}的 ${items.length} 张图片移入舍弃？移入后仍可从舍弃找回。`)) {
       return;
     }
 
@@ -6401,9 +6439,9 @@ export default function App() {
       setBackup((current) => current.filter((item) => !movedIds.has(item.id)));
       setDiscarded((current) => [...movedImages, ...current.filter((item) => !movedIds.has(item.id))]);
 
-      setNotice(`已移入丢弃区 ${movedImages.length || items.length} 张`);
+      setNotice(`已移入舍弃 ${movedImages.length || items.length} 张`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '移入丢弃区失败');
+      setNotice(error instanceof Error ? error.message : '移入舍弃失败');
     }
   }
 
@@ -6867,7 +6905,7 @@ export default function App() {
             <form className="flex min-h-0 flex-col gap-2 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
               <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
                 <button
-                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
+                  className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
                   type="button"
                 >
                   <ImagePlus size={13} />
@@ -6884,7 +6922,7 @@ export default function App() {
               </div>
 
               <section className="space-y-1.5">
-                <div className="px-0.5 text-[11px] font-extrabold text-zinc-400">{'模型选择'}</div>
+                <div className="px-0.5 text-[10px] font-bold text-zinc-400">{'模型选择'}</div>
                 <div
                   className="relative"
                   onBlur={(event) => {
@@ -6892,7 +6930,7 @@ export default function App() {
                   }}
                 >
                   <button
-                    className="group input flex min-h-[44px] w-full items-center gap-2.5 py-1.5 pl-2.5 pr-10 text-left transition hover:border-white/20"
+                    className="group input model-select-field flex min-h-[44px] w-full items-center gap-2.5 bg-transparent! py-1.5 pl-2.5 pr-10 text-left transition hover:border-white/20"
                     type="button"
                     aria-haspopup="listbox"
                     aria-expanded={modelMenuOpen}
@@ -6969,15 +7007,15 @@ export default function App() {
               </section>
 
               <section className="space-y-1.5">
-                <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold text-zinc-400">
+                <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
                   <span>{'\u4e0a\u4f20\u53c2\u8003\u56fe\uff08\u53ef\u9009\uff09'}</span>
                   <span className="shrink-0 text-[10px] text-zinc-500">{references.length} / {getMaxReferences(selectedModel)} · 单张 ≤{getMaxReferenceMB(selectedModel)}MB</span>
                 </div>
                 <div
                   className={
                     draggingReferences
-                      ? 'card p-1.5 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
-                      : 'card p-1.5'
+                      ? 'card bg-transparent! p-1.5 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
+                      : 'card bg-transparent! p-1.5'
                   }
                   onDragEnter={(event) => {
                     event.preventDefault();
@@ -7023,7 +7061,7 @@ export default function App() {
               </section>
 
               <section className="space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] font-extrabold text-zinc-400">
+                <div className="flex items-center justify-between text-[10px] font-bold text-zinc-400">
                   <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
@@ -7043,7 +7081,7 @@ export default function App() {
                 </div>
                 <div>
                   <textarea
-                    className="input h-[82px] resize-none px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
+                    className="input h-[82px] resize-none bg-transparent! px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
                     placeholder="请详细描述您想生成的画面..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
@@ -7053,7 +7091,7 @@ export default function App() {
 
               <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(180px,0.82fr)]">
                 <section className="space-y-1.5">
-                  <div className="text-[11px] font-extrabold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
+                  <div className="text-[10px] font-bold text-zinc-400">{'\u6e05\u6670\u5ea6'}</div>
                   <div className="grid grid-cols-3 gap-2">
                     {visibleResolutionOptions.map((item) => {
                       const active = imageSize === item.value;
@@ -7066,10 +7104,10 @@ export default function App() {
                           key={item.value}
                           className={
                             finalActive
-                              ? 'relative inline-flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[13px] font-black text-black transition'
+                              ? 'relative inline-flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap rounded-lg border border-white bg-white px-2 py-0 text-[14px] font-black! text-black transition'
                               : finalEnabled
-                                ? 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[13px] font-black text-zinc-400'
-                                : 'relative h-10 min-h-0 cursor-not-allowed overflow-visible whitespace-nowrap rounded-lg border border-white/5 bg-white/[0.02] px-2 py-0 text-[13px] font-black text-zinc-700'
+                                ? 'btn-secondary relative h-10 min-h-0 overflow-visible whitespace-nowrap rounded-lg px-2 py-0 text-[14px] font-black! text-zinc-400'
+                                : 'relative h-10 min-h-0 cursor-not-allowed overflow-visible whitespace-nowrap rounded-lg border border-white/5 bg-white/[0.02] px-2 py-0 text-[14px] font-black! text-zinc-700'
                           }
                           type="button"
                           disabled={!finalEnabled}
@@ -7100,7 +7138,7 @@ export default function App() {
 
                 {showGptQuality ? (
                   <section className="space-y-1.5">
-                    <div className="text-[11px] font-extrabold text-zinc-400">{'\u8d28\u91cf'}</div>
+                    <div className="text-[10px] font-bold text-zinc-400">{'\u8d28\u91cf'}</div>
                     <div className={`grid gap-2 overflow-visible ${isGptImage2_5 ? 'grid-cols-3' : 'grid-cols-4'}`}>
                       {gptQualityOptions
                         .filter((item) => !(isGptImage2_5 && item.value === 'high'))
@@ -7111,7 +7149,7 @@ export default function App() {
                         return (
                           <button
                             key={item.value}
-                            className={`group relative flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-2 py-0 text-[13px] font-black ${
+                            className={`group relative flex h-10 min-h-0 items-center justify-center overflow-visible whitespace-nowrap px-2 py-0 text-[10px]! font-bold! ${
                               active ? 'rounded-xl border border-white bg-white text-black' : 'btn-secondary text-zinc-400'
                             } ${disableGptQuality ? 'cursor-not-allowed opacity-45' : ''}`}
                             type="button"
@@ -7146,7 +7184,7 @@ export default function App() {
 
                 {isNanoBananaPro ? (
                   <section className="space-y-1.5">
-                    <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-zinc-400">
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-400">
                       <span>{'AI\u589e\u5f3a'}</span>
                       <Info size={13} className="text-zinc-500" />
                     </div>
@@ -7179,7 +7217,7 @@ export default function App() {
               </div>
 
               <section className="space-y-1.5">
-                <div className="text-[11px] font-extrabold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
+                <div className="text-[10px] font-bold text-zinc-400">{'\u753b\u9762\u6bd4\u4f8b'}</div>
                 <div className="grid grid-cols-4 gap-1.5 md:grid-cols-8">
                   {visibleDimensionOptions.map(({ value, label }) => {
                     const active = value === dimensions;
@@ -7189,8 +7227,8 @@ export default function App() {
                         key={value}
                           className={
                             active
-                              ? 'inline-flex min-h-0 items-center justify-center rounded-lg border border-white bg-white px-2 py-1.5 text-[11px] font-black text-black transition'
-                              : 'btn-secondary min-h-0 rounded-lg px-2 py-1.5 text-[11px] font-black text-zinc-400'
+                              ? 'inline-flex min-h-0 items-center justify-center rounded-lg border border-white bg-white px-2 py-1.5 text-[10px]! font-black! text-black transition'
+                              : 'btn-secondary min-h-0 rounded-lg px-2 py-1.5 text-[10px]! font-black! text-zinc-400'
                           }
                         type="button"
                         onClick={() => setDimensions(value)}
@@ -7202,13 +7240,13 @@ export default function App() {
                 </div>
               </section>
 
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-extrabold text-zinc-400">
+              <div className="mt-auto space-y-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-zinc-400">
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{selectedAvailableCredits}</span>
                   </span>
                   <button
-                    className="min-h-0 p-0 text-[11px] font-black text-cyan-400 transition hover:text-cyan-300"
+                    className="min-h-0 p-0 text-[11px] font-black! text-[#00b0f0] transition hover:text-[#4cc9ff]"
                     type="button"
                     onClick={openPurchasePage}
                   >
@@ -7248,7 +7286,7 @@ export default function App() {
                 <div className="app-alert">{notice}</div>
               ) : null}
 
-              <div className="grid gap-2 pt-0.5 xl:mt-auto xl:grid-cols-[180px_minmax(0,1fr)]">
+              <div className="grid gap-2 pt-0.5 xl:grid-cols-[180px_minmax(0,1fr)]">
                 <div className="card p-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-black text-white">{'\u6570\u91cf'}</span>
@@ -7305,7 +7343,7 @@ export default function App() {
                 <Clock3 size={11} className="shrink-0 text-amber-400/60" />
                 <span className="text-[10px] leading-tight text-amber-400/60">图片仅保存 48 小时，超时自动清理，请及时下载</span>
               </div>
-              <div className="custom-scrollbar grid auto-rows-auto gap-3 pr-0 lg:flex-1 lg:min-h-0 lg:auto-rows-[108px] lg:overflow-y-auto lg:pr-1">
+              <div className="custom-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:auto-rows-[88px] lg:overflow-y-auto lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
@@ -7390,10 +7428,10 @@ export default function App() {
                   );
                   setNotice(
                     category === 'favorite'
-                      ? '已加入收藏区'
+                      ? '已加入收藏'
                       : category === 'backup'
-                        ? '已移入备份区'
-                        : '已移入丢弃区',
+                        ? '已移入备用'
+                        : '已移入舍弃',
                   );
                   return true;
                 } catch (error) {
@@ -7488,12 +7526,12 @@ export default function App() {
                 }}
               />
             ) : (
-            <div className="flex min-h-0 flex-col gap-3">
+            <div className="flex h-full min-h-0 flex-col gap-2.5 lg:grid lg:grid-rows-3">
             <SidePanel
-              title="收藏区"
+              title="收藏"
               count={sideFavoriteItems.length}
               icon={<Star size={14} />}
-              accentColor="violet"
+              accentColor="amber"
               actions={[
                 {
                   key: 'pack',
@@ -7501,7 +7539,7 @@ export default function App() {
                   icon: <Download size={11} />,
                   tone: 'emerald',
                   loading: packagingMode === 'original',
-                  onClick: (targets) => void downloadPanelArchive(targets, 'original', '收藏区'),
+                  onClick: (targets) => void downloadPanelArchive(targets, 'original', '收藏'),
                 },
                 {
                   key: 'pack-compressed',
@@ -7509,14 +7547,14 @@ export default function App() {
                   icon: <Download size={11} />,
                   tone: 'sky',
                   loading: packagingMode === 'compressed',
-                  onClick: (targets) => void downloadPanelArchive(targets, 'compressed', '收藏区压缩'),
+                  onClick: (targets) => void downloadPanelArchive(targets, 'compressed', '收藏压缩'),
                 },
                 {
                   key: 'discard',
                   label: '全部舍弃',
                   icon: <Trash2 size={11} />,
                   tone: 'danger',
-                  onClick: (targets) => void discardAll(targets, '收藏区'),
+                  onClick: (targets) => void discardAll(targets, '收藏'),
                 },
               ]}
               items={sideFavoriteItems}
@@ -7527,7 +7565,7 @@ export default function App() {
             />
 
             <SidePanel
-              title="备份区"
+              title="备用"
               count={sideBackupItems.length}
               icon={<Bookmark size={14} />}
               accentColor="sky"
@@ -7537,7 +7575,7 @@ export default function App() {
                   label: '全部舍弃',
                   icon: <Trash2 size={11} />,
                   tone: 'danger',
-                  onClick: (targets) => void discardAll(targets, '备份区'),
+                  onClick: (targets) => void discardAll(targets, '备用'),
                 },
               ]}
               items={sideBackupItems}
@@ -7548,14 +7586,14 @@ export default function App() {
             />
 
             <SidePanel
-              title="丢弃区"
+              title="舍弃"
               count={sideDiscardedItems.length}
               icon={<Trash2 size={14} />}
-              actionLabel="清空"
+              actionLabel="现在过来"
               accentColor="zinc"
               onAction={() => {
                 if (user) {
-                  void clearCategory('discarded');
+                  void saveCurrentImage('discarded');
                 }
               }}
               items={sideDiscardedItems}
@@ -7564,16 +7602,6 @@ export default function App() {
               onDelete={deleteSavedImage}
               loggedIn={Boolean(user)}
             />
-
-            {user ? (
-              <button
-                className="self-center px-3 py-1 text-[11px] text-zinc-600 transition hover:text-zinc-300"
-                type="button"
-                onClick={() => void clearCategory('backup')}
-              >
-                清空备份区
-              </button>
-            ) : null}
             </div>
             )}
           </aside>

@@ -20,9 +20,9 @@
   --primary: #5f5ac7;
   --primary-hover: #6b65d4;
   --primary-glow: rgba(95, 90, 199, 0.12);
-  --bg-main: #0b0b10;
-  --bg-card: #141420;
-  --bg-elevated: #1c1c2a;
+  --bg-main: #050505;
+  --bg-card: #141414;
+  --bg-elevated: #1a1a1a;
   --text-primary: #ffffff;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
@@ -30,7 +30,7 @@
   --warning: #f59e0b;
   --error: #ef4444;
   --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-strong: #2a2a3a;
+  --border-strong: #24242c;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -79,10 +79,7 @@
   min-height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
-  background:
-    radial-gradient(circle at 18% -12%, var(--primary-glow), transparent 32%),
-    radial-gradient(circle at 88% 8%, rgba(95, 90, 199, 0.08), transparent 28%),
-    var(--bg-main);
+  background: var(--bg-main);
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: var(--font-body);
@@ -235,10 +232,10 @@
 }
 
 .card {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid rgba(255, 255, 255, 0.04);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition:
     transform 160ms ease,
     box-shadow 160ms ease,
@@ -386,21 +383,21 @@
 }
 
 .app-panel {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
-  background: rgba(20, 20, 32, 0.72);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 32px;
+  background: rgba(0, 0, 0, 0.4);
+  box-shadow: none;
 }
 
 .stage-card {
-  border-color: var(--border-subtle) !important;
-  border-radius: var(--radius-lg) !important;
-  background: linear-gradient(180deg, rgba(20, 20, 32, 0.98), rgba(11, 11, 16, 0.96)) !important;
-  box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(255, 255, 255, 0.02) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  border-radius: 24px !important;
+  background: linear-gradient(180deg, rgba(18, 18, 18, 0.96), rgba(8, 8, 8, 0.92)) !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4) !important;
 }
 
 .stage-card:hover {
-  box-shadow: var(--shadow-md), 0 0 26px color-mix(in srgb, var(--primary) 16%, transparent) !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55) !important;
 }
 
 .dark-ai-app [class*="bg-[#11131a]"],
@@ -415,6 +412,10 @@
 
 .dark-ai-app [class*="border-white/"] {
   border-color: var(--border-subtle) !important;
+}
+
+.dark-ai-app .model-select-field {
+  border-color: rgba(255, 255, 255, 0.12) !important;
 }
 
 .dark-ai-app [class*="rounded-[24px]"],
