@@ -818,29 +818,29 @@ function StageCard({
           </div>
           <div className="relative flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[13px] font-black text-white">
-                <LoaderCircle className="animate-spin text-[#ffb7df]" size={15} />
+              <div className="flex items-center gap-1.5 text-[11px] font-black text-white">
+                <LoaderCircle className="animate-spin text-[#ffb7df]" size={13} />
                 <span>正在生成你的作品</span>
               </div>
-              <p className="mt-1 truncate text-[11px] font-semibold text-zinc-400">
+              <p className="mt-0.5 truncate text-[10px] font-semibold text-zinc-400">
                 {progress && progress.total > 1 ? `第 ${currentBatch} / ${progress.total} 张` : '保持页面打开，灵感正在成形'}
               </p>
             </div>
             <div className="shrink-0 text-right">
-              <p className="text-2xl font-black leading-none text-[#ffd9ef]">{percent}%</p>
-              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#ff8fcd]">render</p>
+              <p className="text-lg font-black leading-none text-[#ffd9ef]">{percent}%</p>
+              <p className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-[#ff8fcd]">render</p>
             </div>
           </div>
-          <div className="relative mt-3">
-            <div className="h-2 overflow-hidden rounded-full border border-white/8 bg-black/45 shadow-[inset_0_0_10px_rgba(0,0,0,0.55)]">
+          <div className="relative mt-1.5">
+            <div className="h-[5px] overflow-hidden rounded-full border border-white/8 bg-black/45 shadow-[inset_0_0_10px_rgba(0,0,0,0.55)]">
               <div
                 className="generation-progress-fill relative h-full rounded-full bg-[linear-gradient(90deg,#ff8fcd_0%,#ffd1ea_48%,#7dd3fc_100%)] shadow-[0_0_18px_rgba(255,143,205,0.7)] transition-[width] duration-700 ease-out"
                 style={{ width: `${percent}%` }}
               />
             </div>
-            <div className="generation-scan pointer-events-none absolute inset-y-0 left-0 h-2 w-1/3 rounded-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.8),transparent)]" />
+            <div className="generation-scan pointer-events-none absolute inset-y-0 left-0 h-[5px] w-1/3 rounded-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.8),transparent)]" />
           </div>
-          <div className="relative mt-2 text-[11px] font-semibold text-[#ffd9ef]/90">
+          <div className="relative mt-1.5 text-[10px] font-semibold text-[#ffd9ef]/90">
             {getGenerationHint(percent)}
           </div>
         </div>
@@ -2687,12 +2687,12 @@ function AdminApiKeysPanel({ onNotice }: { onNotice: (message: string) => void }
         <table className="min-w-[1000px] w-full text-left text-xs">
           <thead className="bg-white/[0.04] text-zinc-500">
             <tr>
-              <th className="px-3 py-2 font-medium">名称</th>
-              <th className="px-3 py-2 font-medium">Key ID</th>
-              <th className="px-3 py-2 font-medium">Key</th>
-              <th className="px-3 py-2 font-medium">归属</th>
-              <th className="px-3 py-2 font-medium">额度</th>
-              <th className="px-3 py-2 font-medium">状态</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">名称</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">Key ID</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">Key</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">归属</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">额度</th>
+              <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">状态</th>
               <th className="px-3 py-2 text-right font-medium">操作</th>
             </tr>
           </thead>
@@ -4196,12 +4196,12 @@ function AdminView({
                           <th className="w-10 px-3 py-2 font-medium">
                             <input checked={allSelectableChecked} type="checkbox" onChange={toggleAllInviteCodes} />
                           </th>
-                          <th className="px-3 py-2 font-medium">邀请码</th>
-                          <th className="px-3 py-2 font-medium">积分</th>
-                          <th className="px-3 py-2 font-medium">状态</th>
-                          <th className="px-3 py-2 font-medium">使用者</th>
-                          <th className="px-3 py-2 font-medium">后续消耗积分</th>
-                          <th className="px-3 py-2 font-medium">创建时间</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">邀请码</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">积分</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">状态</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">使用者</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">后续消耗积分</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">创建时间</th>
                           <th className="px-3 py-2 text-right font-medium">操作</th>
                         </tr>
                       </thead>
@@ -4354,13 +4354,13 @@ function AdminView({
                       </colgroup>
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
-                          <th className="px-3 py-2 font-medium">用户</th>
-                          <th className="px-3 py-2 font-medium">用户 ID</th>
-                          <th className="px-3 py-2 font-medium">{"\u9080\u8bf7\u7801"}</th>
-                          <th className="px-3 py-2 font-medium">生成次数</th>
-                          <th className="px-3 py-2 font-medium">剩余 / 总额</th>
-                          <th className="px-3 py-2 font-medium">Key 积分消耗</th>
-                          <th className="px-3 py-2 font-medium">
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">用户</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">用户 ID</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">{"\u9080\u8bf7\u7801"}</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">生成次数</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">剩余 / 总额</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">Key 积分消耗</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">
                             <button
                               className="inline-flex items-center gap-1 text-zinc-400 transition hover:text-white"
                               type="button"
@@ -4570,24 +4570,24 @@ function AdminView({
                   {filteredRecords.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-[1080px] w-full table-fixed text-left text-xs">
+                    <table className="min-w-[1080px] w-full table-fixed text-left text-[11px]">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
-                        <tr className="border-b border-white/8">
+                        <tr className="border-b border-white/10">
                           <th className="w-24 px-3 py-2 font-medium">图片</th>
-                          <th className="px-3 py-2 font-medium">用户</th>
-                          <th className="px-3 py-2 font-medium">请求结果</th>
-                          <th className="px-3 py-2 font-medium">参考图类型</th>
-                          <th className="px-3 py-2 font-medium">源头模型</th>
-                          <th className="px-3 py-2 font-medium">比例 / 分辨率</th>
-                          <th className="px-3 py-2 font-medium">积分消耗</th>
-                          <th className="px-3 py-2 font-medium">接口耗时</th>
-                          <th className="px-3 py-2 font-medium">提示词</th>
-                          <th className="px-3 py-2 font-medium">时间</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">用户</th>
+                          <th className="w-[92px] px-2 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">请求结果</th>
+                          <th className="w-[92px] px-2 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">参考图类型</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">源头模型</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">比例 / 分辨率</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">积分消耗</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">接口耗时</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">提示词</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">时间</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-white/6">
+                      <tbody className="divide-y divide-white/5">
                         {pagedRecords.map((item) => (
-                          <tr key={item.id} className="align-top text-zinc-300">
+                          <tr key={item.id} className="align-top text-zinc-500">
                             <td className="px-3 py-3">
                               {item.imageUrl ? (
                                 <button className="h-[72px] w-[72px] overflow-hidden rounded-2xl bg-black" type="button" onClick={() => onPreview(item)}>
@@ -4599,11 +4599,13 @@ function AdminView({
                                 </button>
                               ) : <span className="text-zinc-600">-</span>}
                             </td>
-                            <td className="px-3 py-3 font-semibold text-white">{item.username}</td>
-                            <td className={`max-w-[300px] break-words px-3 py-3 font-medium ${item.resultStatus === 'failed' ? 'text-rose-300' : 'text-emerald-300'}`} title={item.resultStatus === 'failed' ? (item.errorDetail ? `根因：${item.errorDetail}` : (item.resultMessage || '请求失败')) : ''}>
-                              {item.resultStatus === 'failed' ? (item.resultMessage || item.errorDetail || '请求失败') : '成功'}
+                            <td className="break-all px-3 py-3 leading-5 font-semibold text-zinc-300">{item.username}</td>
+                            <td className="break-words px-2 py-3" title={item.resultStatus === 'failed' ? (item.errorDetail ? `根因：${item.errorDetail}` : (item.resultMessage || '请求失败')) : ''}>
+                              {item.resultStatus === 'failed'
+                                ? <span className="font-medium text-rose-300">{item.resultMessage || item.errorDetail || '请求失败'}</span>
+                                : <span className="inline-flex items-center rounded-full bg-emerald-400/10 px-2.5 py-1 text-[9px] font-bold text-emerald-300">成功</span>}
                             </td>
-                            <td className="px-3 py-3 font-medium text-zinc-300" title={(item.referenceImageTypes || []).join(', ')}>
+                            <td className="px-2 py-3 font-medium" title={(item.referenceImageTypes || []).join(', ')}>
                               {item.referenceImageTypes && item.referenceImageTypes.length > 0 ? item.referenceImageTypes.map((type) => type.toUpperCase()).join(', ') : '-'}
                             </td>
                             <td className="px-3 py-3">{item.modelName}</td>
@@ -4614,7 +4616,7 @@ function AdminView({
                             <td className={`px-3 py-3 font-black ${getCreditsTone(item.creditsUsed)}`}>{item.creditsUsed}</td>
                             <td className="px-3 py-3 font-semibold text-emerald-200">{formatApiRequestTime(item.apiRequestMs)}</td>
                             <td className="max-w-[360px] px-3 py-3 leading-5" title={item.prompt}>{truncatePrompt(item.prompt)}</td>
-                            <td className="px-3 py-3">{formatTime(item.createdAt)}</td>
+                            <td className="px-3 py-3 text-zinc-400">{formatTime(item.createdAt)}</td>
                           </tr>
                         ))}
                       </tbody>
