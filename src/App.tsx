@@ -848,7 +848,7 @@ function StageCard({
         <div className="relative flex min-w-0 flex-1 flex-col justify-between rounded-[18px] border border-white/6 bg-black/35 px-4 py-3 sm:ml-3">
           <div className="min-w-0">
             <button
-              className="block max-w-full truncate text-left text-sm font-semibold text-white hover:text-pink-200"
+              className="block max-w-full truncate text-left text-xs font-semibold text-white"
               type="button"
               onClick={() => onPreview?.(item)}
             >
