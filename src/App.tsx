@@ -790,7 +790,7 @@ function StageCard({
   const currentBatch = progress ? Math.min(progress.completed + 1, progress.total) : 1;
 
   return (
-    <article className="stage-card relative flex min-h-[88px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:h-[88px] sm:flex-row sm:p-3">
+    <article className="stage-card relative flex min-h-[88px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:min-h-[88px] sm:flex-row sm:p-3">
       <div
         className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[62px] ${
           loading ? 'border-pink-300/25 bg-pink-300/10' : item ? 'border-white/8 bg-black/45' : 'border-transparent bg-[rgba(0,0,0,0.35)]'
@@ -860,7 +860,7 @@ function StageCard({
             </p>
           </div>
           {showActions ? (
-            <div className="flex flex-nowrap gap-1">
+            <div className="flex flex-wrap gap-1">
               {onEdit ? (
                 <button
                   className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-1.5 py-1 text-[10px] text-sky-100 transition hover:bg-sky-500/20"
@@ -7372,7 +7372,7 @@ export default function App() {
                 <Clock3 size={11} className="shrink-0 text-amber-400/60" />
                 <span className="text-[10px] leading-tight text-amber-400/60">图片仅保存 48 小时，超时自动清理，请及时下载</span>
               </div>
-              <div className="custom-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:auto-rows-[88px] lg:overflow-y-auto lg:pr-1">
+              <div className="custom-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
