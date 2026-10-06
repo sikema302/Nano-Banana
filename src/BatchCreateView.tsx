@@ -1048,14 +1048,9 @@ export default function BatchCreateView({
           </section>
           </div>
 
-          {/* 底部操作区：固定在列底部；任务说明行在「使用积分」上方 */}
+          {/* 底部操作区：固定在列底部 */}
           <div className="mt-3 flex-none border-t border-white/8 pt-3">
-            {mode !== 'cards' ? (
-              <p className="text-xs text-zinc-600">
-                共 {taskCount} 个任务，每个任务 {creditsPerTask} 积分；每个子任务沿用现有单次生成计费与失败处理规则。
-              </p>
-            ) : null}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-zinc-400">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-zinc-400">
               <span>
                 使用积分：<span className="text-white">{estimatedCredits}</span>/<span className="text-white">{creditsRemaining}</span>
               </span>
