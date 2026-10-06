@@ -10,6 +10,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
+import PromptTemplates from './PromptTemplates';
 import {
   downloadAsset,
   fetchGenerateImageJob,
@@ -404,7 +405,6 @@ export default function BatchCreateView({
   const [quality, setQuality] = useState<ImageQuality>('auto');
   const [dimensions, setDimensions] = useState<Aspect>('3:2');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
-  const [promptPanel, setPromptPanel] = useState<'prompt' | 'templates'>('prompt');
   const [unifiedPrompt, setUnifiedPrompt] = useState('');
   const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem()]);
   const [sourceImages, setSourceImages] = useState<UploadItem[]>([]);
@@ -917,48 +917,21 @@ export default function BatchCreateView({
               </section>
               <section className="mt-3">
                 <div className="mb-2 flex items-center gap-4 border-b border-white/8 pb-2 text-xs font-black">
-                  <button
-                    className={`min-h-0 p-0 ${promptPanel === 'prompt' ? 'text-zinc-300' : 'text-zinc-600'}`}
-                    type="button"
-                    onClick={() => setPromptPanel('prompt')}
-                  >
-                    图像提示词
-                  </button>
-                  <button
-                    className={`min-h-0 p-0 ${promptPanel === 'templates' ? 'text-orange-300' : 'text-zinc-600'}`}
-                    type="button"
-                    onClick={() => setPromptPanel('templates')}
-                  >
-                    我的模板
-                  </button>
+                  <span className="text-zinc-300">图像提示词</span>
+                  {/* 与创作页一致：弹层式「我的模版」，支持创建/删除个人模板 */}
+                  <PromptTemplates
+                    getInitialPrompt={() => unifiedPrompt}
+                    onApply={(value) => setUnifiedPrompt(value.slice(0, MAX_PROMPT_LENGTH))}
+                  />
                   <span className="ml-auto text-zinc-600">{unifiedPrompt.length}/{MAX_PROMPT_LENGTH}</span>
                 </div>
-                {promptPanel === 'prompt' ? (
-                  <textarea
-                    className="input h-[112px] resize-none px-3 py-2.5 text-[11px] leading-5"
-                    placeholder="输入统一提示词，描述每张原图需要如何重新生成..."
-                    value={unifiedPrompt}
-                    disabled={running}
-                    onChange={(event) => setUnifiedPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
-                  />
-                ) : (
-                  <div className="grid gap-1.5">
-                    {promptTemplates.map((template, index) => (
-                      <button
-                        className="rounded-xl border border-orange-400/15 bg-orange-400/[0.05] px-3 py-2 text-left text-xs leading-4 text-orange-200 transition hover:bg-orange-400/10"
-                        type="button"
-                        disabled={running}
-                        key={template}
-                        onClick={() => {
-                          setUnifiedPrompt(template);
-                          setPromptPanel('prompt');
-                        }}
-                      >
-                        <strong className="mr-2">模板 {index + 1}</strong>{template}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <textarea
+                  className="input h-[112px] resize-none px-3 py-2.5 text-[11px] leading-5"
+                  placeholder="输入统一提示词，描述每张原图需要如何重新生成..."
+                  value={unifiedPrompt}
+                  disabled={running}
+                  onChange={(event) => setUnifiedPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
+                />
               </section>
             </>
           ) : null}
