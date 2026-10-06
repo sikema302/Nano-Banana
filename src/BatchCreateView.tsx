@@ -290,7 +290,7 @@ function TaskCard({
 }) {
   const imageUrl = task.image?.thumbnailPath || task.image?.imagePath;
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/8 bg-[#111113]">
+    <div className={`relative overflow-hidden rounded-2xl border border-white/8 bg-[#111113] ${compact ? 'flex h-full min-h-[128px] flex-col' : ''}`}>
       {imageUrl && compact ? (
         <button
           className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-black/70 text-zinc-300 transition hover:text-white disabled:cursor-wait disabled:opacity-70"
@@ -301,14 +301,14 @@ function TaskCard({
           {downloading ? <LoaderCircle size={12} className="animate-spin" /> : <Download size={12} />}
         </button>
       ) : null}
-      <div className="aspect-square">
+      <div className={compact ? 'flex flex-1 items-center justify-center' : 'aspect-square'}>
         {imageUrl ? (
           <img alt={task.prompt} className="h-full w-full object-cover" src={imageUrl} />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-zinc-600">
-            {task.status === 'processing' ? <LoaderCircle className="animate-spin text-orange-300" size={26} /> : <Sparkles size={24} />}
-            <span className="text-sm font-black">
-              {task.status === 'failed' ? '生成失败' : task.status === 'waiting' ? '等待生成' : `${task.progress}%`}
+          <div className={compact ? 'flex items-center justify-center' : 'flex h-full flex-col items-center justify-center gap-3 text-zinc-600'}>
+            {task.status === 'processing' ? <LoaderCircle className="animate-spin text-orange-300" size={26} /> : compact ? null : <Sparkles size={24} />}
+            <span className={compact ? 'text-2xl font-black text-white' : 'text-sm font-black'}>
+              {task.status === 'failed' ? '生成失败' : compact || task.status !== 'waiting' ? `${task.progress}%` : '等待生成'}
             </span>
           </div>
         )}
@@ -1357,7 +1357,7 @@ export default function BatchCreateView({
                       compact
                       items={sourceImages}
                       limit={MAX_GROUP_IMAGES}
-                      label={sourceUploadLabel}
+                      label="原图组"
                       disabled={running}
                       onFiles={(files) => void appendFiles('sources', files)}
                       onRemove={(id) => setSourceImages((current) => current.filter((item) => item.id !== id))}
@@ -1369,8 +1369,8 @@ export default function BatchCreateView({
                     {prompts.map((item, index) => {
                       const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
                       return (
-                        <div className="grid gap-2 rounded-2xl border border-white/8 bg-[#111113] p-2 md:grid-cols-[minmax(0,1fr)_100px]" key={item.id}>
-                          <div>
+                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" key={item.id}>
+                          <div className="rounded-2xl border border-white/8 bg-[#111113] p-3">
                             <div className="mb-1 flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-black text-orange-300">提示词 {index + 1}</span>
@@ -1392,8 +1392,8 @@ export default function BatchCreateView({
                             </div>
                             <div className="relative">
                               <textarea
-                                className="h-[72px] w-full resize-none border-0 bg-transparent px-0 pb-5 pt-1 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
-                                placeholder={`例如：用原图组制作第 ${index + 1} 张电商详情图...`}
+                                className="h-[88px] w-full resize-none border-0 bg-transparent px-0 pb-5 pt-1 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
+                                placeholder="例如：图1和图5做成电商详情图..."
                                 value={item.value}
                                 disabled={running}
                                 onChange={(event) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: event.target.value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
@@ -1406,24 +1406,25 @@ export default function BatchCreateView({
                           {task ? (
                             <TaskCard task={task} compact onDownload={() => void downloadTask(task)} downloading={downloadingTaskId === task.id} />
                           ) : (
-                            <div className="flex min-h-[92px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 text-zinc-600">
-                              <Sparkles size={17} />
-                              <span className="mt-1.5 text-sm font-black">待生成</span>
+                            <div className="flex min-h-[128px] items-center justify-center rounded-2xl border border-white/8 bg-[#111113]">
+                              <span className="text-2xl font-black text-white">0%</span>
                             </div>
                           )}
                         </div>
                       );
                     })}
                     {prompts.length < MAX_PROMPTS ? (
-                      <button
-                        className="btn-secondary flex w-full min-h-0 items-center justify-center gap-1.5 py-2 text-sm font-black"
-                        type="button"
-                        disabled={running}
-                        onClick={() => setPrompts((current) => [...current, createPromptItem()])}
-                      >
-                        <Plus size={14} />
-                        添加提示词
-                      </button>
+                      <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                        <button
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#111113] text-sm font-bold text-zinc-200 transition hover:border-white/25 hover:bg-[#18181b] disabled:cursor-not-allowed disabled:opacity-45"
+                          type="button"
+                          disabled={running}
+                          onClick={() => setPrompts((current) => [...current, createPromptItem()])}
+                        >
+                          <Plus size={15} />
+                          添加提示词
+                        </button>
+                      </div>
                     ) : null}
                   </div>
                 </div>
