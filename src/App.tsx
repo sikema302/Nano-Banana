@@ -772,7 +772,7 @@ function StageCard({
     <article className="stage-card relative flex min-h-[88px] flex-col overflow-hidden rounded-[22px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,12,14,0.98)_0%,rgba(8,8,10,0.98)_100%)] p-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)] sm:min-h-[88px] sm:flex-row sm:p-3">
       <div
         className={`relative h-40 w-full shrink-0 overflow-hidden rounded-[18px] border sm:h-full sm:w-[62px] ${
-          loading ? 'border-pink-300/25 bg-pink-300/10' : item ? 'border-white/8 bg-black/45' : 'border-transparent bg-[rgba(0,0,0,0.35)]'
+          loading ? 'border-pink-300/25 bg-pink-300/10' : item ? 'border-white/8 bg-black/45' : 'border-transparent bg-[rgba(0,0,0,0.28)]'
         }`}
       >
         {loading ? (
@@ -784,11 +784,17 @@ function StageCard({
             <img alt={item.prompt} className="h-full w-full object-cover" src={item.thumbnailUrl || item.imageUrl} onError={(event) => fallbackToOriginal(event, item.imageUrl)} />
           </button>
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-[13px] font-bold text-zinc-100">
+          <div className="flex h-full w-full items-center justify-center text-[13px] font-bold text-zinc-100 sm:hidden">
             等待中
           </div>
         )}
       </div>
+
+      {!loading && !item ? (
+        <div className="pointer-events-none absolute inset-y-0 left-3 hidden w-[62px] items-center justify-center text-[13px] font-bold text-zinc-100 sm:flex">
+          等待中
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
@@ -1463,49 +1469,84 @@ function PromptCell({ text, onExpand }: { text: string; onExpand: () => void }) 
 function HistoryView({
   records,
   onPreview,
+  onRefresh,
 }: {
   records: GenerationRecord[];
   onPreview: (item: GenerationRecord) => void;
+  onRefresh: () => Promise<void>;
 }) {
-  const [sortKey, setSortKey] = useState<'createdAt' | 'creditsUsed' | 'modelName'>('createdAt');
+  const [mediaTab, setMediaTab] = useState<'image' | 'video'>('image');
+  const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const pageSize = 12;
-  const sortedRecords = [...records].sort((left, right) => {
-    if (sortKey === 'creditsUsed') return right.creditsUsed - left.creditsUsed;
-    if (sortKey === 'modelName') return left.modelName.localeCompare(right.modelName);
-    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
-  });
+  const isVideoRecord = (item: GenerationRecord) =>
+    item.modelId?.startsWith('minimax_h3') || isVideoAssetUrl(item.imageUrl);
+  const imageRecords = records.filter((item) => !isVideoRecord(item));
+  const videoRecords = records.filter(isVideoRecord);
+  const activeRecords = mediaTab === 'image' ? imageRecords : videoRecords;
+  const sortedRecords = [...activeRecords].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
   const totalPages = Math.max(1, Math.ceil(sortedRecords.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageRecords = sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <section className="page-shell min-h-0 overflow-auto py-3 lg:h-full lg:overflow-hidden">
-      <div className="card flex min-h-[360px] flex-col lg:h-full lg:min-h-0">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 px-3 py-2">
-          <h2 className="text-[13px] font-semibold text-white">历史记录</h2>
-          <div className="flex items-center gap-2 text-[11px] text-zinc-400">
-            <span>排序</span>
-            <select
-              className="input min-h-0 px-2 py-1 text-[11px]"
-              value={sortKey}
-              onChange={(event) => {
-                setSortKey(event.target.value as 'createdAt' | 'creditsUsed' | 'modelName');
-                setPage(1);
-              }}
-            >
-              <option className="bg-[#111]" value="createdAt">时间最新</option>
-              <option className="bg-[#111]" value="modelName">模型名称</option>
-            </select>
-          </div>
+      <div className="mx-auto w-fit">
+        <div className="grid shrink-0 grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
+          <button
+            className={
+              mediaTab === 'image'
+                ? 'flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]'
+                : 'flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200'
+            }
+            type="button"
+            onClick={() => {
+              setMediaTab('image');
+              setPage(1);
+            }}
+          >
+            <ImagePlus size={13} />
+            图片记录
+          </button>
+          <button
+            className={
+              mediaTab === 'video'
+                ? 'flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]'
+                : 'flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200'
+            }
+            type="button"
+            onClick={() => {
+              setMediaTab('video');
+              setPage(1);
+            }}
+          >
+            <Film size={13} />
+            视频记录
+          </button>
         </div>
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-        {records.length > 0 ? (
+      </div>
+      <div className="card relative mt-2 flex min-h-[360px] flex-col lg:h-[calc(100%-56px)] lg:min-h-0">
+        <button
+          className="absolute right-3 top-2.5 z-20 flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)] transition hover:bg-zinc-200 disabled:opacity-50"
+          disabled={refreshing}
+          type="button"
+          onClick={() => {
+            setRefreshing(true);
+            void onRefresh().finally(() => setRefreshing(false));
+          }}
+        >
+          <RotateCw className={refreshing ? 'animate-spin' : ''} size={11} />
+          刷新
+        </button>
+        <div className="no-scrollbar min-h-0 flex-1 overflow-auto">
+        {activeRecords.length > 0 ? (
           <table className="min-w-[640px] text-left text-[11px] sm:min-w-full">
             <thead className="sticky top-0 z-10 bg-[#090909] text-zinc-500">
               <tr className="border-b border-white/8">
-                <th className="px-3 py-1.5 font-medium">图片</th>
+                <th className="px-3 py-1.5 font-medium">{mediaTab === 'image' ? '图片' : '视频'}</th>
                 <th className="px-3 py-1.5 font-medium">提示词</th>
                 <th className="px-3 py-1.5 font-medium">模型</th>
                 <th className="px-3 py-1.5 font-medium">比例</th>
@@ -1538,11 +1579,14 @@ function HistoryView({
             </tbody>
           </table>
         ) : (
-          <div className="flex h-full items-center justify-center text-[13px] text-zinc-500">暂无生图记录</div>
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px] text-zinc-500">
+            <span>{mediaTab === 'image' ? '暂无生图记录' : '暂无视频记录'}</span>
+            {records.length === 0 ? <span>还没有生成记录，开始创作您的第一张作品吧。</span> : null}
+          </div>
         )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 px-3 py-2 text-[11px] text-zinc-400">
-          <span>共 {records.length} 条</span>
+          <span>共 {activeRecords.length} 条{mediaTab === 'video' ? '视频' : '图片'}</span>
           <div className="flex items-center gap-2">
             <button className="rounded-lg border border-white/10 px-2.5 py-1 disabled:opacity-40" disabled={currentPage <= 1} type="button" onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
             <span>{currentPage} / {totalPages}</span>
@@ -4874,6 +4918,8 @@ export default function App() {
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
   const [videoRefVideos, setVideoRefVideos] = useState<UploadPreview[]>([]);
   const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
+  const [videoPromptExpandOpen, setVideoPromptExpandOpen] = useState(false);
+  const [videoPromptExpandDraft, setVideoPromptExpandDraft] = useState('');
   const videoRefVideoInputRef = useRef<HTMLInputElement>(null);
   const videoRefAudioInputRef = useRef<HTMLInputElement>(null);
   const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
@@ -7285,7 +7331,21 @@ export default function App() {
                           MiniMax H3模型提示词指南
                         </a>
                       </span>
-                      <span className="text-zinc-500">{videoPrompt.length} / 10000</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-zinc-500">{videoPrompt.length} / 10000</span>
+                        <button
+                          type="button"
+                          title="拓展编辑"
+                          aria-label="拓展编辑视频提示词"
+                          className="flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-white/25 hover:text-white"
+                          onClick={() => {
+                            setVideoPromptExpandDraft(videoPrompt);
+                            setVideoPromptExpandOpen(true);
+                          }}
+                        >
+                          <Maximize2 size={12} />
+                        </button>
+                      </span>
                     </div>
                     <textarea
                       className="input min-h-[96px] w-full resize-none bg-transparent! px-3 py-2.5 text-[10px] leading-4"
@@ -8005,7 +8065,7 @@ export default function App() {
               }}
             />
           ) : activeTab === 'history' ? (
-            <HistoryView records={historyRecords} onPreview={setPreviewImage} />
+            <HistoryView records={historyRecords} onPreview={setPreviewImage} onRefresh={loadHistory} />
           ) : activeTab === 'chat' ? (
             <ChatView
               loggedIn={Boolean(user)}
@@ -8322,6 +8382,61 @@ export default function App() {
                   onClick={() => {
                     setPrompt(promptExpandDraft);
                     setPromptExpandOpen(false);
+                  }}
+                >
+                  {'确定'}
+                </button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      ) : null}
+
+      {videoPromptExpandOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-4 backdrop-blur-sm">
+          <button
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setVideoPromptExpandOpen(false)}
+            aria-label="关闭视频提示词编辑弹窗"
+          />
+          <div className="relative z-10 flex w-full max-w-[640px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#0c0c0d] shadow-[0_28px_90px_rgba(0,0,0,0.6)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <h2 className="text-lg font-black text-white">{'视频提示词'}</h2>
+              <button
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2b2b2e] text-[#9a9ba3] transition hover:border-[#444449] hover:text-white"
+                type="button"
+                aria-label="关闭"
+                onClick={() => setVideoPromptExpandOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="px-5 pb-5 pt-4">
+              <textarea
+                autoFocus
+                className="block h-[260px] w-full resize-none rounded-2xl border border-sky-400/60 bg-white/[0.02] px-4 py-3 text-[13px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-sky-300"
+                placeholder="描述场景、人物、镜头运动与声音..."
+                value={videoPromptExpandDraft}
+                onChange={(event) => setVideoPromptExpandDraft(event.target.value.slice(0, 10000))}
+              />
+            </div>
+            <footer className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3">
+              <span className="text-xs font-semibold text-zinc-500">{videoPromptExpandDraft.length} / 10000</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-full px-4 py-1.5 text-sm font-semibold text-zinc-400 transition hover:text-white"
+                  onClick={() => setVideoPromptExpandOpen(false)}
+                >
+                  {'取消'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:brightness-95"
+                  onClick={() => {
+                    setVideoPrompt(videoPromptExpandDraft.slice(0, 10000));
+                    setVideoPromptExpandOpen(false);
                   }}
                 >
                   {'确定'}
