@@ -117,11 +117,6 @@ const qualityOptions: Array<{ value: ImageQuality; label: string }> = [
   { value: 'medium', label: '中' },
   { value: 'high', label: '高' },
 ];
-const promptTemplates = [
-  '保留原图主体与商品细节，统一替换为干净高级的商业摄影背景，光影自然，画面真实。',
-  '将原图改造成电商详情页主视觉，突出主体卖点，构图简洁，高级棚拍质感。',
-  '保留人物或商品特征，统一画面风格、色调和光线，提升质感与细节，不添加水印。',
-];
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1355,8 +1350,9 @@ export default function BatchCreateView({
                   </label>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                <div className="grid min-h-0 gap-3 lg:h-full lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
+                  {/* 左：原图组（所有提示词共用） */}
+                  <div className="no-scrollbar rounded-2xl border border-white/8 bg-black/20 p-3 lg:overflow-y-auto">
                     <UploadGrid
                       compact
                       items={sourceImages}
@@ -1368,34 +1364,31 @@ export default function BatchCreateView({
                     />
                     <p className="mt-3 text-xs leading-5 text-zinc-600">同一原图组会提供给每一条提示词，适合批量制作详情页、不同场景或不同角度。</p>
                   </div>
-                  <div className="space-y-2">
+                  {/* 右：提示词卡片 + 添加按钮 */}
+                  <div className="no-scrollbar flex min-h-0 flex-col gap-2 lg:overflow-y-auto lg:pr-1">
                     {prompts.map((item, index) => {
                       const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
                       return (
                         <div className="grid gap-2 rounded-2xl border border-white/8 bg-[#111113] p-2 md:grid-cols-[minmax(0,1fr)_100px]" key={item.id}>
                           <div>
                             <div className="mb-1 flex items-center justify-between">
-                              <span className="text-xs font-black text-orange-300">提示词 {index + 1}</span>
                               <div className="flex items-center gap-2">
+                                <span className="text-xs font-black text-orange-300">提示词 {index + 1}</span>
+                                <PromptTemplates
+                                  getInitialPrompt={() => item.value}
+                                  onApply={(value) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
+                                />
+                              </div>
+                              {prompts.length > 1 ? (
                                 <button
-                                  className="text-xs font-black text-orange-300 transition hover:text-orange-200"
+                                  className="text-zinc-600 transition hover:text-white"
                                   type="button"
                                   disabled={running}
-                                  onClick={() => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: promptTemplates[index % promptTemplates.length] } : prompt))}
+                                  onClick={() => setPrompts((current) => current.filter((prompt) => prompt.id !== item.id))}
                                 >
-                                  使用模板
+                                  <X size={14} />
                                 </button>
-                                {prompts.length > 1 ? (
-                                  <button
-                                    className="text-zinc-600 transition hover:text-white"
-                                    type="button"
-                                    disabled={running}
-                                    onClick={() => setPrompts((current) => current.filter((prompt) => prompt.id !== item.id))}
-                                  >
-                                    <X size={14} />
-                                  </button>
-                                ) : null}
-                              </div>
+                              ) : null}
                             </div>
                             <div className="relative">
                               <textarea
