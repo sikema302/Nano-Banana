@@ -35,6 +35,11 @@
 - 生产环境自保逻辑:`DISK_WARNING_PERCENT=70`、`DISK_EMERGENCY_PERCENT=85`;
   磁盘 ≥85% 会按 mtime 删 `uploads/generated` 最旧原图直到降到 80%,日志打 `[disk-emergency:*]`。
 - 只读磁盘诊断脚本:`scripts/disk-audit.sh`。
+- **413 Request Entity Too Large = Nginx 网关拦截**(不是后端业务报错):生产 Nginx 配置没设
+  `client_max_body_size`,走默认 1MB。参考图/视频/音频都是 base64 塞 JSON body,超 1MB 就被 Nginx 拦在门外
+  → 请求根本没到 Node,所以 `generation_requests` 表**不会有记录**。已给 `deploy/nginx-photo-app.conf`
+  的 443 server 块加 `client_max_body_size 800m;`(对齐后端 `express.json` 上限 710MB,见 `MAX_IMAGE_REQUEST_BODY_MB`)。
+  生效:跑 `deploy.sh`(会复制到 `/www/server/panel/vhost/nginx/photo-app.conf` 并 reload),或手动在宝塔面板改后 reload nginx。
 
 ## 生图失败的口径与约定(重要)
 

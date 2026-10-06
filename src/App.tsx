@@ -1715,7 +1715,7 @@ function ApiDocsView({
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 20 / 2K 24 / 4K 30；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 24 / 2K 24 / 4K 24；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
   ];
   const gptPixelGroups = [
     {
@@ -1776,9 +1776,9 @@ function ApiDocsView({
     {
       model: 'nano-banana-pro',
       rows: [
-        ['1K 基础生成', '20 点 / 张', '支持文生图与参考图生成'],
+        ['1K 基础生成', '24 点 / 张', '支持文生图与参考图生成'],
         ['2K 基础生成', '24 点 / 张', '保持原有计费'],
-        ['4K 基础生成', '30 点 / 张', '4K 新计费'],
+        ['4K 基础生成', '24 点 / 张', '4K 新计费'],
         ['1K / 2K / 4K AI 增强', '额外 +8 点 / 张', '仅影响前端账单，不调用任何上游原生增强接口'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
@@ -1819,9 +1819,9 @@ function ApiDocsView({
   const docNavigation = [
     ['1', '快速开始', 'quick-start'],
     ['2', '开发指南', 'development'],
-    ['3', 'GPT-Image-2 接口', 'gpt-image-2'],
-    ['4', 'Nano Banana 接口', 'nano-banana'],
-    ['5', '价格指南', 'pricing'],
+    ['3', '价格指南', 'pricing'],
+    ['4', 'GPT-Image-2 接口', 'gpt-image-2'],
+    ['5', 'Nano Banana 接口', 'nano-banana'],
   ];
   docNavigation.push(['6', '\u6211\u7684 API Keys', 'developer-center']);
 
@@ -3730,9 +3730,7 @@ function AdminView({
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[200px_minmax(0,1fr)] xl:gap-4">
         <aside className="app-panel flex flex-col p-3">
           <div className="card mb-4 p-4">
-            <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Admin Console</p>
             <p className="mt-2 text-lg font-black text-white">后台管理</p>
-            <p className="mt-1 text-xs leading-5 text-zinc-500">邀请码、用户、记录和运行状态集中处理。</p>
           </div>
           <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
             {menuItems.map((item) => {
@@ -3767,15 +3765,14 @@ function AdminView({
             <>
             <div className="grid gap-3 xl:grid-cols-4">
               {[
-                { label: '今日生成次数', value: String(todayRecords.length), hint: '按全部记录统计' },
-                { label: '今日消耗积分', value: String(todayCreditsUsed), hint: '统一积分池计费' },
-                { label: '邀请码使用率', value: formatPercent(currentInviteUsageRate), hint: `${usedInviteCodes}/${Math.max(totalInviteCodes, 1)}` },
-                { label: '低积分用户提醒', value: String(dashboardStats.lowCreditUserCount), hint: '剩余 <= 50 积分' },
+                { label: '今日生成次数', value: String(todayRecords.length) },
+                { label: '今日消耗积分', value: String(todayCreditsUsed) },
+                { label: '邀请码使用率', value: formatPercent(currentInviteUsageRate) },
+                { label: '低积分用户提醒', value: String(dashboardStats.lowCreditUserCount) },
               ].map((card) => (
                 <div key={card.label} className="rounded-[22px] border border-white/8 bg-black/35 p-4">
                   <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">{card.label}</p>
                   <p className="mt-3 text-3xl font-black text-white">{card.value}</p>
-                  <p className="mt-2 text-xs text-zinc-500">{card.hint}</p>
                 </div>
               ))}
             </div>
@@ -4615,8 +4612,8 @@ function AdminView({
                           <th className="w-[92px] px-2 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">参考图类型</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">源头模型</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">比例 / 分辨率</th>
-                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">积分消耗</th>
-                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">接口耗时</th>
+                          <th className="w-[72px] px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">积分消耗</th>
+                          <th className="w-[84px] px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">接口耗时</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">提示词</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">时间</th>
                         </tr>

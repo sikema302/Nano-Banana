@@ -48,9 +48,9 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     oneK: 26,
   },
   nanoBanana: {
-    oneK: 20,
+    oneK: 24,
     twoK: 24,
-    fourK: 30,
+    fourK: 24,
     enhancement: 8,
   },
   video: {
