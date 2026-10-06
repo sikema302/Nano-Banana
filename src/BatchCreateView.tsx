@@ -4,6 +4,7 @@ import {
   Download,
   ImagePlus,
   LoaderCircle,
+  Maximize2,
   Minus,
   Plus,
   RotateCcw,
@@ -406,6 +407,8 @@ export default function BatchCreateView({
   const [dimensions, setDimensions] = useState<Aspect>('3:2');
   const [optimizeChineseText, setOptimizeChineseText] = useState(false);
   const [unifiedPrompt, setUnifiedPrompt] = useState('');
+  const [promptExpandOpen, setPromptExpandOpen] = useState(false);
+  const [promptExpandDraft, setPromptExpandDraft] = useState('');
   const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem()]);
   const [sourceImages, setSourceImages] = useState<UploadItem[]>([]);
   const [extraReferences, setExtraReferences] = useState<UploadItem[]>([]);
@@ -923,7 +926,21 @@ export default function BatchCreateView({
                     getInitialPrompt={() => unifiedPrompt}
                     onApply={(value) => setUnifiedPrompt(value.slice(0, MAX_PROMPT_LENGTH))}
                   />
-                  <span className="ml-auto text-zinc-600">{unifiedPrompt.length}/{MAX_PROMPT_LENGTH}</span>
+                  <span className="ml-auto flex items-center gap-2">
+                    <span className="text-zinc-600">{unifiedPrompt.length}/{MAX_PROMPT_LENGTH}</span>
+                    <button
+                      aria-label="拓展编辑统一提示词"
+                      className="flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-white/25 hover:text-white"
+                      title="拓展编辑"
+                      type="button"
+                      onClick={() => {
+                        setPromptExpandDraft(unifiedPrompt);
+                        setPromptExpandOpen(true);
+                      }}
+                    >
+                      <Maximize2 size={12} />
+                    </button>
+                  </span>
                 </div>
                 <textarea
                   className="input h-[112px] resize-none px-3 py-2.5 text-[11px] leading-5"
@@ -1420,6 +1437,61 @@ export default function BatchCreateView({
           )}
         </div>
       </div>
+
+      {promptExpandOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-4 backdrop-blur-sm">
+          <button
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setPromptExpandOpen(false)}
+            aria-label="关闭提示词编辑弹窗"
+          />
+          <div className="relative z-10 flex w-full max-w-[640px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#0c0c0d] shadow-[0_28px_90px_rgba(0,0,0,0.6)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <h2 className="text-lg font-black text-white">图像提示词</h2>
+              <button
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2b2b2e] text-[#9a9ba3] transition hover:border-[#444449] hover:text-white"
+                type="button"
+                aria-label="关闭"
+                onClick={() => setPromptExpandOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="px-5 pb-5 pt-4">
+              <textarea
+                autoFocus
+                className="block h-[260px] w-full resize-none rounded-2xl border border-sky-400/60 bg-white/[0.02] px-4 py-3 text-[13px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-sky-300"
+                placeholder="输入统一提示词，描述每张原图需要如何重新生成..."
+                value={promptExpandDraft}
+                onChange={(event) => setPromptExpandDraft(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
+              />
+            </div>
+            <footer className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3">
+              <span className="text-xs font-semibold text-zinc-500">{promptExpandDraft.length} / {MAX_PROMPT_LENGTH}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-full px-4 py-1.5 text-sm font-semibold text-zinc-400 transition hover:text-white"
+                  onClick={() => setPromptExpandOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:brightness-95"
+                  onClick={() => {
+                    setUnifiedPrompt(promptExpandDraft);
+                    setPromptExpandOpen(false);
+                  }}
+                >
+                  确定
+                </button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
