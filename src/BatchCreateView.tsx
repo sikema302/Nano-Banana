@@ -238,9 +238,9 @@ function UploadGrid({
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between text-sm font-bold text-zinc-400">
+      <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
         <span>{label}</span>
-        <span>{items.length}/{limit}</span>
+        <span className="shrink-0 text-[10px] text-zinc-500">{items.length} / {limit}</span>
       </div>
       <div className={`grid gap-1.5 ${compact ? 'grid-cols-4' : 'grid-cols-3 sm:grid-cols-4 xl:grid-cols-5'}`}>
         {items.map((item, index) => (
@@ -274,7 +274,7 @@ function UploadGrid({
           >
             <input className="hidden" type="file" accept="image/*" multiple disabled={disabled} onChange={handleFiles} />
             <ImagePlus size={compact ? 15 : 19} />
-            <span className="mt-1.5 text-xs font-black">添加图片</span>
+            <span className={compact ? 'mt-0.5 text-[9px] font-bold' : 'mt-1.5 text-xs font-black'}>添加图片</span>
           </label>
         ) : null}
       </div>
@@ -919,15 +919,17 @@ export default function BatchCreateView({
                 />
               </section>
               <section className="mt-3">
-                <div className="mb-2 flex items-center gap-4 border-b border-white/8 pb-2 text-xs font-black">
-                  <span className="text-zinc-300">图像提示词</span>
-                  {/* 与创作页一致：弹层式「我的模版」，支持创建/删除个人模板 */}
-                  <PromptTemplates
-                    getInitialPrompt={() => unifiedPrompt}
-                    onApply={(value) => setUnifiedPrompt(value.slice(0, MAX_PROMPT_LENGTH))}
-                  />
-                  <span className="ml-auto flex items-center gap-2">
-                    <span className="text-zinc-600">{unifiedPrompt.length}/{MAX_PROMPT_LENGTH}</span>
+                <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
+                  <span className="flex items-center gap-2">
+                    图像提示词
+                    {/* 与创作页一致：弹层式「我的模版」，支持创建/删除个人模板 */}
+                    <PromptTemplates
+                      getInitialPrompt={() => unifiedPrompt}
+                      onApply={(value) => setUnifiedPrompt(value.slice(0, MAX_PROMPT_LENGTH))}
+                    />
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-500">{unifiedPrompt.length} / {MAX_PROMPT_LENGTH}</span>
                     <button
                       aria-label="拓展编辑统一提示词"
                       className="flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-white/25 hover:text-white"
@@ -943,7 +945,7 @@ export default function BatchCreateView({
                   </span>
                 </div>
                 <textarea
-                  className="input h-[112px] resize-none px-3 py-2.5 text-[11px] leading-5"
+                  className="input h-[82px] resize-none bg-transparent! px-3 py-2.5 text-[10px] leading-4 placeholder:text-zinc-600"
                   placeholder="输入统一提示词，描述每张原图需要如何重新生成..."
                   value={unifiedPrompt}
                   disabled={running}
