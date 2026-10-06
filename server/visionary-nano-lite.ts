@@ -4,6 +4,8 @@ type VisionaryNanoLiteInput = {
   images: string[];
 };
 
+import { indeterminateTaskError } from './generation-reconciliation.js';
+
 type VisionaryNanoLiteOptions = {
   baseUrl: string;
   apiKey: string;
@@ -16,6 +18,8 @@ type VisionaryNanoLiteOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
   requestId?: string;
   logger?: Pick<Console, 'warn'>;
+  /** 幂等续查：提供已提交任务 taskId 后跳过提交，直接轮询，绝不重复提交。 */
+  resumeTask?: { taskId: string };
 };
 
 type VisionaryTaskImage = {
@@ -43,6 +47,11 @@ function publicProviderError(message: string, safeToFallback: boolean) {
   const error = new Error(message) as Error & { safeToFallback: boolean };
   error.safeToFallback = safeToFallback;
   return error;
+}
+
+// 「不确定、可续查」的错误：任务已提交，附带 taskId 供后台幂等续查（只查不提交）。
+function uncertainLiteError(message: string, taskId: string) {
+  return indeterminateTaskError(message, { kind: 'visionary-lite', taskId });
 }
 
 function errorMessage(value: unknown): string {
@@ -109,34 +118,40 @@ export async function generateVisionaryNanoLite(
   };
 
   let submitted: VisionaryTaskData | null = null;
-  try {
-    const submitResponse = await fetchImpl(`${baseUrl}/v1/images/generations`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: 'nano-banana-2-lite',
-        prompt: input.prompt,
-        images: input.images,
-        size: input.ratio || '1:1',
-        resolution: '1K',
-        optimizeChineseText: false,
-        client_request_id: requestId,
-      }),
-      signal: AbortSignal.timeout(submitTimeoutMs),
-    });
-    submitted = taskData(await readResponse(submitResponse, '提交 Nano Banana 2 Lite 任务失败'));
-  } catch (error) {
-    const detail = caughtErrorMessage(error);
-    logger.warn(`[visionary-nano-lite] submit failed requestId=${requestId}: ${detail}`);
-    throw publicProviderError(
-      `香蕉生图渠道提交失败（请求 ID：${requestId}）`,
-      Boolean((error as { safeToFallback?: unknown })?.safeToFallback),
-    );
-  }
-  const taskId = String(submitted?.task_id || submitted?.id || '').trim();
-  if (!taskId) {
-    logger.warn(`[visionary-nano-lite] submit response missing task_id requestId=${requestId}`);
-    throw publicProviderError(`香蕉生图渠道暂时无法确认任务（请求 ID：${requestId}）`, false);
+  let taskId = '';
+  if (options.resumeTask) {
+    // 幂等续查：任务已提交，绝不重复提交，直接用既有 taskId 轮询。
+    taskId = options.resumeTask.taskId;
+  } else {
+    try {
+      const submitResponse = await fetchImpl(`${baseUrl}/v1/images/generations`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: 'nano-banana-2-lite',
+          prompt: input.prompt,
+          images: input.images,
+          size: input.ratio || '1:1',
+          resolution: '1K',
+          optimizeChineseText: false,
+          client_request_id: requestId,
+        }),
+        signal: AbortSignal.timeout(submitTimeoutMs),
+      });
+      submitted = taskData(await readResponse(submitResponse, '提交 Nano Banana 2 Lite 任务失败'));
+    } catch (error) {
+      const detail = caughtErrorMessage(error);
+      logger.warn(`[visionary-nano-lite] submit failed requestId=${requestId}: ${detail}`);
+      throw publicProviderError(
+        `香蕉生图渠道提交失败（请求 ID：${requestId}）`,
+        Boolean((error as { safeToFallback?: unknown })?.safeToFallback),
+      );
+    }
+    taskId = String(submitted?.task_id || submitted?.id || '').trim();
+    if (!taskId) {
+      logger.warn(`[visionary-nano-lite] submit response missing task_id requestId=${requestId}`);
+      throw publicProviderError(`香蕉生图渠道暂时无法确认任务（请求 ID：${requestId}）`, false);
+    }
   }
 
   let retryAfterSeconds = Math.max(1, Number(submitted?.retry_after || 3));
@@ -164,7 +179,7 @@ export async function generateVisionaryNanoLite(
         `attempt=${poll + 1} consecutiveErrors=${consecutivePollErrors}/${maxPollErrors}: ${detail}`,
       );
       if (consecutivePollErrors >= maxPollErrors) {
-        throw publicProviderError(`香蕉生图任务状态暂时无法确认（请求 ID：${requestId}）`, false);
+        throw uncertainLiteError(`香蕉生图任务状态暂时无法确认（请求 ID：${requestId}）`, taskId);
       }
       continue;
     }
@@ -186,5 +201,5 @@ export async function generateVisionaryNanoLite(
   }
 
   logger.warn(`[visionary-nano-lite] polling window exceeded taskId=${taskId} requestId=${requestId}`);
-  throw publicProviderError(`香蕉生图任务查询超时（请求 ID：${requestId}）`, false);
+  throw uncertainLiteError(`香蕉生图任务查询超时（请求 ID：${requestId}）`, taskId);
 }

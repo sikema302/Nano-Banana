@@ -494,6 +494,18 @@
   background: #333;
 }
 
+/* 保留滚动能力，但完全隐藏滚动条视觉 */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 .stage-card::before {
   content: "";
   position: absolute;

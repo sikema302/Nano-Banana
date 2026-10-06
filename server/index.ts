@@ -37,10 +37,19 @@ import {
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, extractUpstreamErrorMessage, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
 import {
+  GENERATION_FAILURE_MESSAGES,
   generationFailureDetail,
   generationFailureMessage,
   resolveGenerationFailureStage,
 } from './generation-failure.js';
+import {
+  GENERATION_RECONCILIATION_INTERVAL_MS,
+  createGenerationReconciler,
+  isIndeterminateGenerationError,
+  resumeFromError,
+  type GenerationResume,
+  type ReconciliationEntry,
+} from './generation-reconciliation.js';
 import { isConnectionTerminatedError, pooledFetch, shouldFastFailover } from './pooled-fetch.js';
 import { buildZipArchive, sanitizeZipEntryName, uniqueZipEntryName } from './zip-archive.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
@@ -57,6 +66,8 @@ import { normalizePublicApiProviderRouting } from './public-api-routing.js';
 import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
+  getConfiguredVideoCredits,
+  getVideoReferenceImageSurcharge,
   normalizeModelCreditPricing,
   type ModelCreditPricing,
 } from '../src/lib/model-credit-config.js';
@@ -70,6 +81,16 @@ import {
 } from './image-provider-router.js';
 import { FLUX_BANANA_FLASH_MODEL, generateFluxBanana, selectFluxBananaModel } from './flux-banana.js';
 import { generateSchatImage } from './schat-image.js';
+import {
+  generateUselgVideo,
+  normalizeVideoResolution,
+  normalizeVideoAspect,
+  normalizeVideoSeconds,
+  VIDEO_MAX_REFERENCE_IMAGES,
+  VIDEO_MODELS,
+  type VideoResolution,
+  type VideoAspect,
+} from './video-generation.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
   dedicatedJunliBananaPolicy,
@@ -236,6 +257,16 @@ type GeneratedImagePayload = {
   imageSize?: string;
   imagePath: string;
   thumbnailPath?: string;
+  referenceImages: string[];
+  createdAt: string;
+};
+
+type GeneratedVideoPayload = {
+  prompt: string;
+  modelName: string;
+  resolution: string;
+  seconds: number;
+  videoPath: string;
   referenceImages: string[];
   createdAt: string;
 };
@@ -443,7 +474,8 @@ const DATABASE_MIGRATION_LOCK_FILE = path.join(ROOT_DIR, '.runtime', 'database-m
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 3001;
 const MAX_REFERENCE_IMAGE_COUNT = MAX_REFERENCE_IMAGES;
-const MAX_IMAGE_REQUEST_BODY_MB = Math.ceil(Math.max(MAX_REFERENCE_IMAGES, MAX_GPT_IMAGE_25_REFERENCE_IMAGES) * MAX_REFERENCE_IMAGE_MB * 4 / 3) + 10;
+// 基础余量之外再预留视频任务的参考素材：3 段参考视频（各 ≤50MB）+ 3 段参考音频的 base64 膨胀。
+const MAX_IMAGE_REQUEST_BODY_MB = Math.ceil(Math.max(MAX_REFERENCE_IMAGES, MAX_GPT_IMAGE_25_REFERENCE_IMAGES) * MAX_REFERENCE_IMAGE_MB * 4 / 3) + 10 + Math.ceil(6 * 50 * 4 / 3);
 const ORIGINAL_IMAGE_RETENTION_DAYS = Math.max(1, Number(process.env.ORIGINAL_IMAGE_RETENTION_DAYS || 2));
 const THUMBNAIL_RETENTION_DAYS = Math.max(
   ORIGINAL_IMAGE_RETENTION_DAYS,
@@ -658,6 +690,21 @@ const USSELG_STANDARD_KEY = normalizeEnvValue(process.env.USSELG_STANDARD_KEY);
 const USSELG_HD_KEY = normalizeEnvValue(process.env.USSELG_HD_KEY);
 const USSELG_MODEL = normalizeEnvValue(process.env.USSELG_MODEL || 'gpt-image-2');
 const USSELG_TIMEOUT_MS = Math.max(60_000, Number(process.env.USSELG_TIMEOUT_MS || 15 * 60_000));
+
+// Uselg(FluxPort) 视频渠道（minimax_h3 系列，api.ai-media.vip/v1/videos）。
+// 视频生成慢、单任务耗时长，独立并发与超时参数避免挤占图片队列。
+const USELG_VIDEO_API_KEY = normalizeEnvValue(process.env.USELG_VIDEO_API_KEY);
+const USELG_VIDEO_BASE_URL = normalizeEnvValue(process.env.USELG_VIDEO_BASE_URL || 'https://api.ai-media.vip');
+const USELG_VIDEO_TIMEOUT_MS = Math.max(60_000, Number(process.env.USELG_VIDEO_TIMEOUT_MS || 20 * 60_000));
+const USELG_VIDEO_MAX_CONCURRENCY = Math.max(1, Math.floor(boundedEnvNumber('USELG_VIDEO_MAX_CONCURRENCY', 5, 1, 30)));
+
+// 视频生成独立队列：视频任务耗时长（最长 20 分钟），与图片队列分离，
+// 避免慢视频任务占满图片并发位。共享同一个资源监控，系统压力高时同样排队。
+const videoWorkQueue = new ResourceAwareWorkQueue(
+  generationResourceMonitor,
+  USELG_VIDEO_MAX_CONCURRENCY,
+  Math.max(1, Math.floor(boundedEnvNumber('USELG_VIDEO_MAX_PENDING', 20, 1, 200))),
+);
 
 function selectUselgApiKey(imageSize: string) {
   const size = ['1K', '2K', '4K'].includes(imageSize) ? imageSize : 'STANDARD';
@@ -1450,7 +1497,7 @@ async function recordGenerationRequest(attempt: {
   errorMessage?: string;
   sourceModel: string;
   prompt: string;
-  requestContext?: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] };
+  requestContext?: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; indeterminateRequestId?: string; referenceImageTypes?: string[] };
 }): Promise<string> {
   const context = attempt.requestContext;
   if (!context?.userId || !context.username) return '';
@@ -1658,6 +1705,45 @@ async function markGenerationRequestFailed(
          WHERE id = ?`;
     db.run(sql, [message, detail, requestId]);
   });
+}
+
+// 后台对账「迟到成功」时，把此前记成 uncertain 的 generation_requests 行翻转为成功并补图。
+async function markGenerationRequestSucceeded(
+  requestId: string | undefined,
+  options: { imagePath: string; creditsUsed: number },
+) {
+  if (!requestId) return;
+  if (USE_SUPABASE) {
+    const db = await getSupabaseDb();
+    await db.markGenerationRequestSucceeded(requestId, options);
+    return;
+  }
+  await withWriteDb((db) => {
+    ensureSchema(db);
+    db.run(
+      `UPDATE generation_requests
+       SET result_status = 'success', result_message = '', error_detail = '', credits_used = ?, image_path = ?
+       WHERE id = ?`,
+      [options.creditsUsed, options.imagePath, requestId],
+    );
+  });
+}
+
+// 后台对账时没有 Express 请求上下文，按登记时保存的公共 origin 还原可公网访问的图片地址。
+function publicImageForOrigin(origin: string, payload: GeneratedImagePayload): GeneratedImagePayload {
+  const absolute = (value?: string) => {
+    const normalized = normalizeString(value);
+    if (!normalized) return '';
+    if (/^https?:\/\//i.test(normalized)) return normalized;
+    if (!origin) return normalized;
+    return `${stripTrailingSlash(origin)}${normalized.startsWith('/') ? normalized : `/${normalized}`}`;
+  };
+  return {
+    ...payload,
+    imagePath: absolute(payload.imagePath) || payload.imagePath,
+    thumbnailPath: payload.thumbnailPath ? absolute(payload.thumbnailPath) : undefined,
+    referenceImages: payload.referenceImages.map((item) => absolute(item) || item),
+  };
 }
 
 function toPublicReferenceImages(req: Request, referenceImages: string[]) {
@@ -2146,6 +2232,50 @@ function toPublicUser(user: AuthUser): PublicUser {
 
 function getModelCredits(modelId: string, imageSize = '', quality = '') {
   return getConfiguredImageCredits(activeModelCreditPricing, modelId, imageSize, quality);
+}
+
+/** 视频总积分 = 每秒单价 × 时长 + 参考图阶梯加价（第 6 张起每张 +30）。 */
+function getVideoCredits(resolution: string, seconds: number, referenceImageCount = 0) {
+  const perSecond = getConfiguredVideoCredits(activeModelCreditPricing, normalizeVideoResolution(resolution));
+  const billableReferenceImages = Math.min(
+    Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0,
+    VIDEO_MAX_REFERENCE_IMAGES,
+  );
+  return perSecond * normalizeVideoSeconds(seconds) + getVideoReferenceImageSurcharge(billableReferenceImages);
+}
+
+type VideoGenerationInput = {
+  prompt: string;
+  resolution: VideoResolution;
+  aspect: VideoAspect;
+  seconds: number;
+  referenceImages: string[];
+  referenceVideos: string[];
+  referenceAudios: string[];
+  requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string };
+};
+
+async function callVideoGeneration(input: VideoGenerationInput) {
+  if (!USELG_VIDEO_API_KEY) {
+    throw new Error('视频渠道尚未配置 API Key（USELG_VIDEO_API_KEY）');
+  }
+  return generateUselgVideo(
+    {
+      prompt: input.prompt,
+      resolution: input.resolution,
+      aspect: input.aspect,
+      seconds: input.seconds,
+      referenceImages: input.referenceImages,
+      referenceVideos: input.referenceVideos,
+      referenceAudios: input.referenceAudios,
+    },
+    {
+      baseUrl: USELG_VIDEO_BASE_URL,
+      apiKey: USELG_VIDEO_API_KEY,
+      timeoutMs: USELG_VIDEO_TIMEOUT_MS,
+      maxConcurrent: USELG_VIDEO_MAX_CONCURRENCY,
+    },
+  );
 }
 
 function getNanoBananaEnhancementCredits(modelId: string, imageSize: string, enabled: boolean) {
@@ -2822,6 +2952,17 @@ function ensureSchema(db: SqlDatabase) {
       updated_at TEXT NOT NULL
     )
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS prompt_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_prompt_templates_user_id ON prompt_templates(user_id)');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS generations (
@@ -5249,6 +5390,10 @@ async function recordImageChannelAttempt({
   };
   const requestId = await tryRecordGenerationRequest(attempt);
   if (success && requestId && input.requestContext) input.requestContext.successfulRequestId = requestId;
+  // 「不确定」的尝试同样落了一行诊断记录；记下它的 id，后台对账迟到成功/失败时可翻转该行。
+  if (!success && requestId && input.requestContext && isIndeterminateGenerationError(error)) {
+    input.requestContext.indeterminateRequestId = requestId;
+  }
   await tryRecordProviderDiagnostics({
     traceId: attempt.traceId,
     modelId: attempt.modelId,
@@ -5540,6 +5685,14 @@ async function callImageGeneration(input: ImageGenerationInput) {
       return source;
     } catch (error) {
       console.warn(`[image-channel] traceId=${traceId} ${channelId} failed: ${imageErrorText(error)}`);
+      // 「不确定」的异步任务（带 taskId 可幂等续查）：不换渠道、不立即判失败，
+      // 把当前渠道信息回填到 resume 上后原样抛给上层，由 /api/generate 登记后台对账。
+      if (isIndeterminateGenerationError(error)) {
+        const resume = resumeFromError(error);
+        if (resume && !resume.channelId) resume.channelId = channelId;
+        imageChannelFailover.markFailure(routeKey, channelId);
+        throw error;
+      }
       const publicError = classifyPublicImageError(imageErrorText(error));
       if (publicError.category === 'sensitive_prompt') {
         throw new Error(publicError.message);
@@ -5969,6 +6122,29 @@ async function persistGeneratedImage(source: string) {
   return writeGeneratedImageToR2(buffer, extension);
 }
 
+// 视频成片落盘：provider 已把视频下载为 buffer，这里直接写入 R2 generated/ 或本地兜底。
+// 视频不做 sharp 缩略图（sharp 不支持视频），也不走图片有效性校验。
+async function persistGeneratedVideo(buffer: Buffer, contentType: string) {
+  const cleanType = (contentType || 'video/mp4').split(';')[0].trim().toLowerCase();
+  const rawExtension = cleanType.startsWith('video/') ? cleanType.split('/')[1] : 'mp4';
+  const extension = ['mp4', 'webm', 'mov'].includes(rawExtension) ? rawExtension : 'mp4';
+  const fileName = `generated-${Date.now()}-${randomHex(4)}.${extension}`;
+
+  if (!R2_STORAGE) {
+    await fs.writeFile(path.join(GENERATED_DIR, fileName), buffer);
+    return `/uploads/generated/${fileName}`;
+  }
+
+  try {
+    return await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer, cleanType);
+  } catch (error) {
+    if (!R2_LOCAL_FALLBACK || IS_VERCEL) throw error;
+    console.error(`[r2-fallback] R2 upload failed for video ${fileName}; serving from local disk:`, error);
+    await fs.writeFile(path.join(GENERATED_DIR, fileName), buffer);
+    return `/uploads/generated/${fileName}`;
+  }
+}
+
 // Public API results are only successful after the image has been copied to
 // durable R2 storage. Temporary upstream URLs are never returned.
 async function persistPublicImageSource(source: string) {
@@ -6043,13 +6219,69 @@ async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadI
 async function cleanupTemporaryReferenceImages(referenceImages: string[]) {
   await Promise.all(
     referenceImages
-      .filter((item) => item.startsWith('/uploads/references/temp-reference-'))
+      .filter((item) => item.startsWith('/uploads/references/temp-'))
       .map(async (item) => {
         const target = path.resolve(ROOT_DIR, item.replace(/^\/+/, ''));
         if (!target.startsWith(REFERENCES_DIR)) return;
         await fs.unlink(target).catch(() => undefined);
       }),
   );
+}
+
+// 视频任务的参考视频/参考音频：写临时文件换取公网可读 URL（上游要求 HTTP(S)），
+// 生成结束（成功或失败）后在 finally 里删除，不在磁盘上长期堆积大文件。
+const TEMP_REFERENCE_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+
+function fileExtensionFromGeneralMimeType(mimeType: string, fallbackName = '') {
+  const map: Record<string, string> = {
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/quicktime': 'mov',
+    'video/x-matroska': 'mkv',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/wave': 'wav',
+    'audio/x-m4a': 'm4a',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'audio/ogg': 'ogg',
+    'audio/flac': 'flac',
+  };
+  const mapped = map[mimeType.toLowerCase()];
+  if (mapped) return mapped;
+  const fromName = path.extname(fallbackName || '').replace('.', '').toLowerCase();
+  return /^[a-z0-9]{2,5}$/.test(fromName) ? fromName : 'bin';
+}
+
+async function persistTemporaryReferenceMedia(
+  inputs: ReferenceUploadInput[],
+  kind: 'video' | 'audio',
+) {
+  if (IS_VERCEL) return [];
+
+  const output: string[] = [];
+  const prefix = kind === 'video' ? 'temp-refvideo' : 'temp-refaudio';
+  for (const item of inputs.slice(0, 3)) {
+    const data = normalizeString(item.data);
+    if (!data.startsWith(`data:${kind}/`)) continue;
+
+    const base64 = data.split(',').pop() || '';
+    if (!base64) continue;
+
+    const buffer = Buffer.from(base64, 'base64');
+    if (buffer.byteLength > TEMP_REFERENCE_MEDIA_MAX_BYTES) {
+      throw new Error(`每个参考${kind === 'video' ? '视频' : '音频'}不能超过 50MB`);
+    }
+
+    const extension = fileExtensionFromGeneralMimeType(item.mimeType || '', item.name || '');
+    const fileName = `${prefix}-${Date.now()}-${randomHex(3)}.${extension}`;
+    const target = path.join(REFERENCES_DIR, fileName);
+    await fs.writeFile(target, buffer);
+    output.push(`/uploads/references/${fileName}`);
+  }
+  return output;
 }
 
 function asPlainObject(value: unknown): Record<string, unknown> {
@@ -6077,9 +6309,13 @@ function isReferenceImageInput(value: string) {
 }
 
 function maxReferenceImageCountForModel(modelId?: string) {
-  return modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
-    ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
-    : MAX_REFERENCE_IMAGE_COUNT;
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
+  }
+  if (modelId && modelId.startsWith('minimax_h3')) {
+    return VIDEO_MAX_REFERENCE_IMAGES;
+  }
+  return MAX_REFERENCE_IMAGE_COUNT;
 }
 
 function validateReferenceImageSources(referenceImages: string[], modelId?: string) {
@@ -8601,6 +8837,211 @@ async function start() {
     });
   }
 
+  // ── 不确定异步任务的后台对账（late reconciliation） ──────────────────────────
+  // 上游异步任务超时/轮询耗尽时不得立即判失败退款：任务可能仍在上游跑并计费。
+  // 这里登记 taskId 等续查信息，由进程内 sweeper 复用既有 taskId 继续查询（绝不重新提交）。
+  type PendingReconciliation = ReconciliationEntry & {
+    resume: GenerationResume;
+    userId: string;
+    username: string;
+    creditsUsed: number;
+    reserved: { bucket: CreditBucket; amount: number };
+    input: { prompt: string; modelId: string; ratio: string; imageSize: string; quality: string; images: string[] };
+    modelName: string;
+    ratio: string;
+    imageSize: string;
+    referenceImages: string[];
+    createdAt: string;
+    prompt: string;
+    origin: string;
+    submissionRequestId: string;
+    apiRequestStartedAt: number;
+  };
+
+  // 复用既有 taskId 续查一次；绝不重新 submit（避免上游二次计费）。
+  function resumeIndeterminateGeneration(entry: PendingReconciliation): Promise<string> {
+    const { resume, input } = entry;
+    if (resume.kind === 'flux-banana') {
+      const baseUrl = FLUX_BANANA_API_BASE_URL;
+      return generateFluxBanana(
+        { prompt: input.prompt, ratio: input.ratio, imageSize: input.imageSize, images: input.images, model: resume.sourceModel },
+        {
+          baseUrl,
+          apiKey: FLUX_BANANA_API_KEY,
+          maxConcurrent: FLUX_BANANA_MAX_CONCURRENCY,
+          timeoutMs: FLUX_BANANA_TIMEOUT_MS,
+          resumeTask: {
+            taskId: resume.taskId,
+            pollUrl: resume.pollUrl
+              || `${baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '')}/v1/images/tasks/${encodeURIComponent(resume.taskId)}`,
+          },
+        },
+      ).then((result) => result.source);
+    }
+    if (resume.kind === 'visionary-lite') {
+      const apiKey = VISIONARY_NANO_LITE_API_KEY || VISIONARY_BANANA_PRO_API_KEY || VISIONARY_FALLBACK_API_KEY;
+      if (!apiKey) {
+        throw Object.assign(new Error('Visionary lite api key is not configured'), { safeToFallback: true });
+      }
+      return generateVisionaryNanoLite(
+        { prompt: input.prompt, ratio: input.ratio, images: input.images },
+        { baseUrl: VISIONARY_API_BASE_URL, apiKey, resumeTask: { taskId: resume.taskId } },
+      );
+    }
+    // schat：按渠道选择 baseUrl / apiKey / model（uselg 走独立 key 与 b64 输出）。
+    const isUselg = resume.channelId === 'uselg';
+    const baseUrl = isUselg ? USSELG_BASE_URL : SCHAT_BASE_URL;
+    const apiKey = isUselg ? selectUselgApiKey(input.imageSize) : SCHAT_API_KEY;
+    const model = resume.sourceModel || (isUselg ? USSELG_MODEL : SCHAT_GPT_IMAGE_2_MODEL);
+    return generateSchatImage(
+      { prompt: input.prompt, ratio: input.ratio, imageSize: input.imageSize, images: input.images },
+      {
+        baseUrl,
+        apiKey,
+        model,
+        ...(isUselg ? { responseFormat: 'b64_json' as const } : {}),
+        timeoutMs: isUselg ? USSELG_TIMEOUT_MS : SCHAT_TIMEOUT_MS,
+        resumeTask: {
+          taskId: resume.taskId,
+          pollUrl: resume.pollUrl
+            || `${baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '')}/v1/images/tasks/${encodeURIComponent(resume.taskId)}`,
+        },
+      },
+    );
+  }
+
+  // 迟到成功：补写历史与统计（best-effort，失败不影响已落库的图）。
+  async function recordReconciledGenerationHistory(entry: PendingReconciliation, imagePath: string) {
+    const apiRequestMs = Math.max(0, Date.now() - entry.apiRequestStartedAt);
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      await withRecordingRetry(() => db.insertGeneration({
+        userId: entry.userId,
+        username: entry.username,
+        prompt: entry.input.prompt,
+        modelId: entry.input.modelId,
+        modelName: entry.modelName,
+        dimensions: entry.ratio,
+        imageSize: entry.imageSize,
+        imagePath,
+        creditsUsed: entry.creditsUsed,
+        apiRequestMs,
+        referenceImages: entry.referenceImages,
+        createdAt: entry.createdAt,
+        requestId: entry.submissionRequestId,
+      }));
+      try {
+        await db.incrementGenerationCount(entry.userId, entry.username, entry.creditsUsed, entry.createdAt);
+      } catch (statsError) {
+        console.warn('[generation-reconcile] failed to update stats:', statsError);
+      }
+      return;
+    }
+    try {
+      await withRecordingRetry(() => withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          `INSERT INTO generations (
+            user_id, username, prompt, model_id, model_name, dimensions,
+            image_size, image_path, credits_used, api_request_ms, reference_images, created_at, request_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            entry.userId, entry.username, entry.input.prompt, entry.input.modelId, entry.modelName,
+            entry.ratio, entry.imageSize, imagePath, entry.creditsUsed, apiRequestMs,
+            serializeReferenceImages(entry.referenceImages), entry.createdAt, entry.submissionRequestId,
+          ],
+        );
+      }));
+    } catch (insertError) {
+      const insertMessage = insertError instanceof Error ? insertError.message : String(insertError);
+      if (!entry.submissionRequestId || !/UNIQUE constraint failed:.*request_id/i.test(insertMessage)) {
+        throw insertError;
+      }
+      return; // 幂等键已写过历史，不重复累加统计
+    }
+    try {
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          `INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             username = excluded.username,
+             generations_total = generations_total + 1,
+             credits_total = credits_total + excluded.credits_total,
+             updated_at = excluded.updated_at`,
+          [entry.userId, entry.username, entry.creditsUsed, entry.createdAt],
+        );
+      });
+    } catch (statsError) {
+      console.warn('[generation-reconcile] failed to update stats:', statsError);
+    }
+  }
+
+  // 终局失败：从未扣款，只需释放预留 + 标注诊断记录 + 置 job 失败。
+  async function failPendingReconciliation(entry: PendingReconciliation, detail: string) {
+    releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+    const message = GENERATION_FAILURE_MESSAGES.indeterminate;
+    try {
+      await markGenerationRequestFailed(entry.requestId, message, {
+        preserveCredits: false,
+        detail: generationFailureDetail('indeterminate', detail),
+      });
+    } catch (markError) {
+      console.warn('[generation-reconcile] failed to mark request as failed:', markError);
+    }
+    const current = generationJobs.get(entry.jobId);
+    if (current && current.status !== 'succeeded' && current.status !== 'failed') {
+      setGenerationJobTerminal(entry.jobId, { status: 'failed', error: message, creditsCharged: false, creditsUsed: 0 });
+    }
+  }
+
+  const generationReconciler = createGenerationReconciler<PendingReconciliation>({
+    resume: (entry) => resumeIndeterminateGeneration(entry),
+    onSuccess: async (entry, imageSource) => {
+      const current = generationJobs.get(entry.jobId);
+      // 幂等：若 job 已终态（并发/重放），只释放预留，绝不重复扣款。
+      if (!current || current.status === 'succeeded' || current.status === 'failed') {
+        releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+        return;
+      }
+      const imagePath = await persistGeneratedImage(imageSource);
+      const charged = await debitUserCredits(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+      releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+      creditAudit('debit', entry.userId, entry.username, entry.reserved.bucket, entry.reserved.amount,
+        { modelId: entry.input.modelId, reconciled: true }, entry.submissionRequestId);
+      try {
+        await recordReconciledGenerationHistory(entry, imagePath);
+      } catch (historyError) {
+        console.error('[generation-reconcile] history recording failed after charge:', historyError);
+      }
+      try {
+        await markGenerationRequestSucceeded(entry.requestId, { imagePath, creditsUsed: entry.creditsUsed });
+      } catch (markError) {
+        console.warn('[generation-reconcile] failed to mark request as succeeded:', markError);
+      }
+      const payload: GeneratedImagePayload = {
+        prompt: entry.prompt,
+        modelName: entry.modelName,
+        dimensions: entry.ratio,
+        imageSize: entry.imageSize,
+        imagePath,
+        referenceImages: entry.referenceImages,
+        createdAt: entry.createdAt,
+      };
+      setGenerationJobTerminal(entry.jobId, {
+        status: 'succeeded',
+        image: publicImageForOrigin(entry.origin, payload),
+        creditsCharged: true,
+        creditsUsed: entry.creditsUsed,
+        creditsRemaining: charged.remainingCredits,
+      });
+      console.log(`[generation-reconcile] late success jobId=${entry.jobId} taskId=${entry.resume.taskId}`);
+    },
+    onConfirmedFailure: (entry, reason) => failPendingReconciliation(entry, reason),
+    onExpired: (entry) => failPendingReconciliation(entry, `reconciliation window exceeded for task ${entry.resume.taskId}`),
+  });
+
   async function runGenerationJob(jobId: string) {
     const job = generationJobs.get(jobId);
     if (!job) return;
@@ -8630,7 +9071,7 @@ async function start() {
       });
 
       const responseText = await response.text().catch(() => '');
-      let payload: { image?: GeneratedImagePayload; error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown } | null = null;
+      let payload: { image?: GeneratedImagePayload; error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown; indeterminate?: boolean } | null = null;
       if (responseText) {
         try {
           payload = JSON.parse(responseText);
@@ -8642,6 +9083,9 @@ async function start() {
       if (!response.ok) {
         throw new Error(getVisionaryErrorMessage(payload || responseText, `Generate failed (${response.status})`));
       }
+
+      // 上游结果不确定：已登记后台对账，job 保持 processing，由对账 sweeper 收尾（成功/失败）。
+      if (payload?.indeterminate) return;
 
       if (!payload?.image) {
         throw new Error('Generate failed: missing image result');
@@ -8854,7 +9298,19 @@ async function start() {
     let chargedCreditsRemaining: number | undefined;
     // 提升到外层 try 之外：上游一旦出图成功就会立刻写入 success 诊断记录（见 onAttempt），
     // 后续任何环节（转存/扣款/写历史）失败时，catch 里需要访问 successfulRequestId 同步修正该记录。
-    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
+    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; indeterminateRequestId?: string; referenceImageTypes?: string[] } | null = null;
+    // 「不确定」任务进入后台对账时，catch 里需要这些「请求已完成解析」的快照（图/钱/历史都要）。
+    let reconciliationSnapshot: {
+      input: { prompt: string; modelId: string; ratio: string; imageSize: string; quality: string; images: string[] };
+      modelName: string;
+      creditsUsed: number;
+      creditBucket: CreditBucket;
+      referenceImages: string[];
+      createdAt: string;
+      origin: string;
+      submissionRequestId: string;
+      apiRequestStartedAt: number;
+    } | null = null;
     try {
       let modelId = normalizeModelId(model);
       validateReferenceImageSources(referenceImagesInput.map((item) => normalizeString(item.data)), modelId);
@@ -8930,8 +9386,21 @@ async function start() {
         creditsUsed,
         referenceImageTypes: extractReferenceImageTypes(referenceImagesInput),
       };
+      // 固化快照：若上游返回「不确定」，catch 里要据此登记后台对账（含续查所需的输入与账务信息）。
+      reconciliationSnapshot = {
+        input: { prompt, modelId, ratio, imageSize, quality, images: uniqueModelReferenceImages },
+        modelName,
+        creditsUsed,
+        creditBucket,
+        referenceImages,
+        createdAt,
+        origin: getRequestPublicOrigin(req) || getConfiguredPublicOrigin(),
+        submissionRequestId: requestId,
+        apiRequestStartedAt: 0,
+      };
       try {
         const apiRequestStartedAt = Date.now();
+        reconciliationSnapshot.apiRequestStartedAt = apiRequestStartedAt;
         const generatedImageSource = await callImageGeneration({
           prompt,
           modelId,
@@ -9133,6 +9602,41 @@ async function start() {
       });
       res.json({ image: publicImage });
     } catch (error) {
+      // 上游异步任务结果「不确定」（轮询窗口耗尽等）：绝不立即终局失败、绝不退款、绝不释放预留，
+      // 否则上游迟到出图并计费时会造成成本泄漏。改为登记后台对账，复用既有 taskId 幂等续查。
+      const indeterminateResume = resumeFromError(error);
+      if (indeterminateResume && reconciliationSnapshot && queuedJobId) {
+        const key = `${indeterminateResume.kind}:${indeterminateResume.channelId || ''}:${indeterminateResume.taskId}`;
+        generationReconciler.register({
+          key,
+          jobId: queuedJobId,
+          requestId: requestContext?.indeterminateRequestId,
+          startedAtMs: Date.now(),
+          resume: indeterminateResume,
+          userId: req.authUser!.userId,
+          username: req.authUser!.username,
+          creditsUsed: reconciliationSnapshot.creditsUsed,
+          // 保留原预留桶/额；catch 分支从不扣款，对账器在迟到成功时补扣、在终局失败时释放。
+          reserved: reservedGenerationCredit
+            ? { ...reservedGenerationCredit }
+            : { bucket: reconciliationSnapshot.creditBucket, amount: reconciliationSnapshot.creditsUsed },
+          input: reconciliationSnapshot.input,
+          modelName: reconciliationSnapshot.modelName,
+          ratio: reconciliationSnapshot.input.ratio,
+          imageSize: reconciliationSnapshot.input.imageSize,
+          referenceImages: reconciliationSnapshot.referenceImages,
+          createdAt: reconciliationSnapshot.createdAt,
+          prompt: reconciliationSnapshot.input.prompt,
+          origin: reconciliationSnapshot.origin,
+          submissionRequestId: reconciliationSnapshot.submissionRequestId,
+          apiRequestStartedAt: reconciliationSnapshot.apiRequestStartedAt,
+        });
+        // 预留转交对账器，避免后续一起返回时的重复处理。
+        reservedGenerationCredit = null;
+        console.warn(`[generate] indeterminate upstream task; deferring to reconciliation jobId=${queuedJobId} taskId=${indeterminateResume.taskId}`);
+        res.status(202).json({ status: 'processing', indeterminate: true, message: GENERATION_FAILURE_MESSAGES.indeterminate });
+        return;
+      }
       // 失败/中断：只释放预留，从未扣过款，因此无需退款，也不会误扣。
       if (reservedGenerationCredit) {
         creditAudit('release', req.authUser!.userId, req.authUser!.username,
@@ -9188,6 +9692,615 @@ async function start() {
   });
 
   // 鈹€鈹€鈹€ 鐢熸垚鍘嗗彶 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  // ============ 视频生成（minimax_h3 系列，Uselg/FluxPort） ============
+
+  type AuthenticatedVideoJob = {
+    id: string;
+    userId: string;
+    username: string;
+    status: 'queued' | 'processing' | 'succeeded' | 'failed';
+    progress: number;
+    requestBody: unknown;
+    authHeader: string;
+    createdAt: string;
+    updatedAt: string;
+    startedAt?: string;
+    completedAt?: string;
+    video?: GeneratedVideoPayload;
+    error?: string;
+    creditsCharged?: boolean;
+    creditsUsed?: number;
+    creditsRemaining?: number;
+  };
+
+  const videoJobs = new Map<string, AuthenticatedVideoJob>();
+  const videoJobTtlMs = 2 * 60 * 60 * 1000;
+  const videoSubmissionRegistry = new IdempotencyRegistry(videoJobTtlMs);
+
+  const VIDEO_MODEL_NAMES: Record<VideoResolution, string> = {
+    '768p': 'MiniMax H3 768p',
+    '1080p': 'MiniMax H3 1080p',
+    '2K': 'MiniMax H3 2K',
+  };
+
+  function videoModelName(resolution: VideoResolution) {
+    return VIDEO_MODEL_NAMES[resolution] || VIDEO_MODELS[resolution].model;
+  }
+
+  function publicVideoJob(job: AuthenticatedVideoJob) {
+    return {
+      id: job.id,
+      status: job.status,
+      progress: job.status === 'succeeded' ? 100 : job.progress,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      video: job.video,
+      error: job.error,
+      creditsCharged: job.creditsCharged,
+      creditsUsed: job.creditsUsed,
+      creditsRemaining: job.creditsRemaining,
+      queuePosition: job.status === 'queued' ? videoWorkQueue.position(job.id) : 0,
+    };
+  }
+
+  function cleanupVideoJobs() {
+    const cutoff = Date.now() - videoJobTtlMs;
+    for (const [jobId, job] of videoJobs) {
+      const updatedAt = new Date(job.updatedAt).getTime();
+      if (!Number.isNaN(updatedAt) && updatedAt < cutoff) videoJobs.delete(jobId);
+    }
+  }
+
+  // 权威终态由内部 /api/video handler 写入（扣款+落库都在那里），不被内网响应错乱覆盖。
+  function setVideoJobTerminal(
+    jobId: string,
+    patch: {
+      status: 'succeeded' | 'failed';
+      video?: GeneratedVideoPayload;
+      error?: string;
+      creditsCharged?: boolean;
+      creditsUsed?: number;
+      creditsRemaining?: number;
+    },
+  ) {
+    const current = videoJobs.get(jobId);
+    if (!current) return;
+    videoJobs.set(jobId, {
+      ...current,
+      ...patch,
+      progress: patch.status === 'succeeded' ? 100 : Math.max(current.progress || 12, 12),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+  }
+
+  async function runVideoGenerationJob(jobId: string) {
+    const job = videoJobs.get(jobId);
+    if (!job) return;
+
+    const updateJob = (patch: Partial<AuthenticatedVideoJob>) => {
+      const current = videoJobs.get(jobId);
+      if (!current) return null;
+      const next = { ...current, ...patch, updatedAt: nowIso() };
+      videoJobs.set(jobId, next);
+      return next;
+    };
+
+    updateJob({ status: 'processing', progress: 12, startedAt: nowIso() });
+
+    try {
+      const response = await fetch(`${internalApiOrigin}/api/video`, {
+        method: 'POST',
+        headers: {
+          Authorization: job.authHeader,
+          'Content-Type': 'application/json',
+          'X-Forwarded-Host': CANONICAL_WEB_HOST,
+          'X-Forwarded-Proto': 'https',
+          'X-Pixory-Video-Job': job.id,
+        },
+        body: JSON.stringify(job.requestBody),
+        signal: AbortSignal.timeout(21 * 60_000),
+      });
+
+      const responseText = await response.text().catch(() => '');
+      let payload: { video?: GeneratedVideoPayload; error?: unknown } | null = null;
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText);
+        } catch {
+          payload = null;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(payload?.error ? String(payload.error) : `Video generation failed (${response.status})`);
+      }
+      if (!payload?.video) {
+        throw new Error('Video generation failed: missing video result');
+      }
+
+      const current = videoJobs.get(jobId);
+      if (!current || (current.status !== 'succeeded' && current.status !== 'failed')) {
+        updateJob({ status: 'succeeded', progress: 100, video: payload.video, completedAt: nowIso() });
+      }
+    } catch (error) {
+      const current = videoJobs.get(jobId);
+      const alreadyTerminal = current?.status === 'succeeded' || current?.status === 'failed';
+      if (!alreadyTerminal) {
+        updateJob({
+          status: 'failed',
+          progress: Math.max(12, current?.progress || 12),
+          error: publicImageErrorMessage(error instanceof Error ? error.message : 'Video generation failed'),
+          completedAt: nowIso(),
+        });
+      }
+    }
+  }
+
+  app.post('/api/video/jobs', requireAuth, async (req, res) => {
+    const prompt = normalizeString(req.body?.prompt);
+    if (!prompt) {
+      res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+    const submissionId = normalizeString(req.body?.submissionId || req.headers['x-idempotency-key']);
+    if (submissionId && !/^[a-zA-Z0-9:_-]{8,160}$/.test(submissionId)) {
+      res.status(400).json({ error: 'Invalid submission ID' });
+      return;
+    }
+    const submissionKey = submissionId ? `${req.authUser!.userId}:${submissionId}` : '';
+
+    // 数据库级幂等：命中已完成的视频记录直接交付，避免重复扣费。
+    if (submissionKey) {
+      const existing = await findGenerationByRequestId(submissionKey, req.authUser!.userId).catch(() => null);
+      if (existing) {
+        const existingVideoPath = normalizeString(existing.image_path);
+        if (existingVideoPath) {
+          res.json({
+            job: {
+              id: `cached_${existing.id}`,
+              status: 'succeeded',
+              progress: 100,
+              video: {
+                prompt: normalizeString(existing.prompt),
+                modelName: normalizeString(existing.model_name),
+                resolution: normalizeString(existing.image_size),
+                seconds: 0,
+                videoPath: existingVideoPath,
+                referenceImages: parseReferenceImages(existing.reference_images),
+                createdAt: normalizeString(existing.created_at),
+              },
+              createdAt: normalizeString(existing.created_at),
+              updatedAt: normalizeString(existing.created_at),
+            },
+            reused: true,
+          });
+          return;
+        }
+        res.status(500).json({ error: normalizeString(existing.result_message) || '视频生成失败', reused: true });
+        return;
+      }
+    }
+
+    try {
+      const resolution = normalizeVideoResolution(normalizeString(req.body?.resolution));
+      const referenceImageCount = Array.isArray(req.body?.reference_images) ? req.body.reference_images.length : 0;
+      const creditsUsed = getVideoCredits(resolution, normalizeVideoSeconds(req.body?.seconds), referenceImageCount);
+      const bucket: CreditBucket = 'general';
+
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
+      } else {
+        await withWriteDb((db) => {
+          ensureSchema(db);
+          ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+        });
+      }
+
+      const balance = await getUserCreditDetails(req.authUser!.userId);
+      const availableCredits = availableCreditsForBucket(balance.creditBalances, bucket);
+      if (availableCredits < creditsUsed) {
+        res.status(402).json({
+          error: `当前积分不足，需要 ${creditsUsed} 积分，可用 ${availableCredits} 积分`,
+          requiredCredits: creditsUsed,
+          availableCredits,
+        });
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '检查积分失败';
+      res.status(getPublicApiErrorStatus(message)).json({ error: publicImageErrorMessage(message) });
+      return;
+    }
+
+    if (!videoWorkQueue.canAccept()) {
+      res.status(429).json({ error: '当前视频任务较多，请稍后重试' });
+      return;
+    }
+
+    cleanupVideoJobs();
+    const jobId = `vid_${Date.now()}_${randomHex(6)}`;
+    if (submissionKey) {
+      const reservation = videoSubmissionRegistry.reserve(submissionKey, jobId);
+      if (reservation.reused) {
+        const existingJob = videoJobs.get(reservation.jobId);
+        if (existingJob) {
+          res.json({ job: publicVideoJob(existingJob), reused: true });
+          return;
+        }
+        videoSubmissionRegistry.release(submissionKey, reservation.jobId);
+      }
+    }
+    const authHeader = normalizeString(req.headers.authorization);
+    const job: AuthenticatedVideoJob = {
+      id: jobId,
+      userId: req.authUser!.userId,
+      username: req.authUser!.username,
+      status: 'queued',
+      progress: 5,
+      requestBody: {
+        ...(typeof req.body === 'object' && req.body !== null ? req.body as Record<string, unknown> : {}),
+        _requestId: submissionKey,
+      },
+      authHeader,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    videoJobs.set(jobId, job);
+    void videoWorkQueue.enqueue(jobId, 'video', () => runVideoGenerationJob(jobId)).catch((error) => {
+      const current = videoJobs.get(jobId);
+      if (!current) return;
+      setVideoJobTerminal(jobId, {
+        status: 'failed',
+        error: publicImageErrorMessage(error instanceof Error ? error.message : 'Video generation failed'),
+      });
+    });
+
+    res.status(202).json({ job: publicVideoJob(job) });
+  });
+
+  app.get('/api/video/jobs/:id', requireAuth, async (req, res) => {
+    const job = videoJobs.get(normalizeString(req.params.id));
+    if (!job || job.userId !== req.authUser!.userId) {
+      res.status(404).json({ error: 'Video job not found' });
+      return;
+    }
+    res.json({ job: publicVideoJob(job) });
+  });
+
+  app.post('/api/video', requireAuth, async (req, res) => {
+    const queuedJobId = normalizeString(req.headers['x-pixory-video-job']);
+    const queuedJob = videoJobs.get(queuedJobId);
+    if (
+      !queuedJob ||
+      queuedJob.userId !== req.authUser!.userId ||
+      queuedJob.status !== 'processing'
+    ) {
+      res.status(409).json({ error: '请通过任务队列提交视频生成请求' });
+      return;
+    }
+    const prompt = normalizeString(req.body?.prompt);
+    const resolution = normalizeVideoResolution(normalizeString(req.body?.resolution));
+    const aspect = normalizeVideoAspect(normalizeString(req.body?.aspect));
+    const seconds = normalizeVideoSeconds(req.body?.seconds);
+    const referenceImagesInput = Array.isArray(req.body?.reference_images)
+      ? (req.body.reference_images as ReferenceUploadInput[])
+      : [];
+    const referenceVideosInput = Array.isArray(req.body?.reference_videos)
+      ? (req.body.reference_videos as ReferenceUploadInput[])
+      : [];
+    const referenceAudiosInput = Array.isArray(req.body?.reference_audios)
+      ? (req.body.reference_audios as ReferenceUploadInput[])
+      : [];
+    if (referenceVideosInput.length > 3 || referenceAudiosInput.length > 3) {
+      res.status(400).json({ error: '参考视频、参考音频各最多 3 段' });
+      return;
+    }
+    const requestId = normalizeString((req.body as Record<string, unknown>)?._requestId || '');
+
+    if (!prompt) {
+      res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+
+    let reservedVideoCredit: { bucket: CreditBucket; amount: number } | null = null;
+    let upstreamVideoSucceeded = false;
+    let videoCreditsCharged = false;
+    let videoPersisted = false;
+    let chargedCreditsRemaining: number | undefined;
+    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
+
+    try {
+      const modelId = VIDEO_MODELS[resolution].model;
+      const creditsUsed = getVideoCredits(resolution, seconds, referenceImagesInput.length);
+      const creditBucket: CreditBucket = 'general';
+
+      if (creditsUsed > 0) {
+        if (USE_SUPABASE) {
+          const db = await getSupabaseDb();
+          await db.reclaimLowBalanceInviteCodes();
+          await db.ensureUserCredits(req.authUser!.userId, req.authUser!.username, 0);
+          const credits = await db.getUserCredits(req.authUser!.userId);
+          if (credits.remainingCredits < creditsUsed) {
+            throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+          }
+        } else {
+          await withWriteDb((db) => {
+            ensureSchema(db);
+            reclaimLowBalanceInviteCodes(db);
+            ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
+            const credits = getUserCredits(db, req.authUser!.userId);
+            if (credits.remainingCredits < creditsUsed) {
+              throw new Error(`积分不足，本次需要 ${creditsUsed} 积分，当前剩余 ${credits.remainingCredits} 积分`);
+            }
+          });
+        }
+      }
+
+      // 生成前只预留，成功后落盘再扣款（与图片一致：成功才扣款）。
+      const poolCredits = await getUserCreditDetails(req.authUser!.userId);
+      const availableModelCredits = availableCreditsForBucket(poolCredits.creditBalances, creditBucket);
+      if (!reserveCreditFor(req.authUser!.userId, creditBucket, creditsUsed, poolCredits.creditBalances)) {
+        throw new Error(`当前可用于视频的积分不足，需要 ${creditsUsed}，可用 ${Math.max(0, availableModelCredits - reservedCreditAmount(req.authUser!.userId, creditBucket))}`);
+      }
+      reservedVideoCredit = { bucket: creditBucket, amount: creditsUsed };
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, resolution }, requestId);
+
+      const persistedReferenceImages = await persistReferenceImages(referenceImagesInput, modelId);
+      const temporaryReferenceImages = persistedReferenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput, modelId);
+      const temporaryReferenceVideos = await persistTemporaryReferenceMedia(referenceVideosInput, 'video');
+      const temporaryReferenceAudios = await persistTemporaryReferenceMedia(referenceAudiosInput, 'audio');
+      const modelReferenceImages = [
+        ...referenceImagesInput
+          .map((item) => normalizeString(item.data))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...persistedReferenceImages
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...temporaryReferenceImages
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+      ];
+      const uniqueModelReferenceImages = Array.from(new Set(modelReferenceImages));
+      const uniqueModelReferenceVideos = Array.from(new Set([
+        ...referenceVideosInput
+          .map((item) => normalizeString(item.data))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...temporaryReferenceVideos
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+      ]));
+      const uniqueModelReferenceAudios = Array.from(new Set([
+        ...referenceAudiosInput
+          .map((item) => normalizeString(item.data))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+        ...temporaryReferenceAudios
+          .map((item) => toPublicAssetUrl(req, item))
+          .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
+      ]));
+
+      const createdAt = nowIso();
+      let videoPath = '';
+      let apiRequestMs = 0;
+      requestContext = {
+        userId: req.authUser!.userId,
+        username: req.authUser!.username,
+        creditsUsed,
+        referenceImageTypes: extractReferenceImageTypes(referenceImagesInput),
+      };
+
+      try {
+        const apiRequestStartedAt = Date.now();
+        const result = await callVideoGeneration({
+          prompt,
+          resolution,
+          aspect,
+          seconds,
+          referenceImages: uniqueModelReferenceImages,
+          referenceVideos: uniqueModelReferenceVideos,
+          referenceAudios: uniqueModelReferenceAudios,
+          requestContext,
+        });
+        upstreamVideoSucceeded = true;
+        apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
+        // 上游已出片：先写成功诊断记录，后续落盘/扣款失败时按 requestId 回写失败。
+        const diagnosticRequestId = await tryRecordGenerationRequest({
+          modelId,
+          provider: 'Uselg',
+          configuration: `${resolution}/${seconds}s/video`,
+          durationMs: apiRequestMs,
+          success: true,
+          sourceModel: modelId,
+          prompt,
+          requestContext,
+        });
+        requestContext.successfulRequestId = diagnosticRequestId || undefined;
+        videoPath = await persistGeneratedVideo(result.buffer, result.contentType);
+        videoPersisted = Boolean(videoPath);
+        if (reservedVideoCredit) {
+          const charged = await debitUserCredits(
+            req.authUser!.userId,
+            reservedVideoCredit.bucket,
+            reservedVideoCredit.amount,
+          );
+          videoCreditsCharged = true;
+          chargedCreditsRemaining = charged.remainingCredits;
+          releaseCreditReservation(req.authUser!.userId, reservedVideoCredit.bucket, reservedVideoCredit.amount);
+          reservedVideoCredit = null;
+        }
+        if (diagnosticRequestId) {
+          try {
+            await updateGenerationRequestImage(diagnosticRequestId, videoPath);
+          } catch (error) {
+            console.warn('[video] failed to attach video to diagnostic request:', error);
+          }
+        }
+      } finally {
+        await cleanupTemporaryReferenceImages(temporaryReferenceImages);
+        await cleanupTemporaryReferenceImages(temporaryReferenceVideos);
+        await cleanupTemporaryReferenceImages(temporaryReferenceAudios);
+      }
+
+      const payload: GeneratedVideoPayload = {
+        prompt,
+        modelName: videoModelName(resolution),
+        resolution,
+        seconds,
+        videoPath,
+        referenceImages: persistedReferenceImages,
+        createdAt,
+      };
+
+      // 写历史：复用 generations 表，image_path 存视频 URL，model_id 以 minimax_h3 前缀标识视频。
+      try {
+        if (USE_SUPABASE) {
+          const db = await getSupabaseDb();
+          await withRecordingRetry(() => db.insertGeneration({
+            userId: req.authUser!.userId,
+            username: req.authUser!.username,
+            prompt,
+            modelId,
+            modelName: videoModelName(resolution),
+            dimensions: 'video',
+            imageSize: resolution,
+            imagePath: videoPath,
+            creditsUsed,
+            apiRequestMs,
+            referenceImages: persistedReferenceImages,
+            createdAt,
+            requestId,
+          }));
+          try {
+            await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
+          } catch (statsError) {
+            console.warn('[video] failed to update generation stats after history insert:', statsError);
+          }
+        } else {
+          await withRecordingRetry(() => withWriteDb((db) => {
+            ensureSchema(db);
+            db.run(
+              `
+                INSERT INTO generations (
+                  user_id, username, prompt, model_id, model_name, dimensions, image_size,
+                  image_path, credits_used, api_request_ms, reference_images, created_at, request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `,
+              [
+                req.authUser!.userId,
+                req.authUser!.username,
+                prompt,
+                modelId,
+                videoModelName(resolution),
+                'video',
+                resolution,
+                videoPath,
+                creditsUsed,
+                apiRequestMs,
+                serializeReferenceImages(persistedReferenceImages),
+                createdAt,
+                requestId,
+              ],
+            );
+          }));
+          try {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              db.run(
+                `
+                  INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
+                  VALUES (?, ?, 1, ?, ?)
+                  ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    generations_total = generations_total + 1,
+                    credits_total = credits_total + excluded.credits_total,
+                    updated_at = excluded.updated_at
+                `,
+                [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
+              );
+            });
+          } catch (statsError) {
+            console.warn('[video] failed to update generation stats after history insert:', statsError);
+          }
+        }
+      } catch (recordingError) {
+        console.error('[video] history recording failed after charge:', recordingError);
+      }
+
+      if (creditsUsed > 0) {
+        try {
+          if (USE_SUPABASE) {
+            const db = await getSupabaseDb();
+            await db.syncInviteCodeBalanceForUser(req.authUser!.userId);
+          } else {
+            await withWriteDb((db) => {
+              ensureSchema(db);
+              syncInviteCodeBalanceForUser(db, req.authUser!.userId);
+            });
+          }
+        } catch (syncError) {
+          console.warn('[video] failed to sync invite balance after success:', syncError);
+        }
+      }
+
+      setVideoJobTerminal(queuedJobId, {
+        status: 'succeeded',
+        video: payload,
+        creditsCharged: videoCreditsCharged,
+        creditsUsed: videoCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
+      res.json({ video: payload });
+    } catch (error) {
+      // 失败：只释放预留，从未扣过款，无需退款。
+      if (reservedVideoCredit) {
+        creditAudit('release', req.authUser!.userId, req.authUser!.username,
+          reservedVideoCredit.bucket, reservedVideoCredit.amount, { error: imageErrorText(error) || undefined }, requestId);
+        releaseCreditReservation(req.authUser!.userId, reservedVideoCredit.bucket, reservedVideoCredit.amount);
+        reservedVideoCredit = null;
+      }
+      const failureStage = resolveGenerationFailureStage({
+        upstreamSucceeded: upstreamVideoSucceeded,
+        imagePersisted: videoPersisted,
+        creditsCharged: videoCreditsCharged,
+      });
+      const rawMessage = error instanceof Error ? error.message : 'Video generation failed';
+      const status = getPublicApiErrorStatus(rawMessage);
+      const upstreamFailureMessage = publicImageErrorMessage(rawMessage);
+      const failureMessage = generationFailureMessage(failureStage, upstreamFailureMessage);
+      const failureDetail = generationFailureDetail(failureStage, imageErrorDetail(error));
+      const orphanRequestId = requestContext?.successfulRequestId;
+      console.error(`[video-failed] stage=${failureStage} requestId=${orphanRequestId || '-'} : ${failureDetail}`);
+      console.error('[video]', error);
+      if (orphanRequestId) {
+        try {
+          await markGenerationRequestFailed(
+            orphanRequestId,
+            failureMessage,
+            { preserveCredits: videoCreditsCharged, detail: failureDetail },
+          );
+        } catch (markError) {
+          console.warn('[video] failed to mark orphaned request as failed:', markError);
+        }
+      }
+      setVideoJobTerminal(queuedJobId, {
+        status: 'failed',
+        error: failureMessage,
+        creditsCharged: videoCreditsCharged,
+        creditsUsed: videoCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
+      res.status(status).json({
+        error: failureMessage,
+        creditsCharged: videoCreditsCharged,
+        creditsUsed: videoCreditsCharged ? (requestContext?.creditsUsed ?? 0) : 0,
+        creditsRemaining: chargedCreditsRemaining,
+      });
+    }
+  });
 
   app.get('/api/user/history', requireAuth, async (req, res) => {
     const userId = req.authUser!.userId;
@@ -12155,6 +13268,139 @@ async function start() {
     }
   });
 
+  // ─── 提示词模版（我的模版） ───────────────────────────────────────
+
+  app.get('/api/prompt-templates', requireAuth, async (req, res) => {
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const templates = await db.getPromptTemplates(userId);
+        res.json({
+          templates: templates.map((row) => ({
+            id: String(row.id),
+            name: row.name,
+            prompt: row.prompt,
+            createdAt: row.created_at,
+          })),
+        });
+        return;
+      }
+
+      const templates = await withReadDb((db) => {
+        ensureSchema(db);
+        return runQuery<Record<string, unknown>>(
+          db,
+          `
+            SELECT id, name, prompt, created_at
+            FROM prompt_templates
+            WHERE user_id = ?
+            ORDER BY id DESC
+          `,
+          [userId],
+        );
+      });
+
+      res.json({
+        templates: templates.map((row) => ({
+          id: String(row.id ?? ''),
+          name: String(row.name ?? ''),
+          prompt: String(row.prompt ?? ''),
+          createdAt: String(row.created_at ?? ''),
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Fetch prompt templates failed' });
+    }
+  });
+
+  app.post('/api/prompt-templates', requireAuth, async (req, res) => {
+    const userId = req.authUser!.userId;
+    const name = normalizeString(req.body?.name).slice(0, 60);
+    const prompt = normalizeString(req.body?.prompt).slice(0, 8000);
+
+    if (!name) {
+      res.status(400).json({ error: '模版名称不能为空' });
+      return;
+    }
+    if (!prompt) {
+      res.status(400).json({ error: '提示词不能为空' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const template = await db.insertPromptTemplate({ userId, name, prompt });
+        res.json({
+          template: {
+            id: String(template.id),
+            name: template.name,
+            prompt: template.prompt,
+            createdAt: template.created_at,
+          },
+        });
+        return;
+      }
+
+      const template = await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          `
+            INSERT INTO prompt_templates (user_id, name, prompt, created_at)
+            VALUES (?, ?, ?, ?)
+          `,
+          [userId, name, prompt, nowIso()],
+        );
+
+        return getOne<Record<string, unknown>>(
+          db,
+          `
+            SELECT id, name, prompt, created_at
+            FROM prompt_templates
+            WHERE id = ?
+          `,
+          [lastInsertId(db)],
+        );
+      });
+
+      res.json({
+        template: template
+          ? {
+              id: String(template.id ?? ''),
+              name: String(template.name ?? ''),
+              prompt: String(template.prompt ?? ''),
+              createdAt: String(template.created_at ?? ''),
+            }
+          : null,
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Create prompt template failed' });
+    }
+  });
+
+  app.delete('/api/prompt-templates/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const userId = req.authUser!.userId;
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        await db.deletePromptTemplate(id, userId);
+        res.json({ ok: true });
+        return;
+      }
+
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run('DELETE FROM prompt_templates WHERE id = ? AND user_id = ?', [id, userId]);
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Delete prompt template failed' });
+    }
+  });
+
   // 鈹€鈹€鈹€ 闈欐€佹枃浠舵湇鍔★紙浠呮湰鍦扮幆澧冿級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   if (hasDistBuild) {
@@ -12232,6 +13478,11 @@ async function start() {
       setInterval(() => {
         void runImageRetentionCleanup('interval');
       }, IMAGE_CLEANUP_INTERVAL_MS);
+      // 后台对账：单进程（PM2 scale=1）内定时幂等续查「不确定」的异步任务，
+      // 避免上游迟到出图并计费、而本地已退款造成的成本泄漏。
+      setInterval(() => {
+        void generationReconciler.tick();
+      }, GENERATION_RECONCILIATION_INTERVAL_MS);
     }
     if (!R2_STORAGE) setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });

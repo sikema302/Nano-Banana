@@ -102,6 +102,15 @@ CREATE TABLE IF NOT EXISTS canvases (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 用户提示词模版（我的模版）
+CREATE TABLE IF NOT EXISTS prompt_templates (
+  id BIGINT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 创建索引优化查询
 CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id);
 CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations(created_at DESC);
@@ -110,6 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_generation_requests_created_at ON generation_requ
 CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id);
 CREATE INDEX IF NOT EXISTS idx_images_category ON images(user_id, category);
 CREATE INDEX IF NOT EXISTS idx_canvases_user_id ON canvases(user_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_user_id ON prompt_templates(user_id);
 CREATE INDEX IF NOT EXISTS idx_invite_codes_redeemed ON invite_codes(redeemed_by);
 
 -- 创建 updated_at 自动更新触发器
@@ -140,6 +150,7 @@ ALTER TABLE generations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generation_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE canvases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prompt_templates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invite_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
 
@@ -157,6 +168,9 @@ CREATE POLICY "Users can view own images" ON images
   FOR SELECT USING (true);
 
 CREATE POLICY "Users can view own canvases" ON canvases
+  FOR SELECT USING (true);
+
+CREATE POLICY "Users can view own prompt_templates" ON prompt_templates
   FOR SELECT USING (true);
 
 CREATE POLICY "Users can view invite codes" ON invite_codes

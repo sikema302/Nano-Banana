@@ -16,6 +16,8 @@ export type ImageGenerationInput = {
     username: string;
     creditsUsed: number;
     successfulRequestId?: string;
+    /** 「不确定」尝试写入的 generation_requests 行 id，供后台迟到对账翻转状态。 */
+    indeterminateRequestId?: string;
     referenceImageTypes?: string[];
   };
 };
@@ -546,8 +548,10 @@ export function createImageProviderRouter(options: RouterOptions) {
           logger.warn(`[image-provider] ${upstreamModel} result is uncertain; failover suppressed`);
           const uncertainError = new Error(
             '上游生成结果暂时无法确认，为避免重复扣费，本次不会自动切换接口；本次积分将自动退回，请稍后重试。',
-          ) as Error & { safeToFallback: boolean };
+          ) as Error & { safeToFallback: boolean; indeterminate?: boolean };
           uncertainError.safeToFallback = false;
+          // 标记为「不确定」：调用方据此进入后台续查判断（此处无 taskId，仅做归因标记）。
+          uncertainError.indeterminate = true;
           throw uncertainError;
         }
         if (junliaiOnly && !allowsGptImage25Chain) {

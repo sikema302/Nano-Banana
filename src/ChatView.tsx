@@ -207,7 +207,7 @@ export default function ChatView({ loggedIn, username, creditsRemaining = 0, onL
         <button className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-3.5 text-sm font-black text-white transition hover:bg-white/[0.06]" onClick={() => void createConversation()}>
           <MessageSquarePlus size={18} /> 新对话
         </button>
-        <div className="custom-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <div className="no-scrollbar mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {conversations.map((item) => (
             <div key={item.id} className={`group flex items-center rounded-xl ${active?.id === item.id ? 'bg-white/[0.12]' : 'hover:bg-white/[0.05]'}`}>
               <button className="min-w-0 flex-1 truncate px-4 py-3 text-left text-sm text-zinc-300" onClick={() => { setActiveId(item.id); setSidebarOpen(false); }}>{item.title}</button>
@@ -225,7 +225,7 @@ export default function ChatView({ loggedIn, username, creditsRemaining = 0, onL
           <button className="btn-ghost ml-auto min-h-0 p-1.5 text-zinc-500 hover:text-white" type="button" title="长期记忆" aria-label="打开长期记忆" onClick={() => void openMemory()}><Brain size={18} /></button>
         </header>
 
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
           {!loggedIn ? (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center"><h1 className="text-3xl font-black text-white">登录后开始对话</h1><p className="mt-3 text-sm text-zinc-500">会话会跟随账号同步到不同设备。</p><button className="btn-primary mt-6 px-6 py-3" onClick={onLogin}>立即登录</button></div>
           ) : initializing ? (
@@ -275,7 +275,7 @@ export default function ChatView({ loggedIn, username, creditsRemaining = 0, onL
               <button className="btn-ghost min-h-0 shrink-0 p-1 text-zinc-500 hover:text-white" type="button" aria-label="关闭" onClick={() => setMemoryOpen(false)}><X size={20} /></button>
             </header>
 
-            <div className="custom-scrollbar min-h-0 overflow-y-auto px-4 py-4 sm:px-5">
+            <div className="no-scrollbar min-h-0 overflow-y-auto px-4 py-4 sm:px-5">
               <button className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-[#101010] px-4 py-3 text-left transition hover:border-white/20" type="button" onClick={() => void toggleMemory()} disabled={memoryLoading}>
                 <div className="min-w-0 flex-1">
                   <strong className="block text-sm text-white">允许跨对话使用记忆</strong>

@@ -8,6 +8,7 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronUp,
+  Clapperboard,
   Code2 as CodeIcon,
   Copy,
   Download,
@@ -76,6 +77,7 @@ import {
   fetchUserHistory,
   fetchUserImages,
   fetchGenerateImageJob,
+  fetchGenerateVideoJob,
   getStoredUser,
   login,
   loginWithInvite,
@@ -98,6 +100,7 @@ import {
   updateAdminProviderRouting,
   updateAdminModelCreditPricing,
   startGenerateImageJob,
+  startGenerateVideoJob,
   type AdminDashboardStats,
   type AdminGenerationRanking,
   type AdminRecordsStats,
@@ -105,6 +108,7 @@ import {
   type CreditSummary,
   type CreditBalances,
   type GeneratedImagePayload,
+  type GeneratedVideoPayload,
   type GenerationJobInfo,
   type GenerationRecord,
   type ImageCategory,
@@ -131,6 +135,10 @@ import {
 import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
+  getConfiguredVideoCredits,
+  getVideoReferenceImageSurcharge,
+  VIDEO_REFERENCE_IMAGE_FREE_COUNT,
+  VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS,
   type ModelCreditPricing,
 } from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
@@ -146,6 +154,7 @@ import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate
 import ChatView from './ChatView';
 import BatchCreateView from './BatchCreateView';
 import CanvasView from './CanvasView';
+import PromptTemplates from './PromptTemplates';
 
 interface UploadPreview {
   id: string;
@@ -623,14 +632,22 @@ function createActivityPreviewCount() {
 }
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
-// 生成任务在服务端异步执行；轮询命中网络/网关抖动时不应过早放弃。
-// 用一个宽松的整体上限兜底，避免因瞬时抖动把「后台其实还在正常生成」的任务误判为失败。
-const GENERATION_JOB_POLL_MAX_MS = 6 * 60_000;
+// 生成任务在服务端异步执行；只要 job 仍是 queued/processing 就持续轮询，不因固定 deadline 抢判超时
+// （后端可能仍在换渠道 / 走迟到对账）。这里只保留一个很长的「安全上限」兜底，用于兜住
+// 远端 job 已被 TTL 清理、接口持续 404 的极端情况。
+const GENERATION_JOB_POLL_MAX_MS = 60 * 60_000;
 const SHOW_CREATION_ACTIVITY = true;
 const SHOW_PROMO_COUPON_HEADER_ENTRY = false;
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+// 失败文案只能反映后端明确给出的扣费结论；扣费状态未知时不得声称「未扣费」。
+function creditChargeSuffix(creditsCharged: unknown): string {
+  if (creditsCharged === false) return '（本次未扣除积分）';
+  if (creditsCharged === true) return '（本次已扣除积分）';
+  return '（扣费状态以最终账单为准）';
 }
 
 function getFriendlyJobProgress(job: GenerationJobInfo, fallbackStartedAt: number) {
@@ -719,44 +736,6 @@ function getModelTheme(modelId: string) {
 
 function getModelLogo(modelId: string) {
   return modelId === 'Nano_Banana_Pro' ? '/images/model-nano-banana.svg' : '/images/model-gpt.svg';
-}
-
-function CreditsSummary({
-  user,
-  selectedModel,
-  creditsCost,
-  creditsRemaining,
-  onOpenPurchase,
-}: {
-  user: UserInfo | null;
-  selectedModel: ModelInfo | null;
-  creditsCost: number;
-  creditsRemaining: number;
-  onOpenPurchase: () => void;
-}) {
-  const insufficientCredits = Boolean(user) && creditsRemaining < creditsCost;
-
-  return (
-    <div className="space-y-1 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <span className="font-semibold text-zinc-300">
-          使用积分: <span className="text-white">{creditsCost}</span>/<span className="text-white">{creditsRemaining ?? '--'}</span>
-        </span>
-        <button
-          className="min-h-0 p-0 text-[12px] font-black text-cyan-400 transition hover:text-cyan-300"
-          type="button"
-          onClick={onOpenPurchase}
-        >
-          点击在线购买积分(25%优惠)
-        </button>
-      </div>
-      {selectedModel ? (
-        <p className={`text-sm ${insufficientCredits ? 'text-zinc-300' : 'text-zinc-400'}`}>
-          {insufficientCredits ? '当前积分已用完，暂时无法继续生成图片。' : `当前模型 ${selectedModel.name}，积分充足可继续生成图片。`}
-        </p>
-      ) : null}
-    </div>
-  );
 }
 
 function StageCard({
@@ -975,7 +954,7 @@ function ContinuousEditPanel({
         </button>
       </div>
 
-      <div className="custom-scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3">
+      <div className="no-scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3">
         <div className="rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-[11px] leading-5 text-zinc-400">
           图片已准备好。你不需要下载或重新上传，告诉我下一步想改什么即可。
         </div>
@@ -2032,7 +2011,7 @@ function ApiDocsView({
                 </div>
               </div>
             </section>
-            <section id="quick-start" className="scroll-mt-28 space-y-5">
+            <section id="quick-start" className="order-1 scroll-mt-28 space-y-5">
               <section className="rounded-2xl border border-white/10 bg-[#11131a] p-4 md:p-5">
                 <div className="border-b border-white/10 pb-4">
                   <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -2333,7 +2312,7 @@ Content-Type: application/json`)}</pre>
               );
             })}
 
-            <section id="pricing" className="scroll-mt-28 overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+            <section id="pricing" className="order-3 scroll-mt-28 overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
               <div className="flex items-center gap-4 border-b border-white/10 px-5 py-5">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/10 text-sky-200"><WalletCards size={20} /></div>
                 <h2 className="text-[1.15rem] font-semibold text-white">价格说明</h2>
@@ -2973,6 +2952,9 @@ function AdminModelCreditPanel({
   const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
   };
+  const setVideo = (key: keyof ModelCreditPricing['video'], value: number) => {
+    setDraft((current) => ({ ...current, video: { ...current.video, [key]: value } }));
+  };
   const creditInput = (value: number, onChange: (value: number) => void) => (
     <input
       className="input w-28 text-right font-black"
@@ -3056,6 +3038,16 @@ function AdminModelCreditPanel({
             {row('2K', '标准档位', creditInput(draft.nanoBanana.twoK, (value) => setBanana('twoK', value)))}
             {row('4K', '高清档位', creditInput(draft.nanoBanana.fourK, (value) => setBanana('fourK', value)))}
             {row('AI 增强附加', '开启中文文字增强时额外收取', creditInput(draft.nanoBanana.enhancement, (value) => setBanana('enhancement', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-emerald-100">视频生成（MiniMax H3）</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；按「每秒积分 × 时长秒数」计费。</p>
+          <div className="mt-3">
+            {row('768p', '每秒 · minimax_h3-768p · 1376×768', creditInput(draft.video.p768, (value) => setVideo('p768', value)))}
+            {row('1080p', '每秒 · minimax_h3-1080p · 1920×1080', creditInput(draft.video.p1080, (value) => setVideo('p1080', value)))}
+            {row('2K', '每秒 · minimax_h3-2K', creditInput(draft.video.twoK, (value) => setVideo('twoK', value)))}
           </div>
         </section>
       </div>
@@ -4852,14 +4844,49 @@ function AdminView({
   );
 }
 
+// 视频任务位：右侧 2×2 网格中每个卡片是一个独立生成任务，
+// 各有自己的提示词与状态（结构对齐 visionary.beer/videos）。
+type VideoSlotStatus = 'idle' | 'queued' | 'processing' | 'succeeded' | 'failed';
+
+type VideoSlot = {
+  id: string;
+  prompt: string;
+  status: VideoSlotStatus;
+  progress: number;
+  jobId?: string;
+  video?: GeneratedVideoPayload;
+  error?: string;
+};
+
+function createEmptyVideoSlots(): VideoSlot[] {
+  return Array.from({ length: 4 }, (_, index) => ({ id: `vidslot-${index}`, prompt: '', status: 'idle' as const, progress: 0 }));
+}
+
+const VIDEO_ASPECT_OPTIONS: Array<'16:9' | '9:16' | '1:1' | '21:9'> = ['16:9', '9:16', '1:1', '21:9'];
+
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
+  const [videoPrompt, setVideoPrompt] = useState('');
+  const [videoResolution, setVideoResolution] = useState<'768p' | '1080p' | '2K'>('768p');
+  const [videoAspect, setVideoAspect] = useState<'16:9' | '9:16' | '1:1' | '21:9'>('16:9');
+  const [videoSeconds, setVideoSeconds] = useState(5);
+  const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
+  const [videoRefVideos, setVideoRefVideos] = useState<UploadPreview[]>([]);
+  const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
+  const videoRefVideoInputRef = useRef<HTMLInputElement>(null);
+  const videoRefAudioInputRef = useRef<HTMLInputElement>(null);
+  const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
+  const [videoDragging, setVideoDragging] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
   const [gptImagePricing, setGptImagePricing] = useState<GptImagePricing>(DEFAULT_GPT_IMAGE_PRICING);
   const [modelCreditPricing, setModelCreditPricing] = useState<ModelCreditPricing>(DEFAULT_MODEL_CREDIT_PRICING);
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
+  const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoResolution) * videoSeconds;
+  // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关。
+  const videoReferenceSurcharge = getVideoReferenceImageSurcharge(videoReferences.length);
+  const videoTotalCreditCost = videoCreditCost + videoReferenceSurcharge;
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -5302,6 +5329,117 @@ export default function App() {
     const maxRefBytes = maxRefMB * 1024 * 1024;
     const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, maxRefBytes, maxRefMB)));
     setReferences((current) => [...current, ...next].slice(0, getMaxReferences(selectedModel)));
+  }
+
+  async function appendVideoReferenceFiles(files: File[]) {
+    if (files.length === 0) return;
+    const maxRef = 9;
+    const remaining = Math.max(0, maxRef - videoReferences.length);
+    if (remaining === 0) {
+      setNotice('视频最多上传 9 张参考图');
+      return;
+    }
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 25 * 1024 * 1024, 25)));
+    setVideoReferences((current) => [...current, ...next].slice(0, maxRef));
+  }
+
+  // 上游 MiniMax H3 支持参考视频 / 参考音频（各最多 3 段，单文件 ≤50MB，需公网可读 URL，由服务端转存临时文件）。
+  async function appendVideoRefMediaFiles(files: File[], kind: 'video' | 'audio') {
+    const filtered = files.filter((file) => file.type.startsWith(`${kind}/`));
+    if (filtered.length === 0) {
+      setNotice(kind === 'video' ? '请选择视频文件' : '请选择音频文件');
+      return;
+    }
+    const maxCount = 3;
+    const currentList = kind === 'video' ? videoRefVideos : videoRefAudios;
+    const remaining = Math.max(0, maxCount - currentList.length);
+    if (remaining === 0) {
+      setNotice(kind === 'video' ? '参考视频最多上传 3 段' : '参考音频最多上传 3 段');
+      return;
+    }
+    const accepted = filtered.slice(0, remaining);
+    const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
+    if (kind === 'video') {
+      setVideoRefVideos((current) => [...current, ...next].slice(0, maxCount));
+    } else {
+      setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
+    }
+  }
+
+  function updateVideoSlot(slotId: string, patch: Partial<VideoSlot>) {
+    setVideoSlots((current) => current.map((slot) => (slot.id === slotId ? { ...slot, ...patch } : slot)));
+  }
+
+  async function runVideoSlotJob(slotId: string, jobId: string) {
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      try {
+        const { job } = await fetchGenerateVideoJob(jobId);
+        if (job.status === 'succeeded' && job.video) {
+          updateVideoSlot(slotId, { status: 'succeeded', progress: 100, video: job.video });
+          if (typeof job.creditsRemaining === 'number') {
+            const nextCredits = job.creditsRemaining;
+            setUser((current) => (current ? { ...current, creditsRemaining: nextCredits } : current));
+          }
+          void loadHistory();
+          return;
+        }
+        if (job.status === 'failed') {
+          updateVideoSlot(slotId, { status: 'failed', error: job.error || '视频生成失败' });
+          return;
+        }
+        updateVideoSlot(slotId, {
+          status: job.status === 'queued' ? 'queued' : 'processing',
+          progress: Math.max(4, job.progress || 0),
+        });
+      } catch {
+        // 网络抖动时继续轮询，循环次数有上限，不会永久挂起
+      }
+      await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
+    }
+    updateVideoSlot(slotId, { status: 'failed', error: '视频生成耗时较长，请稍后在历史记录中查看结果' });
+  }
+
+  async function startVideoSlot(slotId: string, rawPrompt: string) {
+    const promptText = rawPrompt.trim();
+    if (!promptText) {
+      setNotice('请输入视频描述');
+      return;
+    }
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    if (getAvailableUserCredits(user, 'general') < videoTotalCreditCost) {
+      setNotice(`积分不足：生成 ${videoResolution} 视频需要 ${videoTotalCreditCost} 积分`);
+      return;
+    }
+    updateVideoSlot(slotId, { prompt: promptText, status: 'queued', progress: 4, video: undefined, error: undefined, jobId: undefined });
+    try {
+      const { job } = await startGenerateVideoJob({
+        submissionId: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        prompt: promptText,
+        resolution: videoResolution,
+        aspect: videoAspect,
+        seconds: videoSeconds,
+        reference_images: videoReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        reference_videos: videoRefVideos.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        reference_audios: videoRefAudios.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+      });
+      updateVideoSlot(slotId, { jobId: job.id });
+      await runVideoSlotJob(slotId, job.id);
+    } catch (error) {
+      updateVideoSlot(slotId, { status: 'failed', error: error instanceof Error ? error.message : '视频生成失败' });
+    }
+  }
+
+  async function handleVideoSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const slot = videoSlots.find((item) => item.status === 'idle');
+    if (!slot) {
+      setNotice('4 个任务位都在使用中，请先生成完成或清空一个任务位');
+      return;
+    }
+    await startVideoSlot(slot.id, videoPrompt);
   }
 
   function commitGeneratedImages(nextImages: DisplayImage[]) {
@@ -6060,7 +6198,9 @@ export default function App() {
         throw new Error(job.error || '生成失败');
       }
       if (Date.now() > deadlineMs) {
-        throw new Error('生成超时，请稍后重试');
+        // 安全上限兜底：job 仍是 queued/processing 说明服务端任务尚未终态（可能仍在换渠道/对账）。
+        // 这里给出中性文案，绝不声称未扣费，避免与后端迟到成功的结算口径冲突。
+        throw new Error('生成仍在进行中，耗时较长，请稍后在历史记录中查看结果');
       }
 
       await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
@@ -6238,7 +6378,7 @@ export default function App() {
       const noticeMessage =
         generatedImages.length > 0
           ? `已成功生成 ${generatedImages.length} 张图片（已扣除对应积分），后续请求失败：${errorMessage}`
-          : `${errorMessage}（本次未扣除积分）`;
+          : `${errorMessage}${creditChargeSuffix((error as { creditsCharged?: boolean } | null)?.creditsCharged)}`;
 
       if (generatedImages.length > 0) {
         commitGeneratedImages(generatedImages);
@@ -6309,7 +6449,7 @@ export default function App() {
       void loadHistory();
       if (user.isAdmin) void loadAdminSection('dashboard');
     } catch (error) {
-      setGenerationError(`${error instanceof Error ? error.message : '连续编辑失败'}（本次未扣除积分）`);
+      setGenerationError(`${error instanceof Error ? error.message : '连续编辑失败'}${creditChargeSuffix((error as { creditsCharged?: boolean } | null)?.creditsCharged)}`);
     } finally {
       setLoading(false);
       setGenerationProgress(null);
@@ -6495,6 +6635,11 @@ export default function App() {
 
   function downloadDisplayImage(item: DisplayImage | SavedImage | GenerationRecord) {
     void runDownload(item.imageUrl);
+  }
+
+  function downloadVideoSlot(slot: VideoSlot) {
+    const url = slot.video?.videoPath;
+    if (url) void runDownload(url);
   }
 
   async function downloadBatchImages(items: Array<DisplayImage | SavedImage | GenerationRecord>) {
@@ -6905,32 +7050,414 @@ export default function App() {
         <div
           className={
             activeTab === 'create'
-              ? 'min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 lg:grid lg:grid-cols-[2fr_3fr_2fr] lg:space-y-0 lg:overflow-hidden lg:px-0 lg:py-0'
-              : 'min-h-0 flex-1 overflow-auto lg:overflow-hidden'
+              ? 'no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 lg:grid lg:grid-cols-[2fr_3fr_2fr] lg:space-y-0 lg:overflow-hidden lg:px-0 lg:py-0'
+              : 'no-scrollbar min-h-0 flex-1 overflow-auto lg:overflow-hidden'
           }
         >
           {activeTab === 'create' && creationMode === 'video' ? (
-            <section className="app-panel flex min-h-0 flex-col items-center justify-center gap-3 px-6 py-16 text-center lg:col-span-3 lg:h-full lg:rounded-none lg:border-0">
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-fuchsia-400/25 bg-[linear-gradient(135deg,rgba(168,85,247,0.18),rgba(236,72,153,0.13))] text-fuchsia-100">
-                <Film size={26} />
-              </span>
-              <h2 className="text-lg font-black text-white">生视频功能调整中</h2>
-              <p className="max-w-sm text-sm leading-6 text-zinc-400">
-                视频模型与接口正在重新配置，暂时无法生成视频。可先返回生图继续创作。
-              </p>
-              <button
-                className="btn-primary mt-1 min-w-36 justify-center gap-2 px-5 py-2.5 text-sm font-bold"
-                type="button"
-                onClick={() => setCreationMode('image')}
+            <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-3 py-3 lg:col-span-3 lg:h-full lg:grid lg:grid-cols-[380px_1fr] lg:gap-5 lg:overflow-hidden lg:px-0 lg:py-0">
+              <section
+                className="app-panel flex min-h-0 flex-col overflow-hidden px-3 pb-4 pt-3 lg:h-full lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2"
+                onPaste={(event) => {
+                  const clipboardFiles = event.clipboardData?.files;
+                  const images: File[] = [];
+                  if (clipboardFiles) {
+                    for (let index = 0; index < clipboardFiles.length; index += 1) {
+                      const file = clipboardFiles.item(index);
+                      if (file && file.type.startsWith('image/')) images.push(file);
+                    }
+                  }
+                  if (images.length > 0) {
+                    event.preventDefault();
+                    void appendVideoReferenceFiles(images);
+                  }
+                }}
               >
-                <ImagePlus size={16} />
-                返回生图
-              </button>
-            </section>
+                <div className="grid shrink-0 grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
+                  <button
+                    className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-black text-zinc-500 transition hover:text-zinc-200"
+                    type="button"
+                    onClick={() => setCreationMode('image')}
+                  >
+                    <ImagePlus size={13} />
+                    生图
+                  </button>
+                  <button
+                    className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
+                    type="button"
+                  >
+                    <Film size={13} />
+                    生视频
+                  </button>
+                </div>
+
+                <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleVideoSubmit}>
+                  <div className="no-scrollbar mt-2 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                  <section className="space-y-1.5">
+                    <div className="px-0.5 text-[10px] font-bold text-zinc-400">模型选择</div>
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-orange-400/40 bg-orange-500/15 px-3 py-2">
+                      <Film size={15} className="text-orange-300" />
+                      <span className="text-[13px] font-black text-orange-100">MiniMax H3</span>
+                    </div>
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
+                      <span>上传参考图（可选）</span>
+                      <span className="shrink-0 text-[10px] text-zinc-500">{videoReferences.length} / 9 · 单张 ≤25MB</span>
+                    </div>
+                    <div
+                      className={
+                        videoDragging
+                          ? 'card bg-transparent! p-1.5 shadow-[inset_0_0_0_1px_rgba(124,58,237,0.18)]'
+                          : 'card bg-transparent! p-1.5'
+                      }
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        setVideoDragging(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setVideoDragging(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        if (event.currentTarget === event.target) {
+                          setVideoDragging(false);
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setVideoDragging(false);
+                        void appendVideoReferenceFiles(Array.from(event.dataTransfer.files || []));
+                      }}
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <label className="btn-secondary flex h-[48px] w-[48px] cursor-pointer flex-col items-center justify-center rounded-xl border-dashed p-0 text-zinc-500 hover:text-white">
+                          <input
+                            className="hidden"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={(event) => {
+                              void appendVideoReferenceFiles(Array.from(event.target.files || []));
+                              event.target.value = '';
+                            }}
+                          />
+                          <ImagePlus size={15} />
+                          <span className="mt-0.5 text-[9px] font-bold">添加</span>
+                        </label>
+
+                        {videoReferences.map((item) => (
+                          <button
+                            key={item.id}
+                            className="group relative h-[48px] w-[48px] overflow-hidden rounded-xl border border-white/10 bg-[#101010]"
+                            type="button"
+                            onClick={() => setVideoReferences((current) => current.filter((ref) => ref.id !== item.id))}
+                          >
+                            <img
+                              alt={item.name}
+                              className="h-full w-full object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75"
+                              src={item.previewUrl}
+                            />
+                            <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
+                              删除
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
+                      <span>
+                        参考音频
+                        <span className="ml-1 text-zinc-500">（可选）</span>
+                      </span>
+                      <span>{videoRefAudios.length} / 3</span>
+                    </div>
+                    <input
+                      ref={videoRefAudioInputRef}
+                      accept="audio/*"
+                      className="hidden"
+                      multiple
+                      type="file"
+                      onChange={(event) => {
+                        void appendVideoRefMediaFiles(Array.from(event.target.files || []), 'audio');
+                        event.target.value = '';
+                      }}
+                    />
+                    <button
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
+                      type="button"
+                      onClick={() => videoRefAudioInputRef.current?.click()}
+                    >
+                      <Music size={13} />
+                      添加音频
+                    </button>
+                    {videoRefAudios.length > 0 ? (
+                      <div className="space-y-1">
+                        {videoRefAudios.map((item, index) => (
+                          <div
+                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
+                            key={`${item.id}-${index}`}
+                          >
+                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
+                            <button
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
+                              title="移除"
+                              type="button"
+                              onClick={() => setVideoRefAudios((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            >
+                              <X size={11} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
+                      <span>
+                        参考视频
+                        <span className="ml-1 text-zinc-500">（可选）</span>
+                      </span>
+                      <span>{videoRefVideos.length} / 3</span>
+                    </div>
+                    <input
+                      ref={videoRefVideoInputRef}
+                      accept="video/*"
+                      className="hidden"
+                      multiple
+                      type="file"
+                      onChange={(event) => {
+                        void appendVideoRefMediaFiles(Array.from(event.target.files || []), 'video');
+                        event.target.value = '';
+                      }}
+                    />
+                    <button
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
+                      type="button"
+                      onClick={() => videoRefVideoInputRef.current?.click()}
+                    >
+                      <Clapperboard size={13} />
+                      添加视频
+                    </button>
+                    {videoRefVideos.length > 0 ? (
+                      <div className="space-y-1">
+                        {videoRefVideos.map((item, index) => (
+                          <div
+                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
+                            key={`${item.id}-${index}`}
+                          >
+                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
+                            <button
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
+                              title="移除"
+                              type="button"
+                              onClick={() => setVideoRefVideos((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            >
+                              <X size={11} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1 px-0.5 text-[10px] font-bold text-zinc-400">
+                      <span className="flex flex-wrap items-center gap-2">
+                        模型提示词
+                        <PromptTemplates
+                          getInitialPrompt={() => videoPrompt}
+                          onApply={(value) => setVideoPrompt(value.slice(0, 10000))}
+                        />
+                        <a
+                          className="hidden items-center gap-1 text-amber-400 underline-offset-2 transition hover:underline"
+                          href="https://uselg.top/docs?model=minimax_h3-768p&group_id=105&offer_id=media_968dec6b6438f8aa66083edb64683a79"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <BookOpen size={11} />
+                          MiniMax H3模型提示词指南
+                        </a>
+                      </span>
+                      <span className="text-zinc-500">{videoPrompt.length} / 10000</span>
+                    </div>
+                    <textarea
+                      className="input min-h-[96px] w-full resize-none bg-transparent! px-3 py-2.5 text-[10px] leading-4"
+                      placeholder="描述场景、人物、镜头运动与声音..."
+                      maxLength={10000}
+                      value={videoPrompt}
+                      onChange={(event) => setVideoPrompt(event.target.value)}
+                    />
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="px-0.5 text-[10px] font-bold text-zinc-400">清晰度</div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['768p', '1080p', '2K'] as Array<'768p' | '1080p' | '2K'>).map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`flex items-center justify-center rounded-lg border px-2 py-2.5 text-center text-[13px] font-black transition ${videoResolution === id ? 'border-transparent bg-white text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)]' : 'border-white/10 bg-black/20 text-zinc-400 hover:border-white/25 hover:text-zinc-200'}`}
+                          onClick={() => setVideoResolution(id)}
+                        >
+                          {id}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="px-0.5 text-[10px] font-bold text-zinc-400">画面比例</div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {VIDEO_ASPECT_OPTIONS.map((aspect) => (
+                        <button
+                          key={aspect}
+                          type="button"
+                          className={`flex items-center justify-center rounded-lg border px-1 py-2 text-center text-[12px] font-bold transition ${videoAspect === aspect ? 'border-transparent bg-white text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)]' : 'border-white/10 bg-black/20 text-zinc-300 hover:border-white/25 hover:text-white'}`}
+                          onClick={() => setVideoAspect(aspect)}
+                        >
+                          {aspect}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="px-0.5 text-[10px] font-bold text-zinc-400">视频时长</div>
+                    <div className="grid grid-cols-6 gap-1.5">
+                      {Array.from({ length: 12 }, (_, index) => index + 4).map((seconds) => (
+                        <button
+                          key={seconds}
+                          type="button"
+                          className={`flex items-center justify-center rounded-lg border py-1.5 text-[12px] font-bold transition ${videoSeconds === seconds ? 'border-transparent bg-white text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)]' : 'border-white/10 bg-black/20 text-zinc-400 hover:border-white/25 hover:text-zinc-200'}`}
+                          onClick={() => setVideoSeconds(seconds)}
+                        >
+                          {seconds}s
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                  </div>
+
+                  <div className="mt-3 shrink-0 space-y-3 border-t border-white/8 pt-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-zinc-400">
+                      <span>
+                        使用积分：<span className="text-white">{videoTotalCreditCost}</span>/
+                        <span className="text-white">{getAvailableUserCredits(user, 'general')}</span>
+                        {videoReferenceSurcharge > 0 ? (
+                          <span className="text-amber-300/90">
+                            （含参考图加价 +{videoReferenceSurcharge}：前 {VIDEO_REFERENCE_IMAGE_FREE_COUNT} 张免费，第 {VIDEO_REFERENCE_IMAGE_FREE_COUNT + 1} 张起每张 +{VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS}）
+                          </span>
+                        ) : null}
+                      </span>
+                      <button
+                        className="min-h-0 p-0 text-[11px] font-black! text-[#00b0f0] transition hover:text-[#4cc9ff]"
+                        type="button"
+                        onClick={openPurchasePage}
+                      >
+                        点击在线购买积分(25%优惠)
+                      </button>
+                    </div>
+
+                    <button
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#804303] bg-[#2a1303] py-3 text-sm font-black text-orange-100 transition hover:border-[#a55a04] hover:bg-[#3a1a04] disabled:opacity-50"
+                      type="submit"
+                    >
+                      <Sparkles size={15} className="text-orange-300" />
+                      生成视频
+                    </button>
+                  </div>
+                </form>
+              </section>
+
+              <section className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:gap-4">
+                {videoSlots.map((slot) => {
+                  const running = slot.status === 'queued' || slot.status === 'processing';
+                  return (
+                    <div key={slot.id} className="app-panel flex min-h-[240px] flex-col overflow-hidden lg:min-h-0">
+                      <div className="flex shrink-0 items-center justify-end gap-1 border-b border-white/8 px-2.5 py-1.5">
+                        <button
+                          className="shrink-0 rounded-lg border border-white/8 bg-white/[0.04] p-1.5 text-emerald-600 transition hover:border-white/20 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                          type="button"
+                          title="下载视频"
+                          disabled={!slot.video || downloadingUrl === slot.video.videoPath}
+                          onClick={() => downloadVideoSlot(slot)}
+                        >
+                          {slot.video && downloadingUrl === slot.video.videoPath ? (
+                            <LoaderCircle size={13} className="animate-spin" />
+                          ) : (
+                            <Download size={13} />
+                          )}
+                        </button>
+                        <button
+                          className="shrink-0 rounded-lg p-1.5 text-zinc-400 transition hover:bg-white/10 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          type="button"
+                          title="用此提示词重新生成"
+                          disabled={running || !slot.prompt.trim()}
+                          onClick={() => void startVideoSlot(slot.id, slot.prompt)}
+                        >
+                          <RotateCw size={13} />
+                        </button>
+                        <button
+                          className="shrink-0 rounded-lg p-1.5 text-zinc-400 transition hover:bg-white/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+                          type="button"
+                          title="清空此任务位"
+                          disabled={running}
+                          onClick={() => updateVideoSlot(slot.id, { prompt: '', status: 'idle', progress: 0, video: undefined, error: undefined, jobId: undefined })}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+                        {slot.status === 'succeeded' && slot.video ? (
+                          <video
+                            className="max-h-full w-full rounded-xl border border-white/10 bg-black object-contain"
+                            src={slot.video.videoPath}
+                            controls
+                            loop
+                          />
+                        ) : running ? (
+                          <div className="flex w-full max-w-xs flex-col items-center gap-3 text-center">
+                            <LoaderCircle size={26} className="animate-spin text-fuchsia-200" />
+                            <p className="text-xs text-zinc-400">视频生成中，通常需要 1–3 分钟</p>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                              <div className="h-full rounded-full bg-gradient-to-r from-sky-400 to-fuchsia-400 transition-all" style={{ width: `${Math.max(6, slot.progress)}%` }} />
+                            </div>
+                            <span className="text-[11px] font-bold text-zinc-500">{Math.max(6, slot.progress)}%</span>
+                          </div>
+                        ) : slot.status === 'failed' ? (
+                          <div className="flex flex-col items-center gap-2.5 text-center">
+                            <p className="max-w-xs text-xs leading-5 text-rose-300">{slot.error || '视频生成失败'}</p>
+                            <button
+                              className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-bold text-zinc-200 transition hover:border-white/25"
+                              type="button"
+                              onClick={() => void startVideoSlot(slot.id, slot.prompt)}
+                            >
+                              点击重试
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-2 text-center">
+                            <Film size={26} className="text-zinc-600" />
+                            <p className="text-xs text-zinc-600">准备生成视频</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </section>
+            </div>
           ) : null}
 
-          <aside className={activeTab === 'create' && creationMode === 'image' ? 'app-panel custom-scrollbar overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
-            <form className="flex min-h-0 flex-col gap-2 pr-0 lg:min-h-full lg:pr-1" onSubmit={handleGenerate}>
+          <aside className={activeTab === 'create' && creationMode === 'image' ? 'app-panel no-scrollbar flex flex-col overflow-visible px-3 pb-4 pt-3 lg:h-full lg:overflow-hidden lg:rounded-none lg:border-0 lg:border-r lg:pb-[calc(env(safe-area-inset-bottom)+16px)] lg:pt-2' : 'hidden'}>
+            <form className="flex min-h-0 flex-col gap-2 pr-0 lg:flex-1 lg:pr-1" onSubmit={handleGenerate}>
               <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
                 <button
                   className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.1] px-2.5 py-1.5 text-[12px] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]"
@@ -6949,6 +7476,7 @@ export default function App() {
                 </button>
               </div>
 
+              <div className="no-scrollbar lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
               <section className="space-y-1.5">
                 <div className="px-0.5 text-[10px] font-bold text-zinc-400">{'模型选择'}</div>
                 <div
@@ -7090,7 +7618,13 @@ export default function App() {
 
               <section className="space-y-1.5">
                 <div className="flex items-center justify-between text-[10px] font-bold text-zinc-400">
-                  <span>{'\u56fe\u50cf\u63d0\u793a\u8bcd'}</span>
+                  <span className="flex items-center gap-2">
+                    {'\u56fe\u50cf\u63d0\u793a\u8bcd'}
+                    <PromptTemplates
+                      getInitialPrompt={() => prompt}
+                      onApply={(value) => setPrompt(value.slice(0, MAX_PROMPT_LENGTH))}
+                    />
+                  </span>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-zinc-500">{prompt.length} / {MAX_PROMPT_LENGTH}</span>
                     <button
@@ -7109,7 +7643,7 @@ export default function App() {
                 </div>
                 <div>
                   <textarea
-                    className="input h-[82px] resize-none bg-transparent! px-3 py-2.5 text-[12px] leading-5 placeholder:text-zinc-600"
+                    className="input h-[82px] resize-none bg-transparent! px-3 py-2.5 text-[10px] leading-4 placeholder:text-zinc-600"
                     placeholder="请详细描述您想生成的画面..."
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
@@ -7268,8 +7802,17 @@ export default function App() {
                   })}
                 </div>
               </section>
+              </div>
 
-              <div className="mt-auto space-y-1">
+              {generationError ? (
+                <div className="app-alert app-alert-error">{generationError}</div>
+              ) : null}
+
+              {notice ? (
+                <div className="app-alert">{notice}</div>
+              ) : null}
+
+              <div className="shrink-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-zinc-400">
                   <span>
                     {'\u4f7f\u7528\u79ef\u5206\uff1a'}<span className="text-white">{selectedModelCredits * batchCount}</span>/<span className="text-white">{selectedAvailableCredits}</span>
@@ -7307,15 +7850,7 @@ export default function App() {
                 ) : null}
               </div>
 
-              {generationError ? (
-                <div className="app-alert app-alert-error">{generationError}</div>
-              ) : null}
-
-              {notice ? (
-                <div className="app-alert">{notice}</div>
-              ) : null}
-
-              <div className="grid gap-2 pt-0.5 xl:grid-cols-[180px_minmax(0,1fr)]">
+              <div className="grid shrink-0 gap-2 pt-0.5 xl:grid-cols-[180px_minmax(0,1fr)]">
                 <div className="card p-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-black text-white">{'\u6570\u91cf'}</span>
@@ -7342,11 +7877,11 @@ export default function App() {
                 </div>
 
                 <button
-                  className="btn-accent flex min-h-[56px] items-center justify-center gap-2 px-4 py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex min-h-[56px] w-full items-center justify-center gap-2 rounded-xl border border-[#804303] bg-[#2a1303] px-4 py-3 text-[14px] font-black text-orange-100 transition hover:border-[#a55a04] hover:bg-[#3a1a04] disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={submittingGeneration || !!healthError || !user || !hasEnoughCredits}
                   type="submit"
                 >
-                  {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                  {submittingGeneration ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles className="text-orange-300" size={16} />}
                   {submittingGeneration ? '\u6b63\u5728\u63d0\u4ea4...' : activeImageGenerations.length > 0 ? `\u518d\u6765\u4e00\u6279 \u00b7 \u5f53\u524d ${activeImageGenerations.length} \u4e2a\u8fdb\u884c\u4e2d` : user ? '\u4e0b\u5355' : '\u767b\u5f55\u540e\u4e0b\u5355'}
                 </button>
               </div>
@@ -7372,7 +7907,7 @@ export default function App() {
                 <Clock3 size={11} className="shrink-0 text-amber-400/60" />
                 <span className="text-[10px] leading-tight text-amber-400/60">图片仅保存 48 小时，超时自动清理，请及时下载</span>
               </div>
-              <div className="custom-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+              <div className="no-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
                 {stageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
@@ -7532,7 +8067,7 @@ export default function App() {
             />
           )}
 
-          <aside className={activeTab === 'create' && creationMode === 'image' ? 'custom-scrollbar overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
+          <aside className={activeTab === 'create' && creationMode === 'image' ? 'no-scrollbar overflow-visible rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.012)_0%,rgba(255,255,255,0)_100%)] px-3 py-3 sm:px-4 sm:pt-4 lg:h-full lg:overflow-y-auto lg:rounded-none lg:border-0 lg:pb-[calc(env(safe-area-inset-bottom)+12px)]' : 'hidden'}>
             {editVersions.length > 0 && currentImage ? (
               <ContinuousEditPanel
                 versions={editVersions}
@@ -7657,7 +8192,7 @@ export default function App() {
               <button className="flex h-8 w-8 items-center justify-center rounded-full border border-[#2b2b2e] text-[#696a73] transition hover:border-[#444449] hover:text-[#f4f4f5]" type="button" aria-label={'\u5173\u95ed\u901a\u77e5\u4e2d\u5fc3'} onClick={() => setNotificationOpen(false)}><X size={16} /></button>
             </div>
           </header>
-          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+          <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
             {notificationPayload.notifications.length ? notificationPayload.notifications.map((item) => (
               <button
                 className="block w-full border-b border-[#202023] px-3.5 py-4 text-left transition last:border-b-0 hover:bg-white/[0.035]"

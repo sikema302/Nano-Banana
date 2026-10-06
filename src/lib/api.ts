@@ -61,6 +61,16 @@ export interface GeneratedImagePayload {
   createdAt: string;
 }
 
+export interface GeneratedVideoPayload {
+  prompt: string;
+  modelName: string;
+  resolution: string;
+  seconds: number;
+  videoPath: string;
+  referenceImages: string[];
+  createdAt: string;
+}
+
 export type GenerationJobStatus = 'queued' | 'processing' | 'succeeded' | 'failed';
 
 export interface GenerationJobInfo {
@@ -78,6 +88,22 @@ export interface GenerationJobInfo {
   creditsRemaining?: number;
   queuePosition?: number;
   resourcePaused?: boolean;
+}
+
+export interface VideoGenerationJobInfo {
+  id: string;
+  status: GenerationJobStatus;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  video?: GeneratedVideoPayload;
+  error?: string;
+  creditsCharged?: boolean;
+  creditsUsed?: number;
+  creditsRemaining?: number;
+  queuePosition?: number;
 }
 
 export interface SavedImage {
@@ -1051,6 +1077,51 @@ export async function fetchGenerateImageJob(jobId: string) {
   };
 }
 
+function normalizeGeneratedVideo(video: GeneratedVideoPayload): GeneratedVideoPayload {
+  return {
+    ...video,
+    videoPath: resolveAssetUrl(video.videoPath),
+    referenceImages: video.referenceImages.map(resolveAssetUrl),
+  };
+}
+
+export async function startGenerateVideoJob(payload: {
+  submissionId?: string;
+  prompt: string;
+  resolution: string;
+  aspect?: string;
+  seconds?: number;
+  reference_images: ReferenceUploadInput[];
+  reference_videos?: ReferenceUploadInput[];
+  reference_audios?: ReferenceUploadInput[];
+}) {
+  const result = await request<{ job: VideoGenerationJobInfo }>(
+    '/api/video/jobs',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    true,
+    10 * 60_000,
+  );
+  return {
+    job: {
+      ...result.job,
+      video: result.job.video ? normalizeGeneratedVideo(result.job.video) : undefined,
+    },
+  };
+}
+
+export async function fetchGenerateVideoJob(jobId: string) {
+  const result = await request<{ job: VideoGenerationJobInfo }>(`/api/video/jobs/${encodeURIComponent(jobId)}`, {}, true);
+  return {
+    job: {
+      ...result.job,
+      video: result.job.video ? normalizeGeneratedVideo(result.job.video) : undefined,
+    },
+  };
+}
+
 export async function fetchUserImages(category?: ImageCategory) {
   const query = category ? `?category=${category}` : '';
   const result = await request<{ images: SavedImage[] }>(`/api/user/images${query}`, {}, true);
@@ -1088,6 +1159,25 @@ export async function updateCanvas(id: string, patch: { name?: string; data?: un
 
 export async function deleteCanvas(id: string) {
   return request<{ ok: boolean }>(`/api/canvases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
+}
+
+export interface PromptTemplateInfo {
+  id: string;
+  name: string;
+  prompt: string;
+  createdAt: string;
+}
+
+export async function fetchPromptTemplates() {
+  return request<{ templates: PromptTemplateInfo[] }>('/api/prompt-templates', {}, true);
+}
+
+export async function createPromptTemplate(input: { name: string; prompt: string }) {
+  return request<{ template: PromptTemplateInfo | null }>('/api/prompt-templates', { method: 'POST', body: JSON.stringify(input) }, true);
+}
+
+export async function deletePromptTemplate(id: string) {
+  return request<{ ok: boolean }>(`/api/prompt-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
 }
 
 export async function fetchAdminOverview(params: {

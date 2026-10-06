@@ -5,7 +5,7 @@
 // 「积分扣款状态暂时无法确认」的文案，导致后台既看不懂、也定位不到根因。
 // 这里把归因做成一件事先可测的纯函数，文案与阶段一一对应。
 
-export type GenerationFailureStage = 'upstream' | 'persist' | 'charge' | 'post-charge';
+export type GenerationFailureStage = 'upstream' | 'persist' | 'charge' | 'post-charge' | 'indeterminate';
 
 export type GenerationFailureState = {
   /** 上游是否已经成功返回了图片（as opposed to 上游本身失败） */
@@ -14,10 +14,18 @@ export type GenerationFailureState = {
   imagePersisted: boolean;
   /** 积分是否已经真正扣除 */
   creditsCharged: boolean;
+  /**
+   * 上游是否处于「不确定」状态：异步任务轮询耗尽/超时，任务可能仍在上游队列里。
+   * 此时不能立即终局失败 + 退款（可能二次计费成本泄漏），应进入后台幂等续查。
+   * 缺省为 false，保持既有调用点行为完全不变。
+   */
+  upstreamIndeterminate?: boolean;
 };
 
 export function resolveGenerationFailureStage(state: GenerationFailureState): GenerationFailureStage {
-  if (!state.upstreamSucceeded) return 'upstream';
+  if (!state.upstreamSucceeded) {
+    return state.upstreamIndeterminate ? 'indeterminate' : 'upstream';
+  }
   if (!state.imagePersisted) return 'persist';
   if (!state.creditsCharged) return 'charge';
   return 'post-charge';
@@ -36,6 +44,8 @@ export const GENERATION_FAILURE_MESSAGES: Record<GenerationFailureStage, string>
   charge: '上游已出图且图片已保存，但扣积分未完成，请联系管理员核对',
   // 图在、钱也扣了，只有后续记账失败。极罕见。
   'post-charge': '生成结果处理失败：图片已保存且已扣除积分，但后续记账未完成，请联系管理员核对',
+  // 异步任务超时/状态未知、又超出后台有界对账窗口才走的终局：确实从未扣款（预留已释放）。
+  indeterminate: '生成结果暂时无法确认，本次未扣除积分，请稍后重试',
 };
 
 export function generationFailureMessage(stage: GenerationFailureStage, upstreamFallbackMessage: string) {

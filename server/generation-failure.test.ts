@@ -64,3 +64,37 @@ test('preserves the raw technical cause in error_detail', () => {
   // 上游空错误不能变成一个无法检索的空 detail。
   assert.equal(generationFailureDetail('charge', '   '), 'stage=charge unknown error');
 });
+
+test('classifies an indeterminate upstream as its own stage', () => {
+  // 异步任务超时/状态未知：任务可能仍在上游跑，绝不能和普通 upstream 失败混为一谈。
+  assert.equal(
+    resolveGenerationFailureStage({
+      upstreamSucceeded: false,
+      imagePersisted: false,
+      creditsCharged: false,
+      upstreamIndeterminate: true,
+    }),
+    'indeterminate',
+  );
+});
+
+test('keeps the legacy upstream stage when the indeterminate flag is absent', () => {
+  // 缺省 false：既有调用点行为必须完全不变。
+  assert.equal(
+    resolveGenerationFailureStage({ upstreamSucceeded: false, imagePersisted: false, creditsCharged: false }),
+    'upstream',
+  );
+});
+
+test('the indeterminate message states no charge and ignores the raw upstream text', () => {
+  assert.ok(GENERATION_FAILURE_MESSAGES.indeterminate.includes('未扣除积分'));
+  assert.ok(!GENERATION_FAILURE_MESSAGES.indeterminate.includes('已扣除积分'));
+  assert.equal(
+    generationFailureMessage('indeterminate', 'raw upstream error'),
+    GENERATION_FAILURE_MESSAGES.indeterminate,
+  );
+  assert.equal(
+    generationFailureDetail('indeterminate', 'polling window exhausted'),
+    'stage=indeterminate polling window exhausted',
+  );
+});

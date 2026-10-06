@@ -643,7 +643,7 @@ export default function BatchCreateView({
   }
 
   return (
-    <section className="batch-create-shell custom-scrollbar h-full min-h-0 overflow-auto px-2.5 py-2.5 sm:px-3 lg:overflow-hidden">
+    <section className="batch-create-shell no-scrollbar h-full min-h-0 overflow-auto px-2.5 py-2.5 sm:px-3 lg:overflow-hidden">
       <div className="grid min-h-full gap-2.5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_390px]">
         <div className="flex min-h-0 flex-col overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2.5">
@@ -726,7 +726,7 @@ export default function BatchCreateView({
             </div>
           </div>
 
-          <div className="custom-scrollbar min-h-0 flex-1 overflow-auto px-2 pb-3">
+          <div className="no-scrollbar min-h-0 flex-1 overflow-auto px-2 pb-3">
             {mode === 'unified' ? (
               <div className="space-y-3">
                 {sourceImages.length > 0 ? (
@@ -856,7 +856,7 @@ export default function BatchCreateView({
           </div>
         </div>
 
-        <aside className="app-panel custom-scrollbar flex min-h-0 flex-col overflow-auto p-3">
+        <aside className="app-panel no-scrollbar flex min-h-0 flex-col overflow-auto p-3">
           <section>
             <div className="mb-2 text-[11px] font-black text-zinc-500">选择模型</div>
             <div className="grid grid-cols-2 gap-2">

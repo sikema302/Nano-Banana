@@ -92,6 +92,14 @@ type UserCreditsRow = {
   updated_at: string;
 };
 
+type PromptTemplateRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  prompt: string;
+  created_at: string;
+};
+
 // ─── 常量 ───────────────────────────────────────────────────────────
 
 const ADMIN_INITIAL_CREDITS = 3859;
@@ -304,7 +312,7 @@ function toImageRow(row: Record<string, unknown>): ImageRow {
   };
 }
 
-async function getNextNumericId(tableName: 'users' | 'generations' | 'images' | 'generation_requests' | 'canvases'): Promise<number> {
+async function getNextNumericId(tableName: 'users' | 'generations' | 'images' | 'generation_requests' | 'canvases' | 'prompt_templates'): Promise<number> {
   const { data, error } = await getSupabase()
     .from(tableName)
     .select('id')
@@ -1218,6 +1226,25 @@ export async function markGenerationRequestFailed(
   throw new Error(`Mark generation request failed failed: ${error.message}`);
 }
 
+// 后台对账「迟到成功」时，把此前记成 uncertain 的 generation_requests 行翻转为成功并补图。
+export async function markGenerationRequestSucceeded(
+  requestId: string,
+  options: { imagePath: string; creditsUsed: number },
+): Promise<void> {
+  if (!requestId) return;
+  const { error } = await getSupabase()
+    .from('generation_requests')
+    .update({
+      result_status: 'success',
+      result_message: '',
+      error_detail: '',
+      credits_used: options.creditsUsed,
+      image_path: options.imagePath,
+    })
+    .eq('id', requestId);
+  if (error) throw new Error(`Mark generation request succeeded failed: ${error.message}`);
+}
+
 // Supabase 表结构不会随代码自动迁移（DDL 只能在 Dashboard 执行），缺列会让写入每次都失败且难以排查。
 // 启动时探测关键表的关键列，缺失则以启动日志形式暴露，附修复参照（supabase-schema.sql）。
 const REQUIRED_TABLE_COLUMNS: Record<string, string[]> = {
@@ -1940,6 +1967,68 @@ export async function deleteCanvas(canvasId: string, userId: string): Promise<vo
     .eq('id', canvasId)
     .eq('user_id', userId);
   if (error) throw new Error(`Delete canvas failed: ${error.message}`);
+}
+
+// ─── 提示词模版 ─────────────────────────────────────────────────────
+
+function toPromptTemplateRow(row: Record<string, unknown>): PromptTemplateRow {
+  return {
+    id: normalizeSupabaseId(row.id),
+    user_id: normalizeSupabaseId(row.user_id),
+    name: String(row.name || ''),
+    prompt: String(row.prompt || ''),
+    created_at: String(row.created_at || ''),
+  };
+}
+
+export async function insertPromptTemplate(record: {
+  userId: string;
+  name: string;
+  prompt: string;
+}): Promise<PromptTemplateRow> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const id = await getNextNumericId('prompt_templates');
+    const { data, error } = await getSupabase()
+      .from('prompt_templates')
+      .insert({
+        id,
+        user_id: record.userId,
+        name: record.name,
+        prompt: record.prompt,
+        created_at: nowIso(),
+      })
+      .select('*')
+      .single();
+
+    if (!error && data) {
+      return toPromptTemplateRow(data as Record<string, unknown>);
+    }
+
+    if (!isPrimaryKeyConflict(error)) {
+      throw new Error(`Insert prompt template failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  throw new Error('Insert prompt template failed: unable to allocate a unique template id');
+}
+
+export async function getPromptTemplates(userId: string): Promise<PromptTemplateRow[]> {
+  const { data, error } = await getSupabase()
+    .from('prompt_templates')
+    .select('*')
+    .eq('user_id', userId)
+    .order('id', { ascending: false });
+  if (error) throw new Error(`Fetch prompt templates failed: ${error.message}`);
+  return (data || []).map((row) => toPromptTemplateRow(row as Record<string, unknown>));
+}
+
+export async function deletePromptTemplate(templateId: string, userId: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('prompt_templates')
+    .delete()
+    .eq('id', templateId)
+    .eq('user_id', userId);
+  if (error) throw new Error(`Delete prompt template failed: ${error.message}`);
 }
 
 // ─── 设置操作 ───────────────────────────────────────────────────────

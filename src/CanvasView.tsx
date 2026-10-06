@@ -55,7 +55,9 @@ import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import { CanvasModelsContext, CanvasSaveContext, canvasNodeTypes } from './CanvasNodes';
 
 const CANVAS_JOB_POLL_INTERVAL_MS = 2000;
-const CANVAS_JOB_POLL_MAX_MS = 6 * 60_000;
+// 只要 job 仍是 queued/processing 就持续轮询，不因固定 deadline 抢判超时（后端可能仍在换渠道/对账）。
+// 这个上限仅用于兜住远端 job 已被 TTL 清理、接口持续 404 的极端情况。
+const CANVAS_JOB_POLL_MAX_MS = 60 * 60_000;
 const CANVAS_AUTOSAVE_DELAY_MS = 800;
 
 function sleep(ms: number) {
@@ -66,7 +68,7 @@ async function pollCanvasJob(jobId: string): Promise<GenerationJobInfo> {
   const deadline = Date.now() + CANVAS_JOB_POLL_MAX_MS;
   let job = (await fetchGenerateImageJob(jobId)).job;
   while (job.status !== 'succeeded' && job.status !== 'failed') {
-    if (Date.now() > deadline) throw new Error('生成超时，请稍后重试');
+    if (Date.now() > deadline) throw new Error('生成仍在进行中，耗时较长，请稍后在历史记录中查看结果');
     await sleep(CANVAS_JOB_POLL_INTERVAL_MS);
     try {
       job = (await fetchGenerateImageJob(jobId)).job;

@@ -52,3 +52,35 @@
   日志 `[r2-fallback]`。置 false 恢复严格 R2-only。
 - `/api/health` 是本项目最省事的线上只读探针;本地冒烟:`PORT=3999 node node_modules/tsx/dist/cli.mjs server/index.ts`。
 
+## 前端配色陷阱(重要,务必先看)
+
+- `src/index.css` 里有一组 `.dark-ai-app [class*=...] { ... !important }` 全局覆盖规则,会**按 class 名的子串**改样式。最坑的一条(约 447-452 行):
+  `.dark-ai-app [class*="text-[#ff"] { color: var(--primary-hover) !important }`
+  → **任何 class 名里含 `text-[#ff` 的元素会被强制成主题紫 `#6b65d4`**(`--primary-hover`)。
+- 所以**想用暖色/奶白色时,绝对不要写 `text-[#ffxxxxxx]` 这种 `#ff` 开头的任意值**——会被吞成紫色。
+  改用语义色:`text-orange-100`(≈#ffedd5 奶白)、`text-orange-300`(≈#fdba74 橙)。
+- 同类:`.dark-ai-app [class*="border-[#ff"]`、`[class*="border-[#db"]` 会改边框色;
+  `[class*="text-pink"/"text-sky"/"text-cyan"]` 一律变紫;`[class*="text-zinc-300/400/500/600"]` 会被改成中性色变量。
+  (`bg-[#2a1303]`、`border-[#804303]`、`bg-[linear-gradient(...)]` 不在名单里,可安全使用。)
+- **danger 按钮**:`bg-rose-*` 会被刷成 12% 淡红、`text-rose-*` 强制 `#fecaca`,做不出实心红按钮;
+  要实心红用 `bg-red-500 hover:bg-red-400 text-white`(red 不在劫持名单)。
+
+## 滚动条约定
+
+- 用户不喜欢看到滚动条(提过两次)。**用户可见的滚动容器统一用 `.no-scrollbar`**(`src/index.css`,保留滚动能力、隐藏视觉):
+  create 页各面板/任务位、ChatView、BatchCreateView、通知中心、连续编辑面板。
+- `.custom-scrollbar`(6px 深灰细条)**只留给后台管理宽表格 + API 文档 + 弹窗**,那里需要可见的横向滚动条做提示。
+- 新增滚动容器时:前台用 `no-scrollbar`,后台表格用 `custom-scrollbar`。
+
+## 我的模版(提示词模版)
+
+- 组件 `src/PromptTemplates.tsx`,生图/生视频提示词标题行各挂一个;点卡片回填 prompt,`getInitialPrompt` 预填创建弹窗。
+- 端点 `GET/POST /api/prompt-templates`、`DELETE /api/prompt-templates/:id`,双库(SQLite ensureSchema + supabase-db.ts CRUD),照 canvases 模式。
+- **Supabase 生产库需手动在 SQL Editor 跑 `supabase-schema.sql` 里 prompt_templates 建表段**,否则线上用会 500。
+
+## Agent 工具踩坑
+
+- **同一文件禁止并行 `Edit`**:并行调用会各自基于旧快照回写,导致部分编辑「报成功但没落盘」(2026-10-05 踩过,5 处丢失)。
+  改同一文件必须**串行**,改完用 `grep` 复核实际内容。
+
+

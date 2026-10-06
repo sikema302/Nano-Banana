@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
+  getConfiguredVideoCredits,
+  getVideoReferenceImageSurcharge,
   normalizeModelCreditPricing,
 } from './model-credit-config.js';
 
@@ -33,4 +35,33 @@ test('invalid values fall back without dropping unrelated tiers', () => {
 
   assert.equal(pricing.nanoBanana.oneK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.oneK);
   assert.equal(pricing.nanoBanana.twoK, 88);
+});
+
+test('video reference images are free up to 5, then +30 each', () => {
+  // 前 5 张不加价
+  for (const count of [0, 1, 2, 3, 4, 5]) {
+    assert.equal(getVideoReferenceImageSurcharge(count), 0, `${count} 张应为 0`);
+  }
+  // 第 6 张起每张 +30
+  assert.equal(getVideoReferenceImageSurcharge(6), 30);
+  assert.equal(getVideoReferenceImageSurcharge(7), 60);
+  assert.equal(getVideoReferenceImageSurcharge(9), 120);
+  // 负数/非法值按 0 处理
+  assert.equal(getVideoReferenceImageSurcharge(-3), 0);
+  assert.equal(getVideoReferenceImageSurcharge(Number.NaN), 0);
+});
+
+test('video reference surcharge is independent of duration and resolution', () => {
+  const baseCost = (resolution: string, seconds: number) =>
+    getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, resolution) * seconds;
+  const referenceCount = 8; // 加价 = (8 - 5) × 30 = 90
+  const surcharge = getVideoReferenceImageSurcharge(referenceCount);
+
+  assert.equal(surcharge, 90);
+  // 相同参考图张数下，不同分辨率/时长的加价完全一致
+  for (const resolution of ['768p', '1080p', '2K']) {
+    for (const seconds of [4, 5, 15]) {
+      assert.equal(baseCost(resolution, seconds) + surcharge - baseCost(resolution, seconds), 90);
+    }
+  }
 });

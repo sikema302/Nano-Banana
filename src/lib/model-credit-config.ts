@@ -15,12 +15,22 @@ export type GptImage2AdobeCreditPricing = {
   oneK: number;
 };
 
+export type VideoCreditPricing = {
+  /** minimax_h3-768p 档，每秒积分。 */
+  p768: number;
+  /** minimax_h3-1080p 档，每秒积分。 */
+  p1080: number;
+  /** minimax_h3-2K 档，每秒积分。 */
+  twoK: number;
+};
+
 export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
   gptImage25Flare: GptImagePricing;
   gptImage25Sunburst: GptImagePricing;
   gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
+  video: VideoCreditPricing;
   updatedAt: string;
 };
 
@@ -43,6 +53,11 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     fourK: 30,
     enhancement: 8,
   },
+  video: {
+    p768: 40,
+    p1080: 60,
+    twoK: 70,
+  },
   updatedAt: '',
 };
 
@@ -59,6 +74,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
     ? source.gptImage2Adobe
     : {};
+  const video: Partial<VideoCreditPricing> = source.video && typeof source.video === 'object'
+    ? source.video
+    : {};
 
   return {
     gptImage2: normalizeGptImagePricing(source.gptImage2),
@@ -72,6 +90,11 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       twoK: positiveCredit(banana.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.twoK),
       fourK: positiveCredit(banana.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.fourK),
       enhancement: positiveCredit(banana.enhancement, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.enhancement),
+    },
+    video: {
+      p768: positiveCredit(video.p768, DEFAULT_MODEL_CREDIT_PRICING.video.p768),
+      p1080: positiveCredit(video.p1080, DEFAULT_MODEL_CREDIT_PRICING.video.p1080),
+      twoK: positiveCredit(video.twoK, DEFAULT_MODEL_CREDIT_PRICING.video.twoK),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };
@@ -103,4 +126,26 @@ export function getConfiguredImageCredits(
     return pricing.nanoBanana.twoK;
   }
   return 1;
+}
+
+/** 视频每秒单价（积分/秒），按分辨率档区分。总消耗 = 单价 × 时长秒数。 */
+export function getConfiguredVideoCredits(pricing: ModelCreditPricing, resolution: string) {
+  if (resolution === '1080p') return pricing.video.p1080;
+  if (resolution === '2K') return pricing.video.twoK;
+  return pricing.video.p768;
+}
+
+/** 视频参考图阶梯加价：前 5 张免费。 */
+export const VIDEO_REFERENCE_IMAGE_FREE_COUNT = 5;
+/** 视频参考图阶梯加价单价：第 6 张起每张 +30 积分（与时长、分辨率无关）。 */
+export const VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS = 30;
+
+/**
+ * 视频参考图加价积分 = max(0, 张数 - 5) × 30。
+ * 只与参考图张数有关，不随视频时长和分辨率变化。
+ * 调用方负责把张数按上游上限（9）截断后再传入。
+ */
+export function getVideoReferenceImageSurcharge(referenceImageCount: number) {
+  const count = Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0;
+  return Math.max(0, count - VIDEO_REFERENCE_IMAGE_FREE_COUNT) * VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS;
 }

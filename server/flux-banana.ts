@@ -1,5 +1,6 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
 import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
+import { indeterminateTaskError } from './generation-reconciliation.js';
 
 export type FluxBananaInput = {
   prompt: string;
@@ -17,6 +18,11 @@ type FluxBananaOptions = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   sleepImpl?: (milliseconds: number) => Promise<void>;
+  /**
+   * 幂等续查：提供已提交任务的 taskId / pollUrl 后，跳过「提交」直接轮询，
+   * 绝不重复提交上游任务（否则上游会二次计费）。
+   */
+  resumeTask?: { taskId: string; pollUrl: string };
 };
 
 type GeminiPart = {
@@ -61,6 +67,16 @@ function providerError(message: string, safeToFallback: boolean, status?: number
   error.safeToFallback = safeToFallback;
   if (status) error.status = status;
   return error;
+}
+
+// 「不确定、可续查」的错误：任务已提交、只差轮询，附带 taskId/pollUrl 供后台幂等续查。
+function uncertainFluxError(message: string, taskId: string, pollUrl: string, model: string) {
+  return indeterminateTaskError(message, {
+    kind: 'flux-banana',
+    taskId,
+    pollUrl: pollUrl || undefined,
+    sourceModel: model,
+  });
 }
 
 const SUCCESS_TASK_STATUSES = new Set([
@@ -345,23 +361,35 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15 * 60_000);
   const model = input.model || selectFluxBananaModel(input.imageSize);
   let requestSent = false;
+  let taskId = '';
+  let pollUrl = '';
 
   try {
-    const response = await submitViaGeminiNative(input, options, model, controller.signal, fetchImpl, rootUrl);
-    requestSent = true;
+    let payload: GeminiPayload = {};
+    let source = '';
+    if (options.resumeTask) {
+      // 幂等续查：任务已提交，绝不重复提交，直接用既有 taskId/pollUrl 轮询。
+      requestSent = true;
+      taskId = options.resumeTask.taskId;
+      pollUrl = options.resumeTask.pollUrl;
+    } else {
+      const response = await submitViaGeminiNative(input, options, model, controller.signal, fetchImpl, rootUrl);
+      requestSent = true;
 
-    const { payload: initialPayload, raw } = await parsePayload(response);
-    let payload = initialPayload;
-    let source = generatedImage(payload);
-    if (source) {
-      return { source: await materializeImage(source, options, controller.signal), model };
-    }
+      const { payload: initialPayload, raw } = await parsePayload(response);
+      payload = initialPayload;
+      taskId = String(payload.task_id || payload.id || payload.request_id || '').trim();
+      source = generatedImage(payload);
+      if (source) {
+        return { source: await materializeImage(source, options, controller.signal), model };
+      }
 
-    // 网关返回 202 异步任务：保存 task_id / status_url 后按地址轮询，不重复提交。
-    const initialStatus = taskStatus(payload);
-    let pollUrl = taskQueryUrl(payload, baseUrl);
-    if (!pollUrl && !initialStatus) {
-      throw providerError(`Flux image provider returned no image: ${raw.slice(0, 240)}`, false);
+      // 网关返回 202 异步任务：保存 task_id / status_url 后按地址轮询，不重复提交。
+      const initialStatus = taskStatus(payload);
+      pollUrl = taskQueryUrl(payload, baseUrl);
+      if (!pollUrl && !initialStatus) {
+        throw providerError(`Flux image provider returned no image: ${raw.slice(0, 240)}`, false);
+      }
     }
 
     let consecutiveFailures = 0;
@@ -440,13 +468,24 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
     if (isFailedTask(finalStatus)) {
       throw providerError(payloadError(payload) || `Flux image task ${finalStatus}`, true);
     }
-    throw providerError(
+    throw uncertainFluxError(
       payloadError(payload) || `Flux image task result is uncertain (${finalStatus || 'unknown'})`,
-      false,
+      taskId,
+      pollUrl,
+      model,
     );
   } catch (error) {
     if (error && typeof error === 'object') {
-      const tagged = error as { safeToFallback?: boolean; sourceModel?: string };
+      const tagged = error as { safeToFallback?: boolean; sourceModel?: string; indeterminate?: boolean };
+      // 整体超时（abort）但任务已提交 → 不确定、可续查，绝不重复提交、也不立即退款。
+      if (!tagged.indeterminate && controller.signal.aborted && requestSent && taskId) {
+        throw uncertainFluxError(
+          'Flux image task result is uncertain (aborted before completion)',
+          taskId,
+          pollUrl,
+          model,
+        );
+      }
       if (!('safeToFallback' in tagged)) tagged.safeToFallback = !requestSent;
       tagged.sourceModel = model;
     }

@@ -1,5 +1,6 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
 import type { ImageGenerationInput } from './image-provider-router.js';
+import { indeterminateTaskError } from './generation-reconciliation.js';
 
 type SchatImageOptions = {
   baseUrl: string;
@@ -9,6 +10,11 @@ type SchatImageOptions = {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (milliseconds: number) => Promise<void>;
+  /**
+   * 幂等续查：提供已提交任务的 taskId / pollUrl 后，跳过「提交」直接轮询，
+   * 绝不重复提交上游任务（否则上游会二次计费）。
+   */
+  resumeTask?: { taskId: string; pollUrl: string };
 };
 
 type SchatImagePayload = {
@@ -82,6 +88,16 @@ function taggedError(message: string, safeToFallback: boolean, status?: number) 
   error.safeToFallback = safeToFallback;
   if (status !== undefined) error.status = status;
   return error;
+}
+
+// 「不确定、可续查」的错误：任务已提交、只差轮询，附带 taskId/pollUrl 供后台幂等续查。
+function uncertainTaskError(message: string, taskId: string, pollUrl: string, model: string) {
+  return indeterminateTaskError(message, {
+    kind: 'schat',
+    taskId,
+    pollUrl: pollUrl || undefined,
+    sourceModel: model,
+  });
 }
 
 const SUCCESS_TASK_STATUSES = new Set([
@@ -304,55 +320,67 @@ export async function generateSchatImage(
       && Boolean(responseFormat)
       && /response[_ -]?format/i.test(raw);
 
-    requestSent = true;
-    let body = await buildBody(responseFormat);
-    let response = await fetchImpl(`${baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body,
-      signal: controller.signal,
-    });
-    let raw = await response.text();
-    // Uselg/OpenAI-compatible gateways may expose only URL output on some
-    // routes. Prefer inline base64 when configured, but retain compatibility
-    // by retrying once without response_format after an explicit 400.
-    if (!response.ok && isResponseFormatRejection(response.status, raw)) {
-      body = await buildBody('url');
-      response = await fetchImpl(`${baseUrl}${endpoint}`, {
+    let taskId = '';
+    let pollUrl = '';
+    let current: SchatImagePayload = {};
+
+    if (options.resumeTask) {
+      // 幂等续查：任务已提交，绝不重复提交（否则上游二次计费），直接用既有 taskId/pollUrl 轮询。
+      requestSent = true;
+      taskId = options.resumeTask.taskId;
+      pollUrl = options.resumeTask.pollUrl;
+    } else {
+      requestSent = true;
+      let body = await buildBody(responseFormat);
+      let response = await fetchImpl(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers,
         body,
         signal: controller.signal,
       });
-      raw = await response.text();
-    }
-    let payload: SchatImagePayload = {};
-    try {
-      payload = raw ? JSON.parse(raw) as SchatImagePayload : {};
-    } catch {
-      // A malformed completed response is an explicit upstream failure.
-    }
-    if (!response.ok) {
-      throw taggedError(
-        errorMessage(payload, raw) || `Schat image provider returned HTTP ${response.status}`,
-        true,
-        response.status,
-      );
-    }
-    const immediate = extractGeneratedImage(payload, baseUrl);
-    if (immediate) return immediate;
+      let raw = await response.text();
+      // Uselg/OpenAI-compatible gateways may expose only URL output on some
+      // routes. Prefer inline base64 when configured, but retain compatibility
+      // by retrying once without response_format after an explicit 400.
+      if (!response.ok && isResponseFormatRejection(response.status, raw)) {
+        body = await buildBody('url');
+        response = await fetchImpl(`${baseUrl}${endpoint}`, {
+          method: 'POST',
+          headers,
+          body,
+          signal: controller.signal,
+        });
+        raw = await response.text();
+      }
+      let payload: SchatImagePayload = {};
+      try {
+        payload = raw ? JSON.parse(raw) as SchatImagePayload : {};
+      } catch {
+        // A malformed completed response is an explicit upstream failure.
+      }
+      if (!response.ok) {
+        throw taggedError(
+          errorMessage(payload, raw) || `Schat image provider returned HTTP ${response.status}`,
+          true,
+          response.status,
+        );
+      }
+      const immediate = extractGeneratedImage(payload, baseUrl);
+      if (immediate) return immediate;
 
-    if (!isAsyncTaskResponse(payload)) {
-      throw taggedError(`Schat image provider returned no image: ${raw.slice(0, 300)}`, true, response.status);
+      if (!isAsyncTaskResponse(payload)) {
+        throw taggedError(`Schat image provider returned no image: ${raw.slice(0, 300)}`, true, response.status);
+      }
+
+      taskId = taskIdFrom(payload);
+      pollUrl = resolvePollUrl(baseUrl, payload, taskId);
+      if (!pollUrl) {
+        throw taggedError(`Schat image provider returned no task reference: ${raw.slice(0, 300)}`, false, response.status);
+      }
+
+      current = payload;
     }
 
-    const taskId = taskIdFrom(payload);
-    let pollUrl = resolvePollUrl(baseUrl, payload, taskId);
-    if (!pollUrl) {
-      throw taggedError(`Schat image provider returned no task reference: ${raw.slice(0, 300)}`, false, response.status);
-    }
-
-    let current = payload;
     let polls = 0;
     let consecutiveFailures = 0;
     let consecutivePollErrors = 0;
@@ -379,10 +407,11 @@ export async function generateSchatImage(
         if (!pollResponse.ok) {
           consecutivePollErrors += 1;
           if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-            throw taggedError(
+            throw uncertainTaskError(
               errorMessage(fetchedPayload, pollRaw) || `Schat image task status returned HTTP ${pollResponse.status}`,
-              false,
-              pollResponse.status,
+              taskId,
+              pollUrl,
+              options.model.trim(),
             );
           }
           polls += 1;
@@ -390,10 +419,19 @@ export async function generateSchatImage(
         }
         consecutivePollErrors = 0;
       } catch (error) {
-        if (controller.signal.aborted) throw error;
+        if (controller.signal.aborted) {
+          throw uncertainTaskError(`Schat image task ${taskId} timed out`, taskId, pollUrl, options.model.trim());
+        }
         if (error && typeof error === 'object' && 'safeToFallback' in error) throw error;
         consecutivePollErrors += 1;
-        if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) throw error;
+        if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+          throw uncertainTaskError(
+            error instanceof Error ? error.message : String(error),
+            taskId,
+            pollUrl,
+            options.model.trim(),
+          );
+        }
         polls += 1;
         continue;
       }
@@ -436,7 +474,7 @@ export async function generateSchatImage(
       }
       throw taggedError('Schat image task completed without an image', false);
     }
-    throw taggedError(`Schat image task result is uncertain (${finalStatus || 'unknown'})`, false);
+    throw uncertainTaskError(`Schat image task result is uncertain (${finalStatus || 'unknown'})`, taskId, pollUrl, options.model.trim());
   } catch (error) {
     if (error && typeof error === 'object' && !('safeToFallback' in error)) {
       (error as { safeToFallback: boolean }).safeToFallback = !requestSent;
