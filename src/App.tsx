@@ -1494,8 +1494,8 @@ function HistoryView({
 
   return (
     <section className="page-shell min-h-0 overflow-auto py-3 lg:h-full lg:overflow-hidden">
-      <div className="mx-auto w-fit">
-        <div className="grid shrink-0 grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
+      <div className="relative flex shrink-0 justify-center">
+        <div className="grid grid-cols-2 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
           <button
             className={
               mediaTab === 'image'
@@ -1527,10 +1527,8 @@ function HistoryView({
             视频记录
           </button>
         </div>
-      </div>
-      <div className="card relative mt-2 flex min-h-[360px] flex-col lg:h-[calc(100%-56px)] lg:min-h-0">
         <button
-          className="absolute right-3 top-2.5 z-20 flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)] transition hover:bg-zinc-200 disabled:opacity-50"
+          className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)] transition hover:bg-zinc-200 disabled:opacity-50"
           disabled={refreshing}
           type="button"
           onClick={() => {
@@ -1541,6 +1539,8 @@ function HistoryView({
           <RotateCw className={refreshing ? 'animate-spin' : ''} size={11} />
           刷新
         </button>
+      </div>
+      <div className="card relative mt-2 flex min-h-[360px] flex-col lg:h-[calc(100%-56px)] lg:min-h-0">
         <div className="no-scrollbar min-h-0 flex-1 overflow-auto">
         {activeRecords.length > 0 ? (
           <table className="min-w-[640px] text-left text-[11px] sm:min-w-full">
