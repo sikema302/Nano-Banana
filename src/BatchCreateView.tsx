@@ -842,9 +842,9 @@ export default function BatchCreateView({
           <div className="flex-none">
           <div className="grid w-full grid-cols-3 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
             {([
-              ['cards', '多任务卡'],
               ['unified', '统一提示词'],
               ['multiple', '多提示词'],
+              ['cards', '多任务卡'],
             ] as Array<[BatchMode, string]>).map(([value, label]) => (
               <button
                 className={`min-h-0 whitespace-nowrap rounded-lg px-2 py-1.5 text-[12px] font-black transition ${mode === value ? 'border border-white/10 bg-white/[0.1] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]' : 'text-zinc-500 hover:text-zinc-200'}`}
