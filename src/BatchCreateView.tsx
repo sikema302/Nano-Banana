@@ -407,7 +407,7 @@ export default function BatchCreateView({
   // 拓展编辑的目标：卡片 id = 任务卡提示词；提示词条 id = 多提示词条目；都为空 = 统一提示词
   const [promptExpandCardId, setPromptExpandCardId] = useState<string | null>(null);
   const [promptExpandPromptId, setPromptExpandPromptId] = useState<string | null>(null);
-  const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem()]);
+  const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem(), createPromptItem(), createPromptItem()]);
   const [sourceImages, setSourceImages] = useState<UploadItem[]>([]);
   const [extraReferences, setExtraReferences] = useState<UploadItem[]>([]);
   const [taskCards, setTaskCards] = useState<TaskCardData[]>([createTaskCard(), createTaskCard()]);
@@ -570,7 +570,7 @@ export default function BatchCreateView({
     setExtraReferences([]);
     setTasks([]);
     setUnifiedPrompt('');
-    setPrompts([createPromptItem(), createPromptItem()]);
+    setPrompts([createPromptItem(), createPromptItem(), createPromptItem(), createPromptItem()]);
     setTaskCards([createTaskCard(), createTaskCard()]);
     setNotice('');
   }
