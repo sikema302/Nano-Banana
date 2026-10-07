@@ -404,8 +404,9 @@ export default function BatchCreateView({
   const [unifiedPrompt, setUnifiedPrompt] = useState('');
   const [promptExpandOpen, setPromptExpandOpen] = useState(false);
   const [promptExpandDraft, setPromptExpandDraft] = useState('');
-  // 拓展编辑的目标：null = 统一提示词；任务卡 id = 该卡的提示词
+  // 拓展编辑的目标：卡片 id = 任务卡提示词；提示词条 id = 多提示词条目；都为空 = 统一提示词
   const [promptExpandCardId, setPromptExpandCardId] = useState<string | null>(null);
+  const [promptExpandPromptId, setPromptExpandPromptId] = useState<string | null>(null);
   const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem()]);
   const [sourceImages, setSourceImages] = useState<UploadItem[]>([]);
   const [extraReferences, setExtraReferences] = useState<UploadItem[]>([]);
@@ -934,6 +935,7 @@ export default function BatchCreateView({
                       type="button"
                       onClick={() => {
                         setPromptExpandCardId(null);
+                        setPromptExpandPromptId(null);
                         setPromptExpandDraft(unifiedPrompt);
                         setPromptExpandOpen(true);
                       }}
@@ -1363,7 +1365,7 @@ export default function BatchCreateView({
                   </label>
                 </div>
               ) : (
-                <div className="grid min-h-0 gap-3 lg:h-full lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
+                <div className="grid min-h-0 gap-3 lg:h-full lg:grid-cols-[minmax(200px,240px)_minmax(0,1fr)]">
                   {/* 左：原图组（所有提示词共用） */}
                   <div className="no-scrollbar rounded-2xl border border-white/8 bg-black/20 p-3 lg:overflow-y-auto">
                     <UploadGrid
@@ -1382,7 +1384,7 @@ export default function BatchCreateView({
                     {prompts.map((item, index) => {
                       const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
                       return (
-                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" key={item.id}>
+                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]" key={item.id}>
                           <div className="rounded-2xl border border-white/8 bg-[#111113] p-3">
                             <div className="mb-1 flex items-center justify-between">
                               <div className="flex items-center gap-2">
@@ -1405,12 +1407,25 @@ export default function BatchCreateView({
                             </div>
                             <div className="relative">
                               <textarea
-                                className="h-[88px] w-full resize-none border-0 bg-transparent px-0 pb-5 pt-1 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
+                                className="no-scrollbar h-[88px] w-full resize-none border-0 bg-transparent px-0 pr-8 pb-5 pt-1 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
                                 placeholder="例如：图1和图5做成电商详情图..."
                                 value={item.value}
                                 disabled={running}
                                 onChange={(event) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: event.target.value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
                               />
+                              <button
+                                aria-label={`拓展编辑提示词 ${index + 1}`}
+                                className="absolute right-0 top-0 flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 transition hover:text-white"
+                                title="拓展编辑"
+                                type="button"
+                                onClick={() => {
+                                  setPromptExpandPromptId(item.id);
+                                  setPromptExpandDraft(item.value);
+                                  setPromptExpandOpen(true);
+                                }}
+                              >
+                                <Maximize2 size={12} />
+                              </button>
                               <span className="pointer-events-none absolute bottom-1 right-1 text-[11px] text-zinc-600">
                                 {item.value.length}/{MAX_PROMPT_LENGTH}
                               </span>
@@ -1427,7 +1442,7 @@ export default function BatchCreateView({
                       );
                     })}
                     {prompts.length < MAX_PROMPTS ? (
-                      <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                      <div className="grid gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                         <button
                           className="flex min-h-10 w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#111113] text-sm font-bold text-zinc-200 transition hover:border-white/25 hover:bg-[#18181b] disabled:cursor-not-allowed disabled:opacity-45"
                           type="button"
@@ -1452,7 +1467,7 @@ export default function BatchCreateView({
           <button
             className="absolute inset-0"
             type="button"
-            onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
+            onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); setPromptExpandPromptId(null); }}
             aria-label="关闭提示词编辑弹窗"
           />
           <div className="relative z-10 flex w-full max-w-[640px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#0c0c0d] shadow-[0_28px_90px_rgba(0,0,0,0.6)]">
@@ -1462,7 +1477,7 @@ export default function BatchCreateView({
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2b2b2e] text-[#9a9ba3] transition hover:border-[#444449] hover:text-white"
                 type="button"
                 aria-label="关闭"
-                onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
+                onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); setPromptExpandPromptId(null); }}
               >
                 <X size={16} />
               </button>
@@ -1471,7 +1486,11 @@ export default function BatchCreateView({
               <textarea
                 autoFocus
                 className="block h-[260px] w-full resize-none rounded-2xl border border-sky-400/60 bg-white/[0.02] px-4 py-3 text-[13px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-sky-300"
-                placeholder={promptExpandCardId ? '输入提示词，描述你想生成的图片...' : '输入统一提示词，描述每张原图需要如何重新生成...'}
+                placeholder={promptExpandCardId
+                  ? '输入提示词，描述你想生成的图片...'
+                  : promptExpandPromptId
+                    ? '例如：图1和图5做成电商详情图...'
+                    : '输入统一提示词，描述每张原图需要如何重新生成...'}
                 value={promptExpandDraft}
                 onChange={(event) => setPromptExpandDraft(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
               />
@@ -1482,7 +1501,7 @@ export default function BatchCreateView({
                 <button
                   type="button"
                   className="rounded-full px-4 py-1.5 text-sm font-semibold text-zinc-400 transition hover:text-white"
-                  onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
+                  onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); setPromptExpandPromptId(null); }}
                 >
                   取消
                 </button>
@@ -1492,11 +1511,14 @@ export default function BatchCreateView({
                   onClick={() => {
                     if (promptExpandCardId) {
                       updateCard(promptExpandCardId, { prompt: promptExpandDraft.slice(0, MAX_PROMPT_LENGTH) });
+                    } else if (promptExpandPromptId) {
+                      setPrompts((current) => current.map((prompt) => prompt.id === promptExpandPromptId ? { ...prompt, value: promptExpandDraft.slice(0, MAX_PROMPT_LENGTH) } : prompt));
                     } else {
                       setUnifiedPrompt(promptExpandDraft);
                     }
                     setPromptExpandOpen(false);
                     setPromptExpandCardId(null);
+                    setPromptExpandPromptId(null);
                   }}
                 >
                   确定
