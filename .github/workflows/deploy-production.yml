@@ -22,6 +22,7 @@ jobs:
       SCHAT_API_KEY: ${{ secrets.SCHAT_API_KEY }}
       USSELG_STANDARD_KEY: ${{ secrets.USSELG_STANDARD_KEY }}
       USSELG_HD_KEY: ${{ secrets.USSELG_HD_KEY }}
+      USELG_VIDEO_API_KEY: ${{ secrets.USELG_VIDEO_API_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -77,6 +78,10 @@ jobs:
             if [ -n "$USSELG_STANDARD_KEY" ]; then printf 'USSELG_STANDARD_KEY="%s"\n' "$USSELG_STANDARD_KEY"; fi
             if [ -n "$USSELG_HD_KEY" ]; then printf 'USSELG_HD_KEY="%s"\n' "$USSELG_HD_KEY"; fi
           } > .deploy-package/.secrets/uselg-env
+
+          {
+            if [ -n "$USELG_VIDEO_API_KEY" ]; then printf 'USELG_VIDEO_API_KEY="%s"\n' "$USELG_VIDEO_API_KEY"; fi
+          } > .deploy-package/.secrets/uselg-video-env
 
           tar -czf release.tar.gz -C .deploy-package .
           echo "Release package: $(du -sh release.tar.gz | cut -f1)"
