@@ -1627,11 +1627,13 @@ function HistoryView({
 function ApiDocsView({
   onNotice,
   gptImagePricing,
+  gptImage25Pricing,
   user,
   onRequireLogin,
 }: {
   onNotice: (message: string) => void;
   gptImagePricing: GptImagePricing;
+  gptImage25Pricing: { flare: GptImagePricing; sunburst: GptImagePricing };
   user: UserInfo | null;
   onRequireLogin: () => void;
 }) {
@@ -1705,16 +1707,18 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、nano-banana-pro。'],
+    ['model', 'string', '是', '支持 gpt-image-2、GPT-image-2.5-Flare、GPT-image-2.5-Sunburst、nano-banana-pro（不区分大小写）。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
-    ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张。`],
+    ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张（GPT-image-2.5 支持 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张）。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
-    ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K。'],
-    ['quality', 'string', '否', 'GPT-image-2 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
+    ['imageSize', 'string', '否', 'Nano Banana Pro 支持 1K、2K、4K（默认 2K）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 支持 1K、2K、4K（其他值按 1K 处理）。'],
+    ['quality', 'string', '否', 'GPT-image-2 与 GPT-image-2.5 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', 'Nano Banana Pro AI 增强计费选项：支持 1K / 2K / 4K，开启后前端账单额外增加 8 积分；不会调用任何上游原生增强接口。'],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
+    { model: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', cost: `1K ${gptImage25Pricing.flare.standard} / 2K ${gptImage25Pricing.flare.twoK}（高 ${gptImage25Pricing.flare.twoKHigh}）/ 4K ${gptImage25Pricing.flare.fourK}（高 ${gptImage25Pricing.flare.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 更快迭代；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
+    { model: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', cost: `1K ${gptImage25Pricing.sunburst.standard} / 2K ${gptImage25Pricing.sunburst.twoK}（高 ${gptImage25Pricing.sunburst.twoKHigh}）/ 4K ${gptImage25Pricing.sunburst.fourK}（高 ${gptImage25Pricing.sunburst.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 思考更久；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: '1K 24 / 2K 24 / 4K 24；AI 增强 +8', note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
   ];
   const gptPixelGroups = [
@@ -1774,6 +1778,28 @@ function ApiDocsView({
       note: '',
     },
     {
+      model: 'GPT-image-2.5-Flare',
+      rows: [
+        ['标准 / 1K', `${gptImage25Pricing.flare.standard} 点 / 张`, 'imageSize=1K（或不传，按 1K 处理）；quality 任意'],
+        ['2K 非高质量', `${gptImage25Pricing.flare.twoK} 点 / 张`, 'imageSize=2K；quality=auto / low / medium 或不传'],
+        ['2K 高质量', `${gptImage25Pricing.flare.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
+        ['4K 非高质量', `${gptImage25Pricing.flare.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
+        ['4K 高质量', `${gptImage25Pricing.flare.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
+      ],
+      note: 'OpenAI 最新一代生图模型 · 更快迭代。',
+    },
+    {
+      model: 'GPT-image-2.5-Sunburst',
+      rows: [
+        ['标准 / 1K', `${gptImage25Pricing.sunburst.standard} 点 / 张`, 'imageSize=1K（或不传，按 1K 处理）；quality 任意'],
+        ['2K 非高质量', `${gptImage25Pricing.sunburst.twoK} 点 / 张`, 'imageSize=2K；quality=auto / low / medium 或不传'],
+        ['2K 高质量', `${gptImage25Pricing.sunburst.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
+        ['4K 非高质量', `${gptImage25Pricing.sunburst.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
+        ['4K 高质量', `${gptImage25Pricing.sunburst.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
+      ],
+      note: 'OpenAI 最新一代生图模型 · 思考更久。',
+    },
+    {
       model: 'nano-banana-pro',
       rows: [
         ['1K 基础生成', '24 点 / 张', '支持文生图与参考图生成'],
@@ -1815,6 +1841,27 @@ function ApiDocsView({
       request: requestExample,
                   bullets: ['支持 1K / 2K / 4K；每种分辨率都按网站后台的启用状态和排序依次尝试渠道。明确失败会自动切换下一渠道；失败渠道暂避 30 秒，随后恢复从第一顺位判断。', `参考图建议使用 HTTPS 图片 URL，最多 ${MAX_REFERENCE_IMAGES} 张，Base64 单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB；全部分辨率均可开启 AI 增强计费选项，额外消耗 8 积分，但不会调用任何上游原生增强接口。`],
     },
+    {
+      id: 'gpt-image-2-5',
+      label: 'GPT-Image-2.5 接口',
+      title: 'GPT-Image-2.5 图像生成',
+      subtitle: 'OpenAI 最新一代生图模型，适合高质量通用生图与参考图重绘。model 可传 GPT-image-2.5-Flare（更快迭代）或 GPT-image-2.5-Sunburst（思考更久），不区分大小写。',
+      model: 'GPT-image-2.5-Flare',
+      endpointPath: '/v1/async/images/generations',
+      request: JSON.stringify(
+        {
+          model: 'GPT-image-2.5-Flare',
+          prompt: '生成一张高级感黑金香水产品图，摄影棚布光，超清细节',
+          images: [],
+          aspectRatio: '1:1',
+          imageSize: '2K',
+          quality: 'high',
+        },
+        null,
+        2,
+      ),
+      bullets: ['imageSize 仅支持 1K / 2K / 4K，不支持 STANDARD；其他值会按 1K 处理。', 'quality 可传 auto / low / medium / high，2K 与 4K 的高质量按高质量档计费。', `参考图最多 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张，HTTPS URL 或 Base64（单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB）。`, '不同档位支持的画面比例不同，见下方比例说明。'],
+    },
   ];
   const docNavigation = [
     ['1', '快速开始', 'quick-start'],
@@ -1822,8 +1869,9 @@ function ApiDocsView({
     ['3', '价格指南', 'pricing'],
     ['4', 'GPT-Image-2 接口', 'gpt-image-2'],
     ['5', 'Nano Banana 接口', 'nano-banana'],
+    ['6', 'GPT-Image-2.5 接口', 'gpt-image-2-5'],
   ];
-  docNavigation.push(['6', '\u6211\u7684 API Keys', 'developer-center']);
+  docNavigation.push(['7', '\u6211\u7684 API Keys', 'developer-center']);
 
   function handleDocsScroll() {
     const container = docsScrollRef.current;
@@ -2150,9 +2198,11 @@ if (task.status !== 'succeeded') {
   throw new Error(task.error || 'Generate failed');
 }
 console.log(task.results[0].url);`;
-              const sectionModels = modelRows.filter((item) =>
-                section.id === 'gpt-image-2' ? item.model === 'gpt-image-2' : item.model === 'nano-banana-pro',
-              );
+              const sectionModels = modelRows.filter((item) => {
+                if (section.id === 'gpt-image-2') return item.model === 'gpt-image-2';
+                if (section.id === 'gpt-image-2-5') return item.model === 'GPT-image-2.5-Flare' || item.model === 'GPT-image-2.5-Sunburst';
+                return item.model === 'nano-banana-pro';
+              });
 
               return (
                 <div key={section.id} id={section.id} className="scroll-mt-28 space-y-5">
@@ -2266,6 +2316,30 @@ Content-Type: application/json`)}</pre>
                                 <div key={`${group.label}-${pixels}`} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
                                   <span className="font-mono text-sm font-black text-sky-200">{pixels}</span>
                                   <span className="ml-2 text-xs font-semibold text-zinc-500">{ratio}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {section.id === 'gpt-image-2-5' ? (
+                    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                      <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ImagePlus size={17} /></div>
+                        <h2 className="text-base font-black text-white">{'GPT-image-2.5 \u652f\u6301\u6bd4\u4f8b\u8bf4\u660e'}</h2>
+                      </div>
+                      <div className="grid gap-4 p-5">
+                        {(['1K', '2K', '4K'] as const).map((size) => (
+                          <article key={size} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <h3 className="mb-3 text-base font-black text-white">{size} 档</h3>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {(['GPT-image-2.5-Flare', 'GPT-image-2.5-Sunburst'] as const).map((modelId) => (
+                                <div key={modelId} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                  <div className="font-mono text-xs font-black text-sky-200">{modelId}</div>
+                                  <div className="mt-1 text-xs leading-5 text-zinc-400">{GPT_IMAGE_2_5_RATIO_OPTIONS[modelId][size].join(' / ')}</div>
                                 </div>
                               ))}
                             </div>
@@ -8081,6 +8155,7 @@ export default function App() {
             <ApiDocsView
               onNotice={setNotice}
               gptImagePricing={gptImagePricing}
+              gptImage25Pricing={{ flare: modelCreditPricing.gptImage25Flare, sunburst: modelCreditPricing.gptImage25Sunburst }}
               user={user}
               onRequireLogin={() => {
                 setAuthMode('login');
