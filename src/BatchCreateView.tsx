@@ -395,7 +395,7 @@ export default function BatchCreateView({
       || item.id === 'Nano_Banana_Pro'),
     [models],
   );
-  const [mode, setMode] = useState<BatchMode>('cards');
+  const [mode, setMode] = useState<BatchMode>('unified');
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const [imageSize, setImageSize] = useState<ImageSize>('STANDARD');
   const [quality, setQuality] = useState<ImageQuality>('auto');
