@@ -404,6 +404,8 @@ export default function BatchCreateView({
   const [unifiedPrompt, setUnifiedPrompt] = useState('');
   const [promptExpandOpen, setPromptExpandOpen] = useState(false);
   const [promptExpandDraft, setPromptExpandDraft] = useState('');
+  // 拓展编辑的目标：null = 统一提示词；任务卡 id = 该卡的提示词
+  const [promptExpandCardId, setPromptExpandCardId] = useState<string | null>(null);
   const [prompts, setPrompts] = useState<PromptItem[]>([createPromptItem(), createPromptItem()]);
   const [sourceImages, setSourceImages] = useState<UploadItem[]>([]);
   const [extraReferences, setExtraReferences] = useState<UploadItem[]>([]);
@@ -931,6 +933,7 @@ export default function BatchCreateView({
                       title="拓展编辑"
                       type="button"
                       onClick={() => {
+                        setPromptExpandCardId(null);
                         setPromptExpandDraft(unifiedPrompt);
                         setPromptExpandOpen(true);
                       }}
@@ -1174,13 +1177,28 @@ export default function BatchCreateView({
                     </div>
                     {card.error ? <p className="line-clamp-2 text-xs leading-4 text-red-300">{card.error}</p> : null}
 
-                    <textarea
-                      className="h-24 w-full resize-y rounded-xl border border-white/10 bg-black/25 p-3 text-xs leading-5 text-white outline-none transition focus:border-orange-300/60 placeholder:text-zinc-600 disabled:opacity-60"
-                      placeholder="输入提示词，描述你想生成的图片…"
-                      value={card.prompt}
-                      disabled={running || anyCardProcessing}
-                      onChange={(event) => updateCard(card.id, { prompt: event.target.value.slice(0, MAX_PROMPT_LENGTH) })}
-                    />
+                    <div className="relative">
+                      <textarea
+                        className="no-scrollbar h-24 w-full resize-none rounded-xl border border-white/10 bg-black/25 p-3 text-xs leading-5 text-white outline-none transition focus:border-orange-300/60 placeholder:text-zinc-600 disabled:opacity-60"
+                        placeholder="输入提示词，描述你想生成的图片…"
+                        value={card.prompt}
+                        disabled={running || anyCardProcessing}
+                        onChange={(event) => updateCard(card.id, { prompt: event.target.value.slice(0, MAX_PROMPT_LENGTH) })}
+                      />
+                      <button
+                        aria-label={`拓展编辑任务 ${index + 1} 提示词`}
+                        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-black/60 text-zinc-400 transition hover:border-white/25 hover:text-white"
+                        title="拓展编辑"
+                        type="button"
+                        onClick={() => {
+                          setPromptExpandCardId(card.id);
+                          setPromptExpandDraft(card.prompt);
+                          setPromptExpandOpen(true);
+                        }}
+                      >
+                        <Maximize2 size={12} />
+                      </button>
+                    </div>
 
                     <div className="mt-auto space-y-1">
                       <div className="flex items-center justify-between gap-1 whitespace-nowrap">
@@ -1434,7 +1452,7 @@ export default function BatchCreateView({
           <button
             className="absolute inset-0"
             type="button"
-            onClick={() => setPromptExpandOpen(false)}
+            onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
             aria-label="关闭提示词编辑弹窗"
           />
           <div className="relative z-10 flex w-full max-w-[640px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#0c0c0d] shadow-[0_28px_90px_rgba(0,0,0,0.6)]">
@@ -1444,7 +1462,7 @@ export default function BatchCreateView({
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2b2b2e] text-[#9a9ba3] transition hover:border-[#444449] hover:text-white"
                 type="button"
                 aria-label="关闭"
-                onClick={() => setPromptExpandOpen(false)}
+                onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
               >
                 <X size={16} />
               </button>
@@ -1453,7 +1471,7 @@ export default function BatchCreateView({
               <textarea
                 autoFocus
                 className="block h-[260px] w-full resize-none rounded-2xl border border-sky-400/60 bg-white/[0.02] px-4 py-3 text-[13px] leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-sky-300"
-                placeholder="输入统一提示词，描述每张原图需要如何重新生成..."
+                placeholder={promptExpandCardId ? '输入提示词，描述你想生成的图片...' : '输入统一提示词，描述每张原图需要如何重新生成...'}
                 value={promptExpandDraft}
                 onChange={(event) => setPromptExpandDraft(event.target.value.slice(0, MAX_PROMPT_LENGTH))}
               />
@@ -1464,7 +1482,7 @@ export default function BatchCreateView({
                 <button
                   type="button"
                   className="rounded-full px-4 py-1.5 text-sm font-semibold text-zinc-400 transition hover:text-white"
-                  onClick={() => setPromptExpandOpen(false)}
+                  onClick={() => { setPromptExpandOpen(false); setPromptExpandCardId(null); }}
                 >
                   取消
                 </button>
@@ -1472,8 +1490,13 @@ export default function BatchCreateView({
                   type="button"
                   className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:brightness-95"
                   onClick={() => {
-                    setUnifiedPrompt(promptExpandDraft);
+                    if (promptExpandCardId) {
+                      updateCard(promptExpandCardId, { prompt: promptExpandDraft.slice(0, MAX_PROMPT_LENGTH) });
+                    } else {
+                      setUnifiedPrompt(promptExpandDraft);
+                    }
                     setPromptExpandOpen(false);
+                    setPromptExpandCardId(null);
                   }}
                 >
                   确定
