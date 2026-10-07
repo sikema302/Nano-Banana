@@ -847,7 +847,7 @@ export default function BatchCreateView({
               ['cards', '多任务卡'],
             ] as Array<[BatchMode, string]>).map(([value, label]) => (
               <button
-                className={`min-h-0 whitespace-nowrap rounded-lg px-2 py-1.5 text-[12px] font-black transition ${mode === value ? 'border border-white/10 bg-white/[0.1] font-black! text-white shadow-[0_6px_16px_rgba(0,0,0,0.2)]' : 'text-zinc-500 hover:text-zinc-200'}`}
+                className={`min-h-0 whitespace-nowrap rounded-lg border px-2 py-1.5 text-[12px] font-black transition-colors ${mode === value ? 'border-orange-400/40 bg-orange-500/15 text-orange-100' : 'border-white/15 bg-white/[0.03] text-white hover:border-orange-300/45 hover:bg-orange-500/[0.08]'}`}
                 type="button"
                 disabled={running || anyCardProcessing}
                 key={value}
