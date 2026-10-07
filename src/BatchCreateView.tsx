@@ -305,10 +305,10 @@ function TaskCard({
         {imageUrl ? (
           <img alt={task.prompt} className="h-full w-full object-cover" src={imageUrl} />
         ) : (
-          <div className={compact ? 'flex items-center justify-center' : 'flex h-full flex-col items-center justify-center gap-3 text-zinc-600'}>
-            {task.status === 'processing' ? <LoaderCircle className="animate-spin text-orange-300" size={26} /> : compact ? null : <Sparkles size={24} />}
-            <span className={compact ? 'text-2xl font-black text-white' : 'text-sm font-black'}>
-              {task.status === 'failed' ? '生成失败' : compact || task.status !== 'waiting' ? `${task.progress}%` : '等待生成'}
+          <div className={compact ? 'flex flex-col items-center justify-center gap-1.5 text-zinc-600' : 'flex h-full flex-col items-center justify-center gap-3 text-zinc-600'}>
+            {task.status === 'processing' ? <LoaderCircle className="animate-spin text-orange-300" size={compact ? 20 : 26} /> : <Sparkles size={compact ? 18 : 24} />}
+            <span className={compact ? 'text-xs font-black' : 'text-sm font-black'}>
+              {task.status === 'failed' ? '生成失败' : task.status === 'waiting' || task.progress <= 0 ? '等待生成' : `${task.progress}%`}
             </span>
           </div>
         )}
@@ -1384,7 +1384,7 @@ export default function BatchCreateView({
                     {prompts.map((item, index) => {
                       const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
                       return (
-                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]" key={item.id}>
+                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]" key={item.id}>
                           <div className="rounded-2xl border border-white/8 bg-[#111113] p-3">
                             <div className="mb-1 flex items-center justify-between">
                               <div className="flex items-center gap-2">
@@ -1434,15 +1434,16 @@ export default function BatchCreateView({
                           {task ? (
                             <TaskCard task={task} compact onDownload={() => void downloadTask(task)} downloading={downloadingTaskId === task.id} />
                           ) : (
-                            <div className="flex min-h-[128px] items-center justify-center rounded-2xl border border-white/8 bg-[#111113]">
-                              <span className="text-2xl font-black text-white">0%</span>
+                            <div className="flex min-h-[128px] flex-col items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-[#111113] text-zinc-600">
+                              <Sparkles size={18} />
+                              <span className="text-xs font-black">等待生成</span>
                             </div>
                           )}
                         </div>
                       );
                     })}
                     {prompts.length < MAX_PROMPTS ? (
-                      <div className="grid gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                      <div className="grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
                         <button
                           className="flex min-h-10 w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#111113] text-sm font-bold text-zinc-200 transition hover:border-white/25 hover:bg-[#18181b] disabled:cursor-not-allowed disabled:opacity-45"
                           type="button"
