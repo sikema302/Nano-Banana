@@ -4,6 +4,7 @@ import test from 'node:test';
 import { HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 
 import {
+  createR2HttpsAgent,
   createR2ObjectStorage,
   legacyAssetObjectKey,
   readR2Config,
@@ -19,6 +20,17 @@ const env = {
   R2_BUCKET_NAME: 'images',
   R2_PUBLIC_BASE_URL: 'https://img.example.com/',
 };
+
+test('R2 HTTPS connections use IPv4 with bounded keep-alive pooling', () => {
+  const agent = createR2HttpsAgent();
+  try {
+    assert.equal(agent.options.family, 4);
+    assert.equal(agent.options.keepAlive, true);
+    assert.equal(agent.maxSockets, 50);
+  } finally {
+    agent.destroy();
+  }
+});
 
 test('requires a complete R2 configuration while allowing local-only development', () => {
   assert.equal(readR2Config({}), null);

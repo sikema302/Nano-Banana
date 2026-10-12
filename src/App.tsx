@@ -5618,13 +5618,14 @@ export default function App() {
     setLoadingUserData(true);
 
     try {
-      const [modelPayload, favoritePayload, backupPayload, discardedPayload, historyPayload] = await Promise.all([
+      const [modelPayload, imagesPayload] = await Promise.all([
         fetchModels(),
-        fetchUserImages('favorite'),
-        fetchUserImages('backup'),
-        fetchUserImages('discarded'),
-        fetchUserHistory(),
+        fetchUserImages(),
       ]);
+
+      const favoriteImages = imagesPayload.images.filter((image) => image.category === 'favorite');
+      const backupImages = imagesPayload.images.filter((image) => image.category === 'backup');
+      const discardedImages = imagesPayload.images.filter((image) => image.category === 'discarded');
 
       setModels([...modelPayload.models].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
       setGptImagePricing(modelPayload.gptImagePricing || DEFAULT_GPT_IMAGE_PRICING);
@@ -5636,10 +5637,9 @@ export default function App() {
         const preferred = modelPayload.models.find((item) => item.id === 'gpt-image-2');
         return preferred?.id || modelPayload.models[0]?.id || 'gpt-image-2';
       });
-      setFavorites(favoritePayload.images);
-      setBackup(backupPayload.images);
-      setDiscarded(discardedPayload.images);
-      setHistoryRecords(historyPayload.history);
+      setFavorites(favoriteImages);
+      setBackup(backupImages);
+      setDiscarded(discardedImages);
       void loadPromoCoupon({ allowPopup: true });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '登录状态已失效，请重新登录');

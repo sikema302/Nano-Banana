@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { Agent as HttpsAgent } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
@@ -8,6 +9,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 export type R2Config = {
   accountId: string;
@@ -244,6 +246,12 @@ export class R2ObjectStorage {
   }
 }
 
+export function createR2HttpsAgent() {
+  // DNS ordering alone does not constrain the SDK's connection family.
+  // Pin R2 to IPv4, retaining keep-alive and the SDK's usual socket limit.
+  return new HttpsAgent({ family: 4, keepAlive: true, maxSockets: 50 });
+}
+
 export function createR2ObjectStorage(
   env: NodeJS.ProcessEnv = process.env,
   commandClient?: R2CommandClient,
@@ -258,6 +266,7 @@ export function createR2ObjectStorage(
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
+    requestHandler: new NodeHttpHandler({ httpsAgent: createR2HttpsAgent() }),
     maxAttempts: 2,
   }) as unknown as R2CommandClient);
 

@@ -14,8 +14,8 @@
 
 ## 环境限制(重要)
 
-- 本机 sandbox 里 **git 无法执行**:任何方式调用 git.exe 都返回 127 / 0xC0000142(DLL 初始化失败),PowerShell 工具的输出也会被吞掉。
-  → 涉及提交、推送、重跑 workflow 的操作只能让用户手动做;Agent 侧只负责改代码 + 本地验证。
+- git 在本机 sandbox 现可正常执行(2026-10-08 实测 `git status`/`log`/`rev-list` 均正常,此前 127/0xC0000142 DLL 初始化失败已不复发)。
+  → 提交/推送/重跑 workflow 理论上 Agent 可自行做,但仍默认遵循用户偏好「本地 commit、不主动 push/部署」。
 - `dist/` 在 .gitignore 里,本地跑 `vite build` 不会污染工作区。
 
 ## 网络 / 服务器访问(重要)

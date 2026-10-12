@@ -1189,6 +1189,36 @@ function formatDateKeyInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TI
   return `${year}-${month}-${day}`;
 }
 
+function startOfDayIsoInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  const dateKey = formatDateKeyInTimeZone(date, timeZone);
+  if (!dateKey) return '';
+
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const utcMidnight = Date.UTC(year, month - 1, day);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(utcMidnight));
+  const getPart = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+  const displayedAsUtc = Date.UTC(
+    getPart('year'),
+    getPart('month') - 1,
+    getPart('day'),
+    getPart('hour'),
+    getPart('minute'),
+    getPart('second'),
+  );
+  const offsetMs = displayedAsUtc - utcMidnight;
+  return new Date(utcMidnight - offsetMs).toISOString();
+}
+
 function formatHourKeyInTimeZone(value: string | Date, timeZone = ADMIN_STATS_TIME_ZONE) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -3054,7 +3084,10 @@ function ensureSchema(db: SqlDatabase) {
   }
 
   db.run('CREATE INDEX IF NOT EXISTS idx_generations_user_id ON generations(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations(created_at DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_generations_user_created_at ON generations(user_id, created_at DESC)');
   db.run('CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_images_user_category_created_at ON images(user_id, category, created_at DESC)');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS invite_codes (
@@ -3603,33 +3636,38 @@ function decryptPublicApiKey(payload: string | undefined) {
 
 let publicApiKeyRecordsCache: PublicApiKeyRecord[] | null = null;
 let publicApiKeyRecordsLoad: Promise<PublicApiKeyRecord[]> | null = null;
+let publicApiKeyRecordsCacheAt = 0;
+const PUBLIC_API_KEY_RECORDS_CACHE_TTL_MS = 5_000;
 
 function clonePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
   return normalizeApiKeyRecords(records);
 }
 
 async function readPublicApiKeyRecords(): Promise<PublicApiKeyRecord[]> {
-  if (USE_SUPABASE) {
-    if (publicApiKeyRecordsCache) return clonePublicApiKeyRecords(publicApiKeyRecordsCache);
-    if (!publicApiKeyRecordsLoad) {
-      publicApiKeyRecordsLoad = (async () => {
-        const db = await getSupabaseDb();
-        const raw = await db.getSetting(PUBLIC_API_KEYS_SETTING_KEY, '[]');
-        const records = normalizeApiKeyRecords(parseJsonSetting(raw, []));
-        publicApiKeyRecordsCache = records;
-        return records;
-      })().finally(() => {
-        publicApiKeyRecordsLoad = null;
-      });
-    }
-    return clonePublicApiKeyRecords(await publicApiKeyRecordsLoad);
+  if (publicApiKeyRecordsCache && Date.now() - publicApiKeyRecordsCacheAt < PUBLIC_API_KEY_RECORDS_CACHE_TTL_MS) {
+    return clonePublicApiKeyRecords(publicApiKeyRecordsCache);
   }
-
-  return withReadDb((db) => {
-    ensureSchema(db);
-    const raw = getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]');
-    return normalizeApiKeyRecords(parseJsonSetting(raw, []));
-  });
+  if (!publicApiKeyRecordsLoad) {
+    publicApiKeyRecordsLoad = (async () => {
+      let raw: string;
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        raw = await db.getSetting(PUBLIC_API_KEYS_SETTING_KEY, '[]');
+      } else {
+        raw = await withReadDb((db) => {
+          ensureSchema(db);
+          return getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]');
+        });
+      }
+      const records = normalizeApiKeyRecords(parseJsonSetting(raw, []));
+      publicApiKeyRecordsCache = records;
+      publicApiKeyRecordsCacheAt = Date.now();
+      return records;
+    })().finally(() => {
+      publicApiKeyRecordsLoad = null;
+    });
+  }
+  return clonePublicApiKeyRecords(await publicApiKeyRecordsLoad);
 }
 
 async function ownedApiKeyUserIds(userId: string): Promise<string[]> {
@@ -3645,6 +3683,7 @@ async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
     const db = await getSupabaseDb();
     await db.setSetting(PUBLIC_API_KEYS_SETTING_KEY, serialized);
     publicApiKeyRecordsCache = clonePublicApiKeyRecords(records);
+    publicApiKeyRecordsCacheAt = Date.now();
     return;
   }
 
@@ -3652,6 +3691,8 @@ async function writePublicApiKeyRecords(records: PublicApiKeyRecord[]) {
     ensureSchema(db);
     setSetting(db, PUBLIC_API_KEYS_SETTING_KEY, serialized);
   });
+  publicApiKeyRecordsCache = clonePublicApiKeyRecords(records);
+  publicApiKeyRecordsCacheAt = Date.now();
 }
 
 async function backupPublicApiKeyRecords(records: PublicApiKeyRecord[]) {
@@ -6874,6 +6915,17 @@ async function start() {
   let invitePopupClaimQueue: Promise<unknown> = Promise.resolve();
 
   app.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      const durationMs = Date.now() - startedAt;
+      if (durationMs >= 1_000) {
+        console.warn(`[slow-request] ${req.method} ${req.path} status=${res.statusCode} duration=${durationMs}ms`);
+      }
+    });
+    next();
+  });
+
+  app.use((req, res, next) => {
     const originHeader = req.headers.origin;
     if (originHeader && isAllowedOrigin(originHeader)) {
       res.setHeader('Access-Control-Allow-Origin', originHeader);
@@ -8831,6 +8883,9 @@ async function start() {
     generationJobs.set(jobId, {
       ...current,
       ...patch,
+      // Terminal jobs retain only their result for polling/idempotency, not large reference uploads.
+      requestBody: null,
+      authHeader: '',
       progress: patch.status === 'succeeded' ? 100 : Math.max(current.progress || 12, 12),
       completedAt: nowIso(),
       updatedAt: nowIso(),
@@ -9049,7 +9104,11 @@ async function start() {
     const updateJob = (patch: Partial<AuthenticatedGenerationJob>) => {
       const current = generationJobs.get(jobId);
       if (!current) return null;
-      const next = { ...current, ...patch, updatedAt: nowIso() };
+      const next = {
+        ...current, ...patch, updatedAt: nowIso(),
+        ...(patch.status === 'succeeded' || patch.status === 'failed'
+          ? { requestBody: null, authHeader: '' } : {}),
+      };
       generationJobs.set(jobId, next);
       return next;
     };
@@ -9057,7 +9116,7 @@ async function start() {
     updateJob({ status: 'processing', progress: 12, startedAt: nowIso() });
 
     try {
-      const response = await fetch(`${internalApiOrigin}/api/generate`, {
+      const responsePromise = fetch(`${internalApiOrigin}/api/generate`, {
         method: 'POST',
         headers: {
           Authorization: job.authHeader,
@@ -9069,6 +9128,12 @@ async function start() {
         body: JSON.stringify(job.requestBody),
         signal: AbortSignal.timeout(15 * 60_000),
       });
+      // fetch has captured the serialized request; the job cache must not retain
+      // the original base64 inputs for the two-hour result retention period.
+      job.requestBody = null;
+      job.authHeader = '';
+      updateJob({ requestBody: null, authHeader: '' });
+      const response = await responsePromise;
 
       const responseText = await response.text().catch(() => '');
       let payload: { image?: GeneratedImagePayload; error?: unknown; message?: unknown; detail?: unknown; failure_reason?: unknown; indeterminate?: boolean } | null = null;
@@ -9239,6 +9304,8 @@ async function start() {
       generationJobs.set(jobId, {
         ...current,
         status: 'failed',
+        requestBody: null,
+        authHeader: '',
         error: error instanceof QueueCapacityError ? '当前任务较多，请稍后重试' : '任务暂时无法开始，请稍后重试',
         completedAt: nowIso(),
         updatedAt: nowIso(),
@@ -9771,6 +9838,8 @@ async function start() {
     videoJobs.set(jobId, {
       ...current,
       ...patch,
+      requestBody: null,
+      authHeader: '',
       progress: patch.status === 'succeeded' ? 100 : Math.max(current.progress || 12, 12),
       completedAt: nowIso(),
       updatedAt: nowIso(),
@@ -9784,7 +9853,11 @@ async function start() {
     const updateJob = (patch: Partial<AuthenticatedVideoJob>) => {
       const current = videoJobs.get(jobId);
       if (!current) return null;
-      const next = { ...current, ...patch, updatedAt: nowIso() };
+      const next = {
+        ...current, ...patch, updatedAt: nowIso(),
+        ...(patch.status === 'succeeded' || patch.status === 'failed'
+          ? { requestBody: null, authHeader: '' } : {}),
+      };
       videoJobs.set(jobId, next);
       return next;
     };
@@ -9792,7 +9865,7 @@ async function start() {
     updateJob({ status: 'processing', progress: 12, startedAt: nowIso() });
 
     try {
-      const response = await fetch(`${internalApiOrigin}/api/video`, {
+      const responsePromise = fetch(`${internalApiOrigin}/api/video`, {
         method: 'POST',
         headers: {
           Authorization: job.authHeader,
@@ -9804,6 +9877,10 @@ async function start() {
         body: JSON.stringify(job.requestBody),
         signal: AbortSignal.timeout(21 * 60_000),
       });
+      job.requestBody = null;
+      job.authHeader = '';
+      updateJob({ requestBody: null, authHeader: '' });
+      const response = await responsePromise;
 
       const responseText = await response.text().catch(() => '');
       let payload: { video?: GeneratedVideoPayload; error?: unknown } | null = null;
@@ -10338,7 +10415,7 @@ async function start() {
             SELECT id, user_id, username, prompt, model_id, model_name, dimensions, image_size, image_path, credits_used, api_request_ms, reference_images, created_at
             FROM generations
             WHERE user_id IN (${ownedIds.map(() => '?').join(',')})
-            ORDER BY datetime(created_at) DESC, id DESC
+            ORDER BY created_at DESC, id DESC
           `,
           ownedIds,
         ).map(toGeneration);
@@ -11401,11 +11478,22 @@ async function start() {
 
       const payload = await withReadDb((db) => {
         ensureSchema(db);
-        const todayKey = formatDateKeyInTimeZone(new Date());
-        const todayRows = runQuery<Record<string, unknown>>(
+        const now = new Date();
+        const todayStartIso = startOfDayIsoInTimeZone(now);
+        const tomorrowStartIso = startOfDayIsoInTimeZone(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+        const todayStats = getOne<{ today_count: number; today_credits: number }>(
           db,
-          "SELECT created_at, credits_used FROM generations WHERE username != 'demo'",
-        ).filter((row) => formatDateKeyInTimeZone(String(row.created_at || '')) === todayKey);
+          `
+            SELECT
+              COUNT(*) AS today_count,
+              COALESCE(SUM(credits_used), 0) AS today_credits
+            FROM generations
+            WHERE username != 'demo'
+              AND created_at >= ?
+              AND created_at < ?
+          `,
+          [todayStartIso, tomorrowStartIso],
+        );
         const inviteCount = Number(getOne<{ total: number }>(db, 'SELECT COUNT(*) AS total FROM invite_codes')?.total || 0);
         const usedInviteCount = Number(
           getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM invite_codes WHERE redeemed_by IS NOT NULL AND redeemed_by != ''")?.total || 0,
@@ -11414,8 +11502,8 @@ async function start() {
         const recordCount = Number(getOne<{ total: number }>(db, "SELECT COUNT(*) AS total FROM generations WHERE username != 'demo'")?.total || 0);
         return {
           stats: {
-            todayRecordCount: todayRows.length,
-            todayCreditsUsed: todayRows.reduce((sum, row) => sum + Number(row.credits_used || 0), 0),
+            todayRecordCount: Number(todayStats?.today_count || 0),
+            todayCreditsUsed: Number(todayStats?.today_credits || 0),
             inviteUsageRate: inviteCount > 0 ? Math.round((usedInviteCount / inviteCount) * 100) : 0,
             lowCreditUserCount: 0,
             userCount,
@@ -11457,10 +11545,19 @@ async function start() {
 
       const rankings = await withReadDb((db) => {
         ensureSchema(db);
-        const todayKey = formatDateKeyInTimeZone(new Date());
+        const now = new Date();
+        const todayStartIso = startOfDayIsoInTimeZone(now);
+        const tomorrowStartIso = startOfDayIsoInTimeZone(new Date(now.getTime() + 24 * 60 * 60 * 1000));
         const todayRows = runQuery<Record<string, unknown>>(
           db,
-          "SELECT user_id, username, credits_used, created_at FROM generations WHERE username != 'demo'",
+          `
+            SELECT user_id, username, credits_used, created_at
+            FROM generations
+            WHERE username != 'demo'
+              AND created_at >= ?
+              AND created_at < ?
+          `,
+          [todayStartIso, tomorrowStartIso],
         );
         const apiKeys = normalizeApiKeyRecords(
           parseJsonSetting(getSetting(db, PUBLIC_API_KEYS_SETTING_KEY, '[]'), []),
@@ -11481,8 +11578,6 @@ async function start() {
         const todayMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
 
         for (const row of todayRows) {
-          const createdAt = String(row.created_at || '');
-          if (formatDateKeyInTimeZone(createdAt) !== todayKey) continue;
           const rawUserId = String(row.user_id || '');
           const rawUsername = String(row.username || '');
           const credits = Number(row.credits_used || 0);
@@ -12840,7 +12935,7 @@ async function start() {
                 SELECT id, prompt, model_name, dimensions, image_path, category, reference_images, created_at
                 FROM images
                 WHERE user_id = ? AND category = ?
-                ORDER BY datetime(created_at) DESC, id DESC
+                ORDER BY created_at DESC, id DESC
               `,
               [userId, category],
             )
@@ -12850,7 +12945,7 @@ async function start() {
                 SELECT id, prompt, model_name, dimensions, image_path, category, reference_images, created_at
                 FROM images
                 WHERE user_id = ?
-                ORDER BY datetime(created_at) DESC, id DESC
+                ORDER BY created_at DESC, id DESC
               `,
               [userId],
             );
