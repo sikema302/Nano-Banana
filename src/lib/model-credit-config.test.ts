@@ -51,15 +51,49 @@ test('video reference images are free up to 5, then +30 each', () => {
   assert.equal(getVideoReferenceImageSurcharge(Number.NaN), 0);
 });
 
-test('video credits = fixed base + per-second surcharge over 10s', () => {
-  // 768p 底价 480，2K 底价 520；超过 10 秒每秒 +20
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 4), 480);
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 10), 480);
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 11), 500);
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '2K', 10), 520);
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '2K', 15), 620);
+test('minimax video credits = fixed base + per-second surcharge over 10s', () => {
+  // minimax-h3：768p 底价 480，2K 底价 520；超过 10 秒每秒 +20
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '768p', 4), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '768p', 10), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '768p', 11), 500);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '2K', 10), 520);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '2K', 15), 620);
   // 非 2K 一律按 768p 底价
-  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '1080p', 5), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3', '1080p', 5), 480);
+});
+
+test('grok video credits: 480p 底价 180、720p 底价 320，超 10 秒每秒 +10', () => {
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '480p', 4), 180);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '480p', 10), 180);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '480p', 15), 230);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '720p', 10), 320);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '720p', 15), 370);
+  // 非 720p 一律按 480p 底价
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '768p', 5), 180);
+});
+
+test('normalizes nested minimax + grok video pricing', () => {
+  const pricing = normalizeModelCreditPricing({
+    video: {
+      minimax: { p768Base: 400, twoKBase: 510, excessPerSecond: 15 },
+      grok: { p480Base: 150, p720Base: 300, excessPerSecond: 8 },
+    },
+  });
+  assert.equal(pricing.video.minimax.p768Base, 400);
+  assert.equal(pricing.video.minimax.excessPerSecond, 15);
+  assert.equal(pricing.video.grok.p480Base, 150);
+  assert.equal(pricing.video.grok.excessPerSecond, 8);
+  assert.equal(getConfiguredVideoCredits(pricing, 'grok-imagine-video-1.5', '720p', 12), 316);
+});
+
+test('normalizes legacy flat video pricing into minimax with grok defaults', () => {
+  const pricing = normalizeModelCreditPricing({
+    video: { p768Base: 111, twoKBase: 222, excessPerSecond: 33 },
+  });
+  assert.equal(pricing.video.minimax.p768Base, 111);
+  assert.equal(pricing.video.minimax.twoKBase, 222);
+  assert.equal(pricing.video.minimax.excessPerSecond, 33);
+  assert.equal(pricing.video.grok.p480Base, DEFAULT_MODEL_CREDIT_PRICING.video.grok.p480Base);
 });
 
 test('video reference surcharge is independent of duration and resolution', () => {

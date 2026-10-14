@@ -136,9 +136,15 @@ import {
   getConfiguredImageCredits,
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
+  VIDEO_MODELS,
   VIDEO_REFERENCE_IMAGE_FREE_COUNT,
   VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS,
   type ModelCreditPricing,
+  type VideoModelId,
+  type VideoResolution,
+  type VideoAspect,
+  type MinimaxVideoCreditPricing,
+  type GrokVideoCreditPricing,
 } from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
@@ -735,6 +741,22 @@ function getModelTheme(modelId: string) {
 
 function getModelLogo(modelId: string) {
   return modelId === 'Nano_Banana_Pro' ? '/images/model-nano-banana.svg' : '/images/model-gpt.svg';
+}
+
+// 视频模型选择下拉的悬停辉光色，与生图模型选择器保持一致。
+const VIDEO_MODEL_THEME: Record<VideoModelId, { glow: string }> = {
+  'minimax-h3': { glow: 'rgba(251,146,60,0.45)' },
+  'grok-imagine-video-1.5': { glow: 'rgba(56,189,248,0.45)' },
+};
+
+function getVideoModelTheme(modelId: VideoModelId) {
+  return VIDEO_MODEL_THEME[modelId] ?? { glow: 'rgba(148,163,184,0.4)' };
+}
+
+function getVideoModelDescription(modelId: VideoModelId) {
+  if (modelId === 'minimax-h3') return '全参 MinimaxH3 视频模型';
+  if (modelId === 'grok-imagine-video-1.5') return 'grok 视频生成模型';
+  return '';
 }
 
 function StageCard({
@@ -1482,6 +1504,7 @@ function HistoryView({
   const isVideoRecord = (item: GenerationRecord) =>
     item.modelId?.startsWith('minimax_h3') ||
     item.modelId === '全参MinimaxH3' ||
+    item.modelId?.startsWith('grok-imagine-video-1.5') ||
     isVideoAssetUrl(item.imageUrl);
   const imageRecords = records.filter((item) => !isVideoRecord(item));
   const videoRecords = records.filter(isVideoRecord);
@@ -3071,8 +3094,11 @@ function AdminModelCreditPanel({
   const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
   };
-  const setVideo = (key: keyof ModelCreditPricing['video'], value: number) => {
-    setDraft((current) => ({ ...current, video: { ...current.video, [key]: value } }));
+  const setMinimaxVideo = (key: keyof MinimaxVideoCreditPricing, value: number) => {
+    setDraft((current) => ({ ...current, video: { ...current.video, minimax: { ...current.video.minimax, [key]: value } } }));
+  };
+  const setGrokVideo = (key: keyof GrokVideoCreditPricing, value: number) => {
+    setDraft((current) => ({ ...current, video: { ...current.video, grok: { ...current.video.grok, [key]: value } } }));
   };
   const creditInput = (value: number, onChange: (value: number) => void) => (
     <input
@@ -3161,12 +3187,22 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-          <h3 className="font-black text-emerald-100">视频生成（全参 MinimaxH3）</h3>
+          <h3 className="font-black text-emerald-100">视频生成 · 全参 MinimaxH3</h3>
           <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；10 秒内固定底价，超出 10 秒每秒加价。</p>
           <div className="mt-3">
-            {row('768p 底价', '10 秒内固定扣分 · 全参MinimaxH3', creditInput(draft.video.p768Base, (value) => setVideo('p768Base', value)))}
-            {row('2K 底价', '10 秒内固定扣分 · 全参MinimaxH3', creditInput(draft.video.twoKBase, (value) => setVideo('twoKBase', value)))}
-            {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.excessPerSecond, (value) => setVideo('excessPerSecond', value)))}
+            {row('768p 底价', '10 秒内固定扣分', creditInput(draft.video.minimax.p768Base, (value) => setMinimaxVideo('p768Base', value)))}
+            {row('2K 底价', '10 秒内固定扣分', creditInput(draft.video.minimax.twoKBase, (value) => setMinimaxVideo('twoKBase', value)))}
+            {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.minimax.excessPerSecond, (value) => setMinimaxVideo('excessPerSecond', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-emerald-100">视频生成 · grok-imagine-video-1.5</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；10 秒内固定底价，超出 10 秒每秒加价。</p>
+          <div className="mt-3">
+            {row('480p 底价', '10 秒内固定扣分', creditInput(draft.video.grok.p480Base, (value) => setGrokVideo('p480Base', value)))}
+            {row('720p 底价', '10 秒内固定扣分', creditInput(draft.video.grok.p720Base, (value) => setGrokVideo('p720Base', value)))}
+            {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.grok.excessPerSecond, (value) => setGrokVideo('excessPerSecond', value)))}
           </div>
         </section>
       </div>
@@ -4978,14 +5014,14 @@ function createEmptyVideoSlots(): VideoSlot[] {
   return Array.from({ length: 4 }, (_, index) => ({ id: `vidslot-${index}`, prompt: '', status: 'idle' as const, progress: 0 }));
 }
 
-const VIDEO_ASPECT_OPTIONS: Array<'16:9' | '9:16' | '1:1'> = ['16:9', '9:16', '1:1'];
-
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [videoPrompt, setVideoPrompt] = useState('');
-  const [videoResolution, setVideoResolution] = useState<'768p' | '2K'>('768p');
-  const [videoAspect, setVideoAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
+  const [videoModel, setVideoModel] = useState<VideoModelId>('minimax-h3');
+  const [videoModelMenuOpen, setVideoModelMenuOpen] = useState(false);
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>('768p');
+  const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
   const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
@@ -4999,7 +5035,7 @@ export default function App() {
   const [modelCreditPricing, setModelCreditPricing] = useState<ModelCreditPricing>(DEFAULT_MODEL_CREDIT_PRICING);
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
-  const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoResolution, videoSeconds);
+  const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoModel, videoResolution, videoSeconds);
   // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关。
   const videoReferenceSurcharge = getVideoReferenceImageSurcharge(videoReferences.length);
   const videoTotalCreditCost = videoCreditCost + videoReferenceSurcharge;
@@ -5449,10 +5485,10 @@ export default function App() {
 
   async function appendVideoReferenceFiles(files: File[]) {
     if (files.length === 0) return;
-    const maxRef = 9;
+    const maxRef = VIDEO_MODELS[videoModel].maxReferenceImages(videoResolution);
     const remaining = Math.max(0, maxRef - videoReferences.length);
     if (remaining === 0) {
-      setNotice('视频最多上传 9 张参考图');
+      setNotice(`最多上传 ${maxRef} 张参考图`);
       return;
     }
     const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 25 * 1024 * 1024, 25)));
@@ -5475,6 +5511,26 @@ export default function App() {
     const accepted = filtered.slice(0, remaining);
     const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
     setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
+  }
+
+  function selectVideoModel(next: VideoModelId) {
+    if (next === videoModel) return;
+    setVideoModel(next);
+    const spec = VIDEO_MODELS[next];
+    const nextResolution = spec.resolutions[0];
+    setVideoResolution(nextResolution);
+    setVideoAspect(spec.aspects[0]);
+    setVideoReferences((current) => current.slice(0, spec.maxReferenceImages(nextResolution)));
+    if (next !== 'minimax-h3') {
+      setVideoRefAudios([]);
+    }
+  }
+
+  function selectVideoResolution(next: VideoResolution) {
+    if (next === videoResolution) return;
+    setVideoResolution(next);
+    const maxImages = VIDEO_MODELS[videoModel].maxReferenceImages(next);
+    setVideoReferences((current) => current.slice(0, maxImages));
   }
 
   function updateVideoSlot(slotId: string, patch: Partial<VideoSlot>) {
@@ -5528,6 +5584,7 @@ export default function App() {
     try {
       const { job } = await startGenerateVideoJob({
         submissionId: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        model_id: videoModel,
         prompt: promptText,
         resolution: videoResolution,
         aspect: videoAspect,
@@ -7205,16 +7262,80 @@ export default function App() {
                   <div className="no-scrollbar mt-2 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">模型选择</div>
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-orange-400/40 bg-orange-500/15 px-3 py-2">
-                      <Film size={15} className="text-orange-300" />
-                      <span className="text-[13px] font-black text-orange-100">MiniMax H3</span>
+                    <div
+                      className="relative"
+                      onBlur={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget)) setVideoModelMenuOpen(false);
+                      }}
+                    >
+                      <button
+                        className="group input model-select-field flex min-h-[44px] w-full items-center gap-2.5 bg-transparent! py-1.5 pl-2.5 pr-10 text-left transition hover:border-white/20"
+                        type="button"
+                        aria-haspopup="listbox"
+                        aria-expanded={videoModelMenuOpen}
+                        onClick={() => setVideoModelMenuOpen((current) => !current)}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/30">
+                          <Film size={16} className="text-zinc-200" />
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-[12px] font-semibold leading-4 text-zinc-100">{VIDEO_MODELS[videoModel].label}</span>
+                          <span className="truncate text-[9px] font-medium leading-3 text-zinc-500">{getVideoModelDescription(videoModel)}</span>
+                        </span>
+                        <ChevronDown
+                          size={15}
+                          className={`absolute right-3 text-zinc-400 transition-transform ${videoModelMenuOpen ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                      {videoModelMenuOpen ? (
+                        <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 space-y-1 overflow-hidden rounded-2xl border border-white/10 bg-[#141414]/95 p-1.5 shadow-2xl backdrop-blur-xl" role="listbox">
+                          {Object.values(VIDEO_MODELS).map((spec) => {
+                            const theme = getVideoModelTheme(spec.id);
+                            const isActive = videoModel === spec.id;
+                            return (
+                              <button
+                                key={spec.id}
+                                type="button"
+                                role="option"
+                                aria-selected={isActive}
+                                className={`group flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-all duration-150 ${
+                                  isActive
+                                    ? 'bg-violet-500/[0.12] ring-1 ring-violet-500/70'
+                                    : 'hover:bg-white/[0.04] hover:ring-1 hover:ring-violet-400/30'
+                                }`}
+                                onClick={() => {
+                                  selectVideoModel(spec.id);
+                                  setVideoModelMenuOpen(false);
+                                }}
+                              >
+                                <span className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                                  <span
+                                    className={`absolute inset-0 rounded-xl blur-md transition-opacity duration-200 ${isActive ? 'opacity-60' : 'opacity-0 group-hover:opacity-50'}`}
+                                    style={{ backgroundColor: theme.glow }}
+                                  />
+                                  <Film size={18} className={`relative transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-white' : 'text-zinc-300'}`} />
+                                  {isActive ? (
+                                    <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white ring-2 ring-[#141414]">
+                                      <Check size={9} strokeWidth={3.5} />
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[13px] font-semibold text-zinc-100">{spec.label}</span>
+                                  <span className="mt-0.5 block truncate text-[10px] font-medium text-zinc-500">{getVideoModelDescription(spec.id)}</span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
                   </section>
 
                   <section className="space-y-1.5">
                     <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
                       <span>上传参考图（可选）</span>
-                      <span className="shrink-0 text-[10px] text-zinc-500">{videoReferences.length} / 9 · 单张 ≤25MB</span>
+                      <span className="shrink-0 text-[10px] text-zinc-500">{videoReferences.length} / {VIDEO_MODELS[videoModel].maxReferenceImages(videoResolution)} · 单张 ≤25MB</span>
                     </div>
                     <div
                       className={
@@ -7279,6 +7400,7 @@ export default function App() {
                     </div>
                   </section>
 
+                  {videoModel === 'minimax-h3' ? (
                   <section className="space-y-1.5">
                     <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
                       <span>
@@ -7327,6 +7449,7 @@ export default function App() {
                       </div>
                     ) : null}
                   </section>
+                  ) : null}
 
                   <section className="space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-1 px-0.5 text-[10px] font-bold text-zinc-400">
@@ -7374,12 +7497,12 @@ export default function App() {
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">清晰度</div>
                     <div className="grid grid-cols-2 gap-2">
-                      {(['768p', '2K'] as Array<'768p' | '2K'>).map((id) => (
+                      {VIDEO_MODELS[videoModel].resolutions.map((id) => (
                         <button
                           key={id}
                           type="button"
                           className={`flex items-center justify-center rounded-lg border px-2 py-2.5 text-center text-[13px] font-black transition ${videoResolution === id ? 'border-transparent bg-white text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.35)]' : 'border-white/10 bg-black/20 text-zinc-400 hover:border-white/25 hover:text-zinc-200'}`}
-                          onClick={() => setVideoResolution(id)}
+                          onClick={() => selectVideoResolution(id)}
                         >
                           {id}
                         </button>
@@ -7390,7 +7513,7 @@ export default function App() {
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">画面比例</div>
                     <div className="grid grid-cols-3 gap-2">
-                      {VIDEO_ASPECT_OPTIONS.map((aspect) => (
+                      {VIDEO_MODELS[videoModel].aspects.map((aspect) => (
                         <button
                           key={aspect}
                           type="button"

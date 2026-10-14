@@ -1,35 +1,41 @@
-// Uselg(FluxPort) 视频生成渠道：全参 MinimaxH3 文生视频 / 图生视频 / 参考生视频。
+// Uselg(FluxPort) 视频生成渠道：全参 MinimaxH3 与其后的 grok-imagine-video-1.5 文生/图生视频。
 //
-// 契约（与 uselg.top「全参MinimaxH3」文档一致，base URL 为 api.ai-media.vip）：
+// 契约（与 uselg.top 文档一致，base URL 为 api.ai-media.vip）：
 //   提交  POST /v1/videos             （Authorization: Bearer + Idempotency-Key）
 //   查询  GET  /v1/videos/{id}        （按 poll_after_ms / Retry-After 等待）
 //   下载  GET  /v1/videos/{id}/content（video_available=true 且 asset_state=ready 后可下载）
 //
-// 单模型名 `全参MinimaxH3`，清晰度与比例由参数控制（均在 4–15 秒内，默认 5 秒）：
-//   resolution  768p / 2K（默认 2K）
-//   aspect_ratio 16:9 / 9:16 / 1:1（默认 16:9）
-// 参考图最多 9 张、参考视频 / 参考音频各最多 3 段。
+// 模型与清晰度/比例由共享规格表 VIDEO_MODELS 控制，上游模型名按分辨率映射：
+//   minimax-h3: 768p/2K，比例 16:9/9:16/1:1，参考图 9、视频/音频各 3；上游模型 `全参MinimaxH3`
+//   grok-imagine-video-1.5: 480p/720p，比例 5 种，480p 参考图 1、720p 参考图 7，无视频/音频；
+//     上游模型 480p→`grok-imagine-video-1.5-lite`、720p→`grok-imagine-video-1.5（按次）`
 
 import { randomUUID } from 'node:crypto';
 import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
+import {
+  VIDEO_MODELS,
+  normalizeVideoModelId,
+  type VideoModelId,
+  type VideoResolution,
+  type VideoAspect,
+} from '../src/lib/model-credit-config.js';
 
-export type VideoResolution = '768p' | '2K';
-
-/** 前端可选的画面比例：仅 16:9 / 9:16 / 1:1 三档。 */
-export type VideoAspect = '16:9' | '9:16' | '1:1';
+// 供上层复用这些类型（与共享计费模块保持一致）。
+export type { VideoModelId, VideoResolution, VideoAspect };
 
 export type UselgVideoInput = {
+  modelId: VideoModelId;
   prompt: string;
   resolution: VideoResolution;
   /** 画面比例，按 aspect_ratio 下发。 */
   aspect: VideoAspect;
   /** 4–15 的整数秒，默认 5。 */
   seconds: number;
-  /** 参考图（图生视频），最多 9 个公开可读的 HTTP(S) URL。 */
+  /** 参考图（图生视频），最多由模型规格决定。 */
   referenceImages: string[];
-  /** 参考视频，最多 3 个公开可读的 HTTP(S) URL（单文件 ≤50MB，由上传侧校验）。 */
+  /** 参考视频，最多由模型规格决定（minimax 3 段 / grok 0 段）。 */
   referenceVideos?: string[];
-  /** 参考音频，最多 3 个公开可读的 HTTP(S) URL。 */
+  /** 参考音频，最多由模型规格决定（minimax 3 段 / grok 0 段）。 */
   referenceAudios?: string[];
 };
 
@@ -49,14 +55,8 @@ export type UselgVideoResult = {
   model: string;
 };
 
-/** 全参 MinimaxH3 单模型名；清晰度由 `resolution` 参数（768p/2K）控制。 */
-export const VIDEO_MODEL = '全参MinimaxH3';
-
-/** 视频参考图上限（与上游文档一致）。 */
+/** 视频参考图上限（minimax 单模型兜底，供上层切片使用；grok 按分辨率 1/7）。 */
 export const VIDEO_MAX_REFERENCE_IMAGES = 9;
-/** 参考视频 / 参考音频上限（与上游文档一致，均最多 3 段）。 */
-export const VIDEO_MAX_REFERENCE_VIDEOS = 3;
-export const VIDEO_MAX_REFERENCE_AUDIOS = 3;
 export const VIDEO_MIN_SECONDS = 4;
 export const VIDEO_MAX_SECONDS = 15;
 export const VIDEO_DEFAULT_SECONDS = 5;
@@ -122,12 +122,18 @@ export function normalizeVideoSeconds(value: unknown) {
   return Math.min(VIDEO_MAX_SECONDS, Math.max(VIDEO_MIN_SECONDS, parsed));
 }
 
-export function normalizeVideoResolution(value: string): VideoResolution {
-  return value === '2K' ? '2K' : '768p';
+function resolveSpec(modelId: VideoModelId | string) {
+  return VIDEO_MODELS[normalizeVideoModelId(modelId)];
 }
 
-export function normalizeVideoAspect(value: string): VideoAspect {
-  return value === '9:16' || value === '1:1' ? value : '16:9';
+export function normalizeVideoResolution(modelId: VideoModelId | string, value: string): VideoResolution {
+  const spec = resolveSpec(modelId);
+  return spec.resolutions.includes(value as VideoResolution) ? (value as VideoResolution) : spec.resolutions[0];
+}
+
+export function normalizeVideoAspect(modelId: VideoModelId | string, value: string): VideoAspect {
+  const spec = resolveSpec(modelId);
+  return spec.aspects.includes(value as VideoAspect) ? (value as VideoAspect) : spec.aspects[0];
 }
 
 /**
@@ -139,18 +145,20 @@ export async function generateUselgVideo(
   options: UselgVideoOptions,
 ): Promise<UselgVideoResult> {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
-  const resolution = normalizeVideoResolution(input.resolution);
-  const aspect = normalizeVideoAspect(input.aspect);
+  const modelId = normalizeVideoModelId(input.modelId);
+  const spec = resolveSpec(modelId);
+  const resolution = normalizeVideoResolution(modelId, input.resolution);
+  const aspect = normalizeVideoAspect(modelId, input.aspect);
   const seconds = normalizeVideoSeconds(input.seconds);
   const referenceImages = input.referenceImages
     .filter((url) => /^https?:\/\//i.test(url))
-    .slice(0, VIDEO_MAX_REFERENCE_IMAGES);
+    .slice(0, spec.maxReferenceImages(resolution));
   const referenceVideos = (input.referenceVideos || [])
     .filter((url) => /^https?:\/\//i.test(url))
-    .slice(0, VIDEO_MAX_REFERENCE_VIDEOS);
+    .slice(0, spec.maxReferenceVideos);
   const referenceAudios = (input.referenceAudios || [])
     .filter((url) => /^https?:\/\//i.test(url))
-    .slice(0, VIDEO_MAX_REFERENCE_AUDIOS);
+    .slice(0, spec.maxReferenceAudios);
 
   const fetchImpl = options.fetchImpl || ((url: string, init?: RequestInit) =>
     pooledFetch(url, init || {}, {
@@ -167,9 +175,9 @@ export async function generateUselgVideo(
   let submittedTaskId = '';
 
   try {
-    // 1) 提交任务：model 固定 `全参MinimaxH3`，清晰度用 resolution、比例用 aspect_ratio 下发。
+    // 1) 提交任务：model 按模型+清晰度映射，清晰度用 resolution、比例用 aspect_ratio 下发。
     const submitBody: Record<string, unknown> = {
-      model: VIDEO_MODEL,
+      model: spec.upstreamModelFor(resolution),
       prompt: input.prompt,
       seconds,
       resolution,
@@ -240,7 +248,7 @@ export async function generateUselgVideo(
             buffer,
             contentType,
             taskId: submittedTaskId,
-            model: VIDEO_MODEL,
+            model: spec.upstreamModelFor(resolution),
           };
         }
         // 状态已就绪但下载仍未就绪（文件保存中），短暂等待后重试。
@@ -310,21 +318,25 @@ function isVideoFailed(status: string) {
   return FAILED_STATUSES.has(status);
 }
 
-/** 供上层做归一化校验：返回规范化后的秒数与分辨率档，非法值回退默认。 */
+/** 供上层做归一化校验：返回规范化后的模型、秒数与分辨率档，非法值回退默认。 */
 export function normalizeUselgVideoInput(input: UselgVideoInput) {
+  const modelId = normalizeVideoModelId(input.modelId);
+  const spec = resolveSpec(modelId);
+  const resolution = normalizeVideoResolution(modelId, input.resolution);
   return {
+    modelId,
     prompt: input.prompt,
-    resolution: normalizeVideoResolution(input.resolution),
-    aspect: normalizeVideoAspect(input.aspect),
+    resolution,
+    aspect: normalizeVideoAspect(modelId, input.aspect),
     seconds: normalizeVideoSeconds(input.seconds),
     referenceImages: input.referenceImages
       .filter((url) => /^https?:\/\//i.test(url))
-      .slice(0, VIDEO_MAX_REFERENCE_IMAGES),
+      .slice(0, spec.maxReferenceImages(resolution)),
     referenceVideos: (input.referenceVideos || [])
       .filter((url) => /^https?:\/\//i.test(url))
-      .slice(0, VIDEO_MAX_REFERENCE_VIDEOS),
+      .slice(0, spec.maxReferenceVideos),
     referenceAudios: (input.referenceAudios || [])
       .filter((url) => /^https?:\/\//i.test(url))
-      .slice(0, VIDEO_MAX_REFERENCE_AUDIOS),
+      .slice(0, spec.maxReferenceAudios),
   };
 }

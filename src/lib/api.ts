@@ -1087,6 +1087,7 @@ function normalizeGeneratedVideo(video: GeneratedVideoPayload): GeneratedVideoPa
 
 export async function startGenerateVideoJob(payload: {
   submissionId?: string;
+  model_id?: string;
   prompt: string;
   resolution: string;
   aspect?: string;

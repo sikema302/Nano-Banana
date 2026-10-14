@@ -69,7 +69,12 @@ import {
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
   normalizeModelCreditPricing,
+  normalizeVideoModelId,
+  VIDEO_MODELS,
   type ModelCreditPricing,
+  type VideoModelId,
+  type VideoResolution,
+  type VideoAspect,
 } from '../src/lib/model-credit-config.js';
 import {
   getActiveGptImagePricing,
@@ -87,9 +92,6 @@ import {
   normalizeVideoAspect,
   normalizeVideoSeconds,
   VIDEO_MAX_REFERENCE_IMAGES,
-  VIDEO_MODEL,
-  type VideoResolution,
-  type VideoAspect,
 } from './video-generation.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
@@ -2264,21 +2266,26 @@ function getModelCredits(modelId: string, imageSize = '', quality = '') {
   return getConfiguredImageCredits(activeModelCreditPricing, modelId, imageSize, quality);
 }
 
-/** 视频总积分 = 底价（768p:480 / 2K:520）+ 超出 10 秒每秒加价 + 参考图阶梯加价（第 6 张起每张 +30）。 */
-function getVideoCredits(resolution: string, seconds: number, referenceImageCount = 0) {
+/** 视频总积分 = 底价（按模型/清晰度）+ 超出 10 秒每秒加价 + 参考图阶梯加价（第 6 张起每张 +30）。 */
+function getVideoCredits(modelId: VideoModelId, resolution: VideoResolution, seconds: number, referenceImageCount = 0) {
   const credits = getConfiguredVideoCredits(
     activeModelCreditPricing,
-    normalizeVideoResolution(resolution),
+    modelId,
+    normalizeVideoResolution(modelId, resolution),
     normalizeVideoSeconds(seconds),
+  );
+  const maxImages = VIDEO_MODELS[modelId].maxReferenceImages(
+    normalizeVideoResolution(modelId, resolution),
   );
   const billableReferenceImages = Math.min(
     Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0,
-    VIDEO_MAX_REFERENCE_IMAGES,
+    maxImages,
   );
   return credits + getVideoReferenceImageSurcharge(billableReferenceImages);
 }
 
 type VideoGenerationInput = {
+  modelId: VideoModelId;
   prompt: string;
   resolution: VideoResolution;
   aspect: VideoAspect;
@@ -2295,6 +2302,7 @@ async function callVideoGeneration(input: VideoGenerationInput) {
   }
   return generateUselgVideo(
     {
+      modelId: input.modelId,
       prompt: input.prompt,
       resolution: input.resolution,
       aspect: input.aspect,
@@ -6353,11 +6361,19 @@ function isReferenceImageInput(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
 }
 
+function isVideoModelHistoryId(modelId?: string) {
+  if (!modelId) return false;
+  if (modelId.startsWith('minimax_h3') || modelId.startsWith('minimax-h3')) return true;
+  if (modelId === '全参MinimaxH3') return true;
+  if (modelId.startsWith('grok-imagine-video-1.5')) return true;
+  return false;
+}
+
 function maxReferenceImageCountForModel(modelId?: string) {
   if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
     return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
   }
-  if (modelId && (modelId.startsWith('minimax_h3') || modelId === VIDEO_MODEL)) {
+  if (isVideoModelHistoryId(modelId)) {
     return VIDEO_MAX_REFERENCE_IMAGES;
   }
   return MAX_REFERENCE_IMAGE_COUNT;
@@ -9789,13 +9805,9 @@ async function start() {
   const videoJobTtlMs = 2 * 60 * 60 * 1000;
   const videoSubmissionRegistry = new IdempotencyRegistry(videoJobTtlMs);
 
-  const VIDEO_MODEL_NAMES: Record<VideoResolution, string> = {
-    '768p': 'MiniMax H3 768p',
-    '2K': 'MiniMax H3 2K',
-  };
-
-  function videoModelName(resolution: VideoResolution) {
-    return VIDEO_MODEL_NAMES[resolution] || VIDEO_MODEL;
+  function videoModelName(modelId: VideoModelId, resolution: VideoResolution) {
+    const spec = VIDEO_MODELS[modelId];
+    return `${spec.label} ${resolution}`;
   }
 
   function publicVideoJob(job: AuthenticatedVideoJob) {
@@ -9966,9 +9978,10 @@ async function start() {
     }
 
     try {
-      const resolution = normalizeVideoResolution(normalizeString(req.body?.resolution));
+      const modelId = normalizeVideoModelId(normalizeString(req.body?.model_id));
+      const resolution = normalizeVideoResolution(modelId, normalizeString(req.body?.resolution));
       const referenceImageCount = Array.isArray(req.body?.reference_images) ? req.body.reference_images.length : 0;
-      const creditsUsed = getVideoCredits(resolution, normalizeVideoSeconds(req.body?.seconds), referenceImageCount);
+      const creditsUsed = getVideoCredits(modelId, resolution, normalizeVideoSeconds(req.body?.seconds), referenceImageCount);
       const bucket: CreditBucket = 'general';
 
       if (USE_SUPABASE) {
@@ -10064,20 +10077,24 @@ async function start() {
       return;
     }
     const prompt = normalizeString(req.body?.prompt);
-    const resolution = normalizeVideoResolution(normalizeString(req.body?.resolution));
-    const aspect = normalizeVideoAspect(normalizeString(req.body?.aspect));
+    const modelId = normalizeVideoModelId(normalizeString(req.body?.model_id));
+    const spec = VIDEO_MODELS[modelId];
+    const resolution = normalizeVideoResolution(modelId, normalizeString(req.body?.resolution));
+    const aspect = normalizeVideoAspect(modelId, normalizeString(req.body?.aspect));
     const seconds = normalizeVideoSeconds(req.body?.seconds);
-    const referenceImagesInput = Array.isArray(req.body?.reference_images)
+    let referenceImagesInput = Array.isArray(req.body?.reference_images)
       ? (req.body.reference_images as ReferenceUploadInput[])
       : [];
+    // 按模型+清晰度截断参考图，保证计费、落库与上游一致。
+    referenceImagesInput = referenceImagesInput.slice(0, spec.maxReferenceImages(resolution));
     const referenceVideosInput = Array.isArray(req.body?.reference_videos)
       ? (req.body.reference_videos as ReferenceUploadInput[])
       : [];
     const referenceAudiosInput = Array.isArray(req.body?.reference_audios)
       ? (req.body.reference_audios as ReferenceUploadInput[])
       : [];
-    if (referenceVideosInput.length > 3 || referenceAudiosInput.length > 3) {
-      res.status(400).json({ error: '参考视频、参考音频各最多 3 段' });
+    if (referenceVideosInput.length > spec.maxReferenceVideos || referenceAudiosInput.length > spec.maxReferenceAudios) {
+      res.status(400).json({ error: `参考视频、参考音频各最多 ${spec.maxReferenceVideos}/${spec.maxReferenceAudios} 段` });
       return;
     }
     const requestId = normalizeString((req.body as Record<string, unknown>)?._requestId || '');
@@ -10095,8 +10112,8 @@ async function start() {
     let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
 
     try {
-      const modelId = VIDEO_MODEL;
-      const creditsUsed = getVideoCredits(resolution, seconds, referenceImagesInput.length);
+      const historyModelId = spec.historyModelId;
+      const creditsUsed = getVideoCredits(modelId, resolution, seconds, referenceImagesInput.length);
       const creditBucket: CreditBucket = 'general';
 
       if (creditsUsed > 0) {
@@ -10128,10 +10145,10 @@ async function start() {
         throw new Error(`当前可用于视频的积分不足，需要 ${creditsUsed}，可用 ${Math.max(0, availableModelCredits - reservedCreditAmount(req.authUser!.userId, creditBucket))}`);
       }
       reservedVideoCredit = { bucket: creditBucket, amount: creditsUsed };
-      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId, resolution }, requestId);
+      creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId: historyModelId, resolution }, requestId);
 
-      const persistedReferenceImages = await persistReferenceImages(referenceImagesInput, modelId);
-      const temporaryReferenceImages = persistedReferenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput, modelId);
+      const persistedReferenceImages = await persistReferenceImages(referenceImagesInput, historyModelId);
+      const temporaryReferenceImages = persistedReferenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput, historyModelId);
       const temporaryReferenceVideos = await persistTemporaryReferenceMedia(referenceVideosInput, 'video');
       const temporaryReferenceAudios = await persistTemporaryReferenceMedia(referenceAudiosInput, 'audio');
       const modelReferenceImages = [
@@ -10176,6 +10193,7 @@ async function start() {
       try {
         const apiRequestStartedAt = Date.now();
         const result = await callVideoGeneration({
+          modelId,
           prompt,
           resolution,
           aspect,
@@ -10189,12 +10207,12 @@ async function start() {
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
         // 上游已出片：先写成功诊断记录，后续落盘/扣款失败时按 requestId 回写失败。
         const diagnosticRequestId = await tryRecordGenerationRequest({
-          modelId,
+          modelId: historyModelId,
           provider: 'Uselg',
           configuration: `${resolution}/${seconds}s/video`,
           durationMs: apiRequestMs,
           success: true,
-          sourceModel: modelId,
+          sourceModel: historyModelId,
           prompt,
           requestContext,
         });
@@ -10227,7 +10245,7 @@ async function start() {
 
       const payload: GeneratedVideoPayload = {
         prompt,
-        modelName: videoModelName(resolution),
+        modelName: videoModelName(modelId, resolution),
         resolution,
         seconds,
         videoPath,
@@ -10235,7 +10253,7 @@ async function start() {
         createdAt,
       };
 
-      // 写历史：复用 generations 表，image_path 存视频 URL，model_id 固定为全参MinimaxH3 标识视频。
+      // 写历史：复用 generations 表，image_path 存视频 URL，model_id 用模型历史标识标识视频。
       try {
         if (USE_SUPABASE) {
           const db = await getSupabaseDb();
@@ -10243,8 +10261,8 @@ async function start() {
             userId: req.authUser!.userId,
             username: req.authUser!.username,
             prompt,
-            modelId,
-            modelName: videoModelName(resolution),
+            modelId: historyModelId,
+            modelName: videoModelName(modelId, resolution),
             dimensions: 'video',
             imageSize: resolution,
             imagePath: videoPath,
@@ -10273,8 +10291,8 @@ async function start() {
                 req.authUser!.userId,
                 req.authUser!.username,
                 prompt,
-                modelId,
-                videoModelName(resolution),
+                historyModelId,
+                videoModelName(modelId, resolution),
                 'video',
                 resolution,
                 videoPath,
