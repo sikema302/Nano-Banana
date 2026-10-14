@@ -1,34 +1,27 @@
-// Uselg(FluxPort) 视频生成渠道：minimax_h3 系列文生视频 / 图生视频。
+// Uselg(FluxPort) 视频生成渠道：全参 MinimaxH3 文生视频 / 图生视频 / 参考生视频。
 //
-// 契约（与 uselg.top 文档一致，base URL 为 api.ai-media.vip）：
+// 契约（与 uselg.top「全参MinimaxH3」文档一致，base URL 为 api.ai-media.vip）：
 //   提交  POST /v1/videos             （Authorization: Bearer + Idempotency-Key）
 //   查询  GET  /v1/videos/{id}        （按 poll_after_ms / Retry-After 等待）
 //   下载  GET  /v1/videos/{id}/content（video_available=true 且 asset_state=ready 后可下载）
 //
-// 三档分辨率固定模型名，尺寸如下（均在 4–15 秒内，默认 5 秒）：
-//   768p  -> minimax_h3-768p   size "1376x768"（文档只列横屏约 16:9）
-//   1080p -> minimax_h3-1080p  文档给出比例→size 映射表：
-//             16:9 -> 1920x1080, 9:16 -> 1080x1920, 1:1 -> 1440x1440
-//             （另有 4:3/3:4/3:2/2:3，每秒加价，未开放）
-//   2K    -> minimax_h3-2K     size "2K"（清晰度档由模型名固定）
-//
-// 比例按业务要求四档全开（16:9 / 9:16 / 1:1 / 21:9），实现见 resolveVideoSizeParams：
-// size 与 aspect_ratio 二选一，16:9 用推荐 size，其余走 aspect_ratio。
-// 注意：上游 1080p 文档写明「不支持 21:9」，768p/2K 也未给出其他比例的核验结论，
-// 这些组合能否出片以上游实际返回为准（失败会在生成记录里按阶段归因，不扣积分）。
+// 单模型名 `全参MinimaxH3`，清晰度与比例由参数控制（均在 4–15 秒内，默认 5 秒）：
+//   resolution  768p / 2K（默认 2K）
+//   aspect_ratio 16:9 / 9:16 / 1:1（默认 16:9）
+// 参考图最多 9 张、参考视频 / 参考音频各最多 3 段。
 
 import { randomUUID } from 'node:crypto';
 import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
 
-export type VideoResolution = '768p' | '1080p' | '2K';
+export type VideoResolution = '768p' | '2K';
 
-/** 前端可选的画面比例；上游仅 1080p 档支持比例选择，且不支持 21:9。 */
-export type VideoAspect = '16:9' | '9:16' | '1:1' | '21:9';
+/** 前端可选的画面比例：仅 16:9 / 9:16 / 1:1 三档。 */
+export type VideoAspect = '16:9' | '9:16' | '1:1';
 
 export type UselgVideoInput = {
   prompt: string;
   resolution: VideoResolution;
-  /** 画面比例（四档全开）：16:9 走各档推荐 size，其余按 aspect_ratio 下发。 */
+  /** 画面比例，按 aspect_ratio 下发。 */
   aspect: VideoAspect;
   /** 4–15 的整数秒，默认 5。 */
   seconds: number;
@@ -56,12 +49,8 @@ export type UselgVideoResult = {
   model: string;
 };
 
-/** 每档分辨率的固定模型名与推荐 size。 */
-export const VIDEO_MODELS: Record<VideoResolution, { model: string; size: string }> = {
-  '768p': { model: 'minimax_h3-768p', size: '1376x768' },
-  '1080p': { model: 'minimax_h3-1080p', size: '1920x1080' },
-  '2K': { model: 'minimax_h3-2K', size: '2K' },
-};
+/** 全参 MinimaxH3 单模型名；清晰度由 `resolution` 参数（768p/2K）控制。 */
+export const VIDEO_MODEL = '全参MinimaxH3';
 
 /** 视频参考图上限（与上游文档一致）。 */
 export const VIDEO_MAX_REFERENCE_IMAGES = 9;
@@ -134,33 +123,11 @@ export function normalizeVideoSeconds(value: unknown) {
 }
 
 export function normalizeVideoResolution(value: string): VideoResolution {
-  return value === '1080p' || value === '2K' ? value : '768p';
+  return value === '2K' ? '2K' : '768p';
 }
 
 export function normalizeVideoAspect(value: string): VideoAspect {
-  return value === '9:16' || value === '1:1' || value === '21:9' ? value : '16:9';
-}
-
-/**
- * 按清晰度档 + 画面比例解析提交参数。
- * 上游规则：`size` 与 `aspect_ratio` 二选一（同时传且比例不一致会被拒），
- * 因此 16:9 走各档推荐 size，其他比例改走 aspect_ratio。
- *   - 1080p：16:9 -> 1920x1080，9:16 -> 1080x1920，1:1 -> 1440x1440（文档映射表）
- *   - 768p：16:9 -> 1376x768（文档只列了横屏，其他比例走 aspect_ratio 由上游判定）
- *   - 2K：16:9 -> "2K"（清晰度档由模型名固定，其他比例走 aspect_ratio）
- */
-export function resolveVideoSizeParams(
-  resolution: VideoResolution,
-  aspect: VideoAspect,
-): { size?: string; aspectRatio?: string } {
-  if (aspect === '16:9') {
-    return { size: VIDEO_MODELS[resolution].size };
-  }
-  if (resolution === '1080p') {
-    if (aspect === '9:16') return { size: '1080x1920' };
-    if (aspect === '1:1') return { size: '1440x1440' };
-  }
-  return { aspectRatio: aspect };
+  return value === '9:16' || value === '1:1' ? value : '16:9';
 }
 
 /**
@@ -173,7 +140,6 @@ export async function generateUselgVideo(
 ): Promise<UselgVideoResult> {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const resolution = normalizeVideoResolution(input.resolution);
-  const modelInfo = VIDEO_MODELS[resolution];
   const aspect = normalizeVideoAspect(input.aspect);
   const seconds = normalizeVideoSeconds(input.seconds);
   const referenceImages = input.referenceImages
@@ -201,15 +167,14 @@ export async function generateUselgVideo(
   let submittedTaskId = '';
 
   try {
-    // 1) 提交任务（size 与 aspect_ratio 二选一，按上游文档不传 resolution/quality）
-    const { size, aspectRatio } = resolveVideoSizeParams(resolution, aspect);
+    // 1) 提交任务：model 固定 `全参MinimaxH3`，清晰度用 resolution、比例用 aspect_ratio 下发。
     const submitBody: Record<string, unknown> = {
-      model: modelInfo.model,
+      model: VIDEO_MODEL,
       prompt: input.prompt,
       seconds,
+      resolution,
+      aspect_ratio: aspect,
     };
-    if (size) submitBody.size = size;
-    if (aspectRatio) submitBody.aspect_ratio = aspectRatio;
     if (referenceImages.length > 0) {
       submitBody.reference_images = referenceImages.map((url) => ({ url }));
     }
@@ -275,7 +240,7 @@ export async function generateUselgVideo(
             buffer,
             contentType,
             taskId: submittedTaskId,
-            model: modelInfo.model,
+            model: VIDEO_MODEL,
           };
         }
         // 状态已就绪但下载仍未就绪（文件保存中），短暂等待后重试。

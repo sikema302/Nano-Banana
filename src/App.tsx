@@ -8,7 +8,6 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronUp,
-  Clapperboard,
   Code2 as CodeIcon,
   Copy,
   Download,
@@ -1481,7 +1480,9 @@ function HistoryView({
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const pageSize = 12;
   const isVideoRecord = (item: GenerationRecord) =>
-    item.modelId?.startsWith('minimax_h3') || isVideoAssetUrl(item.imageUrl);
+    item.modelId?.startsWith('minimax_h3') ||
+    item.modelId === '全参MinimaxH3' ||
+    isVideoAssetUrl(item.imageUrl);
   const imageRecords = records.filter((item) => !isVideoRecord(item));
   const videoRecords = records.filter(isVideoRecord);
   const activeRecords = mediaTab === 'image' ? imageRecords : videoRecords;
@@ -3160,12 +3161,12 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-          <h3 className="font-black text-emerald-100">视频生成（MiniMax H3）</h3>
-          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；按「每秒积分 × 时长秒数」计费。</p>
+          <h3 className="font-black text-emerald-100">视频生成（全参 MinimaxH3）</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；10 秒内固定底价，超出 10 秒每秒加价。</p>
           <div className="mt-3">
-            {row('768p', '每秒 · minimax_h3-768p · 1376×768', creditInput(draft.video.p768, (value) => setVideo('p768', value)))}
-            {row('1080p', '每秒 · minimax_h3-1080p · 1920×1080', creditInput(draft.video.p1080, (value) => setVideo('p1080', value)))}
-            {row('2K', '每秒 · minimax_h3-2K', creditInput(draft.video.twoK, (value) => setVideo('twoK', value)))}
+            {row('768p 底价', '10 秒内固定扣分 · 全参MinimaxH3', creditInput(draft.video.p768Base, (value) => setVideo('p768Base', value)))}
+            {row('2K 底价', '10 秒内固定扣分 · 全参MinimaxH3', creditInput(draft.video.twoKBase, (value) => setVideo('twoKBase', value)))}
+            {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.excessPerSecond, (value) => setVideo('excessPerSecond', value)))}
           </div>
         </section>
       </div>
@@ -4977,21 +4978,19 @@ function createEmptyVideoSlots(): VideoSlot[] {
   return Array.from({ length: 4 }, (_, index) => ({ id: `vidslot-${index}`, prompt: '', status: 'idle' as const, progress: 0 }));
 }
 
-const VIDEO_ASPECT_OPTIONS: Array<'16:9' | '9:16' | '1:1' | '21:9'> = ['16:9', '9:16', '1:1', '21:9'];
+const VIDEO_ASPECT_OPTIONS: Array<'16:9' | '9:16' | '1:1'> = ['16:9', '9:16', '1:1'];
 
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [videoPrompt, setVideoPrompt] = useState('');
-  const [videoResolution, setVideoResolution] = useState<'768p' | '1080p' | '2K'>('768p');
-  const [videoAspect, setVideoAspect] = useState<'16:9' | '9:16' | '1:1' | '21:9'>('16:9');
+  const [videoResolution, setVideoResolution] = useState<'768p' | '2K'>('768p');
+  const [videoAspect, setVideoAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
-  const [videoRefVideos, setVideoRefVideos] = useState<UploadPreview[]>([]);
   const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
   const [videoPromptExpandOpen, setVideoPromptExpandOpen] = useState(false);
   const [videoPromptExpandDraft, setVideoPromptExpandDraft] = useState('');
-  const videoRefVideoInputRef = useRef<HTMLInputElement>(null);
   const videoRefAudioInputRef = useRef<HTMLInputElement>(null);
   const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
   const [videoDragging, setVideoDragging] = useState(false);
@@ -5000,7 +4999,7 @@ export default function App() {
   const [modelCreditPricing, setModelCreditPricing] = useState<ModelCreditPricing>(DEFAULT_MODEL_CREDIT_PRICING);
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
-  const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoResolution) * videoSeconds;
+  const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoResolution, videoSeconds);
   // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关。
   const videoReferenceSurcharge = getVideoReferenceImageSurcharge(videoReferences.length);
   const videoTotalCreditCost = videoCreditCost + videoReferenceSurcharge;
@@ -5460,27 +5459,22 @@ export default function App() {
     setVideoReferences((current) => [...current, ...next].slice(0, maxRef));
   }
 
-  // 上游 MiniMax H3 支持参考视频 / 参考音频（各最多 3 段，单文件 ≤50MB，需公网可读 URL，由服务端转存临时文件）。
-  async function appendVideoRefMediaFiles(files: File[], kind: 'video' | 'audio') {
-    const filtered = files.filter((file) => file.type.startsWith(`${kind}/`));
+  // 上游全参 MinimaxH3 支持参考音频（最多 3 段，单文件 ≤50MB，需公网可读 URL，由服务端转存临时文件）。
+  async function appendVideoRefAudioFiles(files: File[]) {
+    const filtered = files.filter((file) => file.type.startsWith('audio/'));
     if (filtered.length === 0) {
-      setNotice(kind === 'video' ? '请选择视频文件' : '请选择音频文件');
+      setNotice('请选择音频文件');
       return;
     }
     const maxCount = 3;
-    const currentList = kind === 'video' ? videoRefVideos : videoRefAudios;
-    const remaining = Math.max(0, maxCount - currentList.length);
+    const remaining = Math.max(0, maxCount - videoRefAudios.length);
     if (remaining === 0) {
-      setNotice(kind === 'video' ? '参考视频最多上传 3 段' : '参考音频最多上传 3 段');
+      setNotice('参考音频最多上传 3 段');
       return;
     }
     const accepted = filtered.slice(0, remaining);
     const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
-    if (kind === 'video') {
-      setVideoRefVideos((current) => [...current, ...next].slice(0, maxCount));
-    } else {
-      setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
-    }
+    setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
   }
 
   function updateVideoSlot(slotId: string, patch: Partial<VideoSlot>) {
@@ -5539,7 +5533,6 @@ export default function App() {
         aspect: videoAspect,
         seconds: videoSeconds,
         reference_images: videoReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-        reference_videos: videoRefVideos.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         reference_audios: videoRefAudios.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
       });
       updateVideoSlot(slotId, { jobId: job.id });
@@ -7301,7 +7294,7 @@ export default function App() {
                       multiple
                       type="file"
                       onChange={(event) => {
-                        void appendVideoRefMediaFiles(Array.from(event.target.files || []), 'audio');
+                        void appendVideoRefAudioFiles(Array.from(event.target.files || []));
                         event.target.value = '';
                       }}
                     />
@@ -7336,55 +7329,6 @@ export default function App() {
                   </section>
 
                   <section className="space-y-1.5">
-                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
-                      <span>
-                        参考视频
-                        <span className="ml-1 text-zinc-500">（可选）</span>
-                      </span>
-                      <span>{videoRefVideos.length} / 3</span>
-                    </div>
-                    <input
-                      ref={videoRefVideoInputRef}
-                      accept="video/*"
-                      className="hidden"
-                      multiple
-                      type="file"
-                      onChange={(event) => {
-                        void appendVideoRefMediaFiles(Array.from(event.target.files || []), 'video');
-                        event.target.value = '';
-                      }}
-                    />
-                    <button
-                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
-                      type="button"
-                      onClick={() => videoRefVideoInputRef.current?.click()}
-                    >
-                      <Clapperboard size={13} />
-                      添加视频
-                    </button>
-                    {videoRefVideos.length > 0 ? (
-                      <div className="space-y-1">
-                        {videoRefVideos.map((item, index) => (
-                          <div
-                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
-                            key={`${item.id}-${index}`}
-                          >
-                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
-                            <button
-                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
-                              title="移除"
-                              type="button"
-                              onClick={() => setVideoRefVideos((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                            >
-                              <X size={11} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </section>
-
-                  <section className="space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-1 px-0.5 text-[10px] font-bold text-zinc-400">
                       <span className="flex flex-wrap items-center gap-2">
                         模型提示词
@@ -7394,7 +7338,7 @@ export default function App() {
                         />
                         <a
                           className="hidden items-center gap-1 text-amber-400 underline-offset-2 transition hover:underline"
-                          href="https://uselg.top/docs?model=minimax_h3-768p&group_id=105&offer_id=media_968dec6b6438f8aa66083edb64683a79"
+                          href="https://uselg.top/docs?model=%E5%85%A8%E5%8F%82MinimaxH3&group_id=105&offer_id=media_654b2485d3fc3822f46766ef40d565c4"
                           target="_blank"
                           rel="noreferrer"
                         >
@@ -7429,8 +7373,8 @@ export default function App() {
 
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">清晰度</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(['768p', '1080p', '2K'] as Array<'768p' | '1080p' | '2K'>).map((id) => (
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['768p', '2K'] as Array<'768p' | '2K'>).map((id) => (
                         <button
                           key={id}
                           type="button"
@@ -7445,7 +7389,7 @@ export default function App() {
 
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">画面比例</div>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       {VIDEO_ASPECT_OPTIONS.map((aspect) => (
                         <button
                           key={aspect}

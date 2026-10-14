@@ -6,8 +6,7 @@ import {
   normalizeVideoResolution,
   normalizeVideoAspect,
   normalizeVideoSeconds,
-  resolveVideoSizeParams,
-  VIDEO_MODELS,
+  VIDEO_MODEL,
   VIDEO_DEFAULT_SECONDS,
   VIDEO_MAX_SECONDS,
 } from './video-generation.js';
@@ -18,7 +17,7 @@ function jsonResponse(payload: unknown, status = 200) {
 
 test('normalizes resolution and seconds to supported bounds', () => {
   assert.equal(normalizeVideoResolution('768p'), '768p');
-  assert.equal(normalizeVideoResolution('1080p'), '1080p');
+  assert.equal(normalizeVideoResolution('1080p'), '768p');
   assert.equal(normalizeVideoResolution('2K'), '2K');
   assert.equal(normalizeVideoResolution('4K'), '768p');
   assert.equal(normalizeVideoSeconds(5), 5);
@@ -28,11 +27,11 @@ test('normalizes resolution and seconds to supported bounds', () => {
   assert.equal(normalizeVideoAspect('16:9'), '16:9');
   assert.equal(normalizeVideoAspect('9:16'), '9:16');
   assert.equal(normalizeVideoAspect('1:1'), '1:1');
-  assert.equal(normalizeVideoAspect('21:9'), '21:9');
+  assert.equal(normalizeVideoAspect('21:9'), '16:9');
   assert.equal(normalizeVideoAspect('4:3'), '16:9');
 });
 
-test('submits minimax_h3-768p with size and reference images', async () => {
+test('submits 全参MinimaxH3 with resolution and aspect_ratio', async () => {
   let submitUrl = '';
   let submitInit: RequestInit | undefined;
   let polls = 0;
@@ -65,14 +64,15 @@ test('submits minimax_h3-768p with size and reference images', async () => {
   assert.match(headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
   const body = JSON.parse(String(submitInit?.body));
   assert.deepEqual(body, {
-    model: VIDEO_MODELS['768p'].model,
+    model: VIDEO_MODEL,
     prompt: '一只白鹭沿海骑车',
     seconds: 6,
-    size: VIDEO_MODELS['768p'].size,
+    resolution: '768p',
+    aspect_ratio: '16:9',
     reference_images: [{ url: 'https://example.com/ref.jpg' }],
   });
   assert.equal(polls, 1);
-  assert.equal(result.model, 'minimax_h3-768p');
+  assert.equal(result.model, VIDEO_MODEL);
   assert.equal(result.taskId, 'vidtask_123');
   assert.equal(result.contentType, 'video/mp4');
   assert.equal(result.buffer.toString(), 'mp4-bytes');
@@ -84,8 +84,8 @@ test('submits reference videos and audios as url arrays with caps applied', asyn
   await generateUselgVideo(
     {
       prompt: '带素材的短片',
-      resolution: '1080p',
-      aspect: '16:9',
+      resolution: '2K',
+      aspect: '9:16',
       seconds: 5,
       referenceImages: [],
       referenceVideos: Array.from({ length: 5 }, (_, index) => `https://example.com/v${index + 1}.mp4`),
@@ -106,6 +106,7 @@ test('submits reference videos and audios as url arrays with caps applied', asyn
   );
 
   const body = JSON.parse(String(submitInit?.body));
+  assert.equal(body.model, VIDEO_MODEL);
   // 参考视频最多 3 段：只保留前 3 个合法 HTTP(S) URL
   assert.deepEqual(body.reference_videos, [
     { url: 'https://example.com/v1.mp4' },
@@ -170,10 +171,10 @@ test('throws when the task enters a failed state', async () => {
   );
 });
 
-test('omits reference_images when empty', async () => {
+test('omits reference_images when empty and always sends resolution + aspect_ratio', async () => {
   let body: Record<string, unknown> = {};
   await generateUselgVideo(
-    { prompt: '文生视频', resolution: '1080p', aspect: '16:9', seconds: 5, referenceImages: [] },
+    { prompt: '文生视频', resolution: '2K', aspect: '1:1', seconds: 5, referenceImages: [] },
     {
       baseUrl: 'https://api.ai-media.vip',
       apiKey: 'secret',
@@ -187,11 +188,15 @@ test('omits reference_images when empty', async () => {
     },
   );
   assert.equal('reference_images' in body, false);
-  assert.equal(body.size, VIDEO_MODELS['1080p'].size);
+  assert.equal(body.resolution, '2K');
+  assert.equal(body.aspect_ratio, '1:1');
+  // 新契约不再下发 size / quality
+  assert.equal('size' in body, false);
+  assert.equal('quality' in body, false);
 });
 
-test('resolves aspect: 16:9 uses tier size, other aspects use size map or aspect_ratio', async () => {
-  async function submitBody(resolution: '768p' | '1080p' | '2K', aspect: '16:9' | '9:16' | '1:1' | '21:9') {
+test('passes through supported aspect ratios in the submit body', async () => {
+  async function submitBody(resolution: '768p' | '2K', aspect: '16:9' | '9:16' | '1:1') {
     let body: Record<string, unknown> = {};
     await generateUselgVideo(
       { prompt: 'p', resolution, aspect, seconds: 5, referenceImages: [] },
@@ -210,43 +215,14 @@ test('resolves aspect: 16:9 uses tier size, other aspects use size map or aspect
     return body;
   }
 
-  // 1080p：16:9/9:16/1:1 走文档 size 映射表，不带 aspect_ratio
-  assert.equal((await submitBody('1080p', '16:9')).size, '1920x1080');
-  assert.equal((await submitBody('1080p', '9:16')).size, '1080x1920');
-  assert.equal((await submitBody('1080p', '1:1')).size, '1440x1440');
-  assert.equal('aspect_ratio' in (await submitBody('1080p', '9:16')), false);
-  // 1080p 21:9 无文档 size，改走 aspect_ratio（不带 size）
-  const p1080_21 = await submitBody('1080p', '21:9');
-  assert.equal(p1080_21.aspect_ratio, '21:9');
-  assert.equal('size' in p1080_21, false);
+  const body2k = await submitBody('2K', '1:1');
+  assert.equal(body2k.resolution, '2K');
+  assert.equal(body2k.aspect_ratio, '1:1');
+  // 任何情况下都只下发 model/resolution/aspect_ratio，不带 size / quality
+  assert.equal('size' in body2k, false);
+  assert.equal('quality' in body2k, false);
 
-  // 768p：16:9 用推荐 size；其他比例走 aspect_ratio
-  assert.equal((await submitBody('768p', '16:9')).size, VIDEO_MODELS['768p'].size);
-  const p768_916 = await submitBody('768p', '9:16');
-  assert.equal(p768_916.aspect_ratio, '9:16');
-  assert.equal('size' in p768_916, false);
-
-  // 2K：16:9 用 "2K"；其他比例走 aspect_ratio
-  assert.equal((await submitBody('2K', '16:9')).size, '2K');
-  const p2k_11 = await submitBody('2K', '1:1');
-  assert.equal(p2k_11.aspect_ratio, '1:1');
-  assert.equal('size' in p2k_11, false);
-
-  // 按上游文档：任何情况下都不传 resolution / quality
-  const sample = await submitBody('1080p', '9:16');
-  assert.equal('resolution' in sample, false);
-  assert.equal('quality' in sample, false);
-});
-
-test('resolveVideoSizeParams never sends size and aspect_ratio together', () => {
-  const combos: Array<['768p' | '1080p' | '2K', '16:9' | '9:16' | '1:1' | '21:9']> = [];
-  for (const resolution of ['768p', '1080p', '2K'] as const) {
-    for (const aspect of ['16:9', '9:16', '1:1', '21:9'] as const) {
-      combos.push([resolution, aspect]);
-      const params = resolveVideoSizeParams(resolution, aspect);
-      assert.equal(Boolean(params.size) && Boolean(params.aspectRatio), false, `${resolution} ${aspect}`);
-      assert.equal(Boolean(params.size) || Boolean(params.aspectRatio), true, `${resolution} ${aspect}`);
-    }
-  }
-  assert.equal(combos.length, 12);
+  const body768 = await submitBody('768p', '9:16');
+  assert.equal(body768.resolution, '768p');
+  assert.equal(body768.aspect_ratio, '9:16');
 });

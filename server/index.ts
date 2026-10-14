@@ -87,7 +87,7 @@ import {
   normalizeVideoAspect,
   normalizeVideoSeconds,
   VIDEO_MAX_REFERENCE_IMAGES,
-  VIDEO_MODELS,
+  VIDEO_MODEL,
   type VideoResolution,
   type VideoAspect,
 } from './video-generation.js';
@@ -691,7 +691,7 @@ const USSELG_HD_KEY = normalizeEnvValue(process.env.USSELG_HD_KEY);
 const USSELG_MODEL = normalizeEnvValue(process.env.USSELG_MODEL || 'gpt-image-2');
 const USSELG_TIMEOUT_MS = Math.max(60_000, Number(process.env.USSELG_TIMEOUT_MS || 15 * 60_000));
 
-// Uselg(FluxPort) 视频渠道（minimax_h3 系列，api.ai-media.vip/v1/videos）。
+// Uselg(FluxPort) 视频渠道（全参MinimaxH3，api.ai-media.vip/v1/videos）。
 // 视频生成慢、单任务耗时长，独立并发与超时参数避免挤占图片队列。
 const USELG_VIDEO_API_KEY = normalizeEnvValue(process.env.USELG_VIDEO_API_KEY);
 const USELG_VIDEO_BASE_URL = normalizeEnvValue(process.env.USELG_VIDEO_BASE_URL || 'https://api.ai-media.vip');
@@ -2264,14 +2264,18 @@ function getModelCredits(modelId: string, imageSize = '', quality = '') {
   return getConfiguredImageCredits(activeModelCreditPricing, modelId, imageSize, quality);
 }
 
-/** 视频总积分 = 每秒单价 × 时长 + 参考图阶梯加价（第 6 张起每张 +30）。 */
+/** 视频总积分 = 底价（768p:480 / 2K:520）+ 超出 10 秒每秒加价 + 参考图阶梯加价（第 6 张起每张 +30）。 */
 function getVideoCredits(resolution: string, seconds: number, referenceImageCount = 0) {
-  const perSecond = getConfiguredVideoCredits(activeModelCreditPricing, normalizeVideoResolution(resolution));
+  const credits = getConfiguredVideoCredits(
+    activeModelCreditPricing,
+    normalizeVideoResolution(resolution),
+    normalizeVideoSeconds(seconds),
+  );
   const billableReferenceImages = Math.min(
     Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0,
     VIDEO_MAX_REFERENCE_IMAGES,
   );
-  return perSecond * normalizeVideoSeconds(seconds) + getVideoReferenceImageSurcharge(billableReferenceImages);
+  return credits + getVideoReferenceImageSurcharge(billableReferenceImages);
 }
 
 type VideoGenerationInput = {
@@ -6353,7 +6357,7 @@ function maxReferenceImageCountForModel(modelId?: string) {
   if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
     return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
   }
-  if (modelId && modelId.startsWith('minimax_h3')) {
+  if (modelId && (modelId.startsWith('minimax_h3') || modelId === VIDEO_MODEL)) {
     return VIDEO_MAX_REFERENCE_IMAGES;
   }
   return MAX_REFERENCE_IMAGE_COUNT;
@@ -9760,7 +9764,7 @@ async function start() {
 
   // 鈹€鈹€鈹€ 鐢熸垚鍘嗗彶 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-  // ============ 视频生成（minimax_h3 系列，Uselg/FluxPort） ============
+  // ============ 视频生成（全参MinimaxH3，Uselg/FluxPort） ============
 
   type AuthenticatedVideoJob = {
     id: string;
@@ -9787,12 +9791,11 @@ async function start() {
 
   const VIDEO_MODEL_NAMES: Record<VideoResolution, string> = {
     '768p': 'MiniMax H3 768p',
-    '1080p': 'MiniMax H3 1080p',
     '2K': 'MiniMax H3 2K',
   };
 
   function videoModelName(resolution: VideoResolution) {
-    return VIDEO_MODEL_NAMES[resolution] || VIDEO_MODELS[resolution].model;
+    return VIDEO_MODEL_NAMES[resolution] || VIDEO_MODEL;
   }
 
   function publicVideoJob(job: AuthenticatedVideoJob) {
@@ -10092,7 +10095,7 @@ async function start() {
     let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
 
     try {
-      const modelId = VIDEO_MODELS[resolution].model;
+      const modelId = VIDEO_MODEL;
       const creditsUsed = getVideoCredits(resolution, seconds, referenceImagesInput.length);
       const creditBucket: CreditBucket = 'general';
 
@@ -10232,7 +10235,7 @@ async function start() {
         createdAt,
       };
 
-      // 写历史：复用 generations 表，image_path 存视频 URL，model_id 以 minimax_h3 前缀标识视频。
+      // 写历史：复用 generations 表，image_path 存视频 URL，model_id 固定为全参MinimaxH3 标识视频。
       try {
         if (USE_SUPABASE) {
           const db = await getSupabaseDb();

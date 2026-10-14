@@ -16,12 +16,12 @@ export type GptImage2AdobeCreditPricing = {
 };
 
 export type VideoCreditPricing = {
-  /** minimax_h3-768p 档，每秒积分。 */
-  p768: number;
-  /** minimax_h3-1080p 档，每秒积分。 */
-  p1080: number;
-  /** minimax_h3-2K 档，每秒积分。 */
-  twoK: number;
+  /** 全参MinimaxH3 768p 档：10 秒以内固定积分。 */
+  p768Base: number;
+  /** 全参MinimaxH3 2K 档：10 秒以内固定积分。 */
+  twoKBase: number;
+  /** 超过 10 秒后每秒追加积分（768p 与 2K 一致）。 */
+  excessPerSecond: number;
 };
 
 export type ModelCreditPricing = {
@@ -54,9 +54,9 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     enhancement: 8,
   },
   video: {
-    p768: 40,
-    p1080: 60,
-    twoK: 70,
+    p768Base: 480,
+    twoKBase: 520,
+    excessPerSecond: 20,
   },
   updatedAt: '',
 };
@@ -92,9 +92,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       enhancement: positiveCredit(banana.enhancement, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.enhancement),
     },
     video: {
-      p768: positiveCredit(video.p768, DEFAULT_MODEL_CREDIT_PRICING.video.p768),
-      p1080: positiveCredit(video.p1080, DEFAULT_MODEL_CREDIT_PRICING.video.p1080),
-      twoK: positiveCredit(video.twoK, DEFAULT_MODEL_CREDIT_PRICING.video.twoK),
+      p768Base: positiveCredit(video.p768Base, DEFAULT_MODEL_CREDIT_PRICING.video.p768Base),
+      twoKBase: positiveCredit(video.twoKBase, DEFAULT_MODEL_CREDIT_PRICING.video.twoKBase),
+      excessPerSecond: positiveCredit(video.excessPerSecond, DEFAULT_MODEL_CREDIT_PRICING.video.excessPerSecond),
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
   };
@@ -128,11 +128,19 @@ export function getConfiguredImageCredits(
   return 1;
 }
 
-/** 视频每秒单价（积分/秒），按分辨率档区分。总消耗 = 单价 × 时长秒数。 */
-export function getConfiguredVideoCredits(pricing: ModelCreditPricing, resolution: string) {
-  if (resolution === '1080p') return pricing.video.p1080;
-  if (resolution === '2K') return pricing.video.twoK;
-  return pricing.video.p768;
+/** 视频固定价目基准：10 秒以内按底价计，超过 10 秒每秒追加。 */
+export const VIDEO_BASE_SECONDS = 10;
+
+/** 视频总积分 = 底价（768p:480 / 2K:520） + max(0, 时长 - 10) × 每秒加价（20）。 */
+export function getConfiguredVideoCredits(
+  pricing: ModelCreditPricing,
+  resolution: string,
+  seconds: number,
+) {
+  const base = resolution === '2K' ? pricing.video.twoKBase : pricing.video.p768Base;
+  const safeSeconds = Number.isSafeInteger(seconds) && seconds > 0 ? seconds : 0;
+  const excess = Math.max(0, safeSeconds - VIDEO_BASE_SECONDS) * pricing.video.excessPerSecond;
+  return base + excess;
 }
 
 /** 视频参考图阶梯加价：前 5 张免费。 */

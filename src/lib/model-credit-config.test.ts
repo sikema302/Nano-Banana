@@ -51,17 +51,27 @@ test('video reference images are free up to 5, then +30 each', () => {
   assert.equal(getVideoReferenceImageSurcharge(Number.NaN), 0);
 });
 
+test('video credits = fixed base + per-second surcharge over 10s', () => {
+  // 768p 底价 480，2K 底价 520；超过 10 秒每秒 +20
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 4), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 10), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '768p', 11), 500);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '2K', 10), 520);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '2K', 15), 620);
+  // 非 2K 一律按 768p 底价
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, '1080p', 5), 480);
+});
+
 test('video reference surcharge is independent of duration and resolution', () => {
-  const baseCost = (resolution: string, seconds: number) =>
-    getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, resolution) * seconds;
   const referenceCount = 8; // 加价 = (8 - 5) × 30 = 90
   const surcharge = getVideoReferenceImageSurcharge(referenceCount);
 
   assert.equal(surcharge, 90);
-  // 相同参考图张数下，不同分辨率/时长的加价完全一致
-  for (const resolution of ['768p', '1080p', '2K']) {
+  // 相同参考图张数下，不同分辨率/时长的加价完全一致（固定 90）
+  for (const resolution of ['768p', '2K']) {
     for (const seconds of [4, 5, 15]) {
-      assert.equal(baseCost(resolution, seconds) + surcharge - baseCost(resolution, seconds), 90);
+      assert.equal(getVideoReferenceImageSurcharge(referenceCount), 90);
+      assert.equal(getVideoReferenceImageSurcharge(referenceCount) - surcharge, 0);
     }
   }
 });
