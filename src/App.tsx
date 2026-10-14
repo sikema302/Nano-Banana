@@ -221,7 +221,7 @@ function getTabPath(tab: AppTab) {
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
-  if (pathname === '/batch-create') return 'batchCreate';
+  if (pathname === '/batch-create') return 'create';
   if (pathname === '/canvas') return 'canvas';
   if (pathname === '/chat') return 'home';
   if (pathname === '/history') return 'history';
@@ -7037,7 +7037,7 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
-    { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} /> },
+    { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} />, hidden: true },
     { id: 'canvas', label: '画布', icon: <Workflow size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
