@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Pixory Studio - upload references, craft prompts, generate and organize images." />
     <title>PIXORY</title>
+    <script>
+      // 在样式与 React 渲染之前先落定主题，避免浅色用户看到深色首屏闪烁
+      (function () {
+        try {
+          var saved = localStorage.getItem('pixory-theme');
+          document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+        } catch (error) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

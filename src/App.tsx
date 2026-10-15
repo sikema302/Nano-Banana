@@ -13,6 +13,7 @@ import {
   Download,
   Film,
   ImagePlus,
+  Images,
   Info,
   Home,
   KeyRound,
@@ -24,11 +25,13 @@ import {
   LogOut,
   MessageCircle,
   Minus,
+  Moon,
   Plus,
   RotateCw,
   ShieldCheck,
   Sparkles,
   Star,
+  Sun,
   Trash2,
   TicketPercent,
   UserRound,
@@ -214,6 +217,9 @@ const APP_TAB_PATHS: Record<AppTab, string> = {
   apiDocs: '/apidoc',
   admin: '/manage',
 };
+
+/** 深浅色主题在 localStorage 中的持久化键名 */
+const THEME_STORAGE_KEY = 'pixory-theme';
 
 function getTabPath(tab: AppTab) {
   return APP_TAB_PATHS[tab] || '/';
@@ -642,6 +648,8 @@ const GENERATION_JOB_POLL_INTERVAL_MS = 2000;
 // 远端 job 已被 TTL 清理、接口持续 404 的极端情况。
 const GENERATION_JOB_POLL_MAX_MS = 60 * 60_000;
 const SHOW_CREATION_ACTIVITY = true;
+// 创作页右侧的「收藏 / 备用 / 舍弃」三个分区：内容暂时隐藏，代码保留，改成 true 即可恢复。
+const SHOW_SIDE_BUCKETS = false;
 const SHOW_PROMO_COUPON_HEADER_ENTRY = false;
 
 function sleep(ms: number) {
@@ -719,11 +727,6 @@ function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana'
   const balances = user.creditBalances;
   if (!balances) return user.creditsRemaining ?? 0;
   return bucket === 'general' ? balances.general : balances[bucket] + balances.general;
-}
-
-function getModelSuccessRate(modelId: string) {
-  if (modelId === 'gpt-image-2') return '99%成功率';
-  return '';
 }
 
 // 每个模型专属的悬停辉光色，用于模型选择下拉的视觉识别。
@@ -818,7 +821,7 @@ function StageCard({
       ) : null}
 
       {loading ? (
-        <div className="relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
+        <div className="keep-dark relative flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-[18px] border border-pink-300/15 bg-[radial-gradient(circle_at_12%_0%,rgba(255,143,205,0.2),transparent_34%),linear-gradient(135deg,rgba(20,8,16,0.86),rgba(6,6,8,0.9))] px-4 py-3 sm:ml-3 sm:py-0">
           <div className="pointer-events-none absolute inset-0 opacity-70">
             <div className="generation-grid h-full w-full" />
           </div>
@@ -1086,6 +1089,7 @@ function SidePanel({
   icon,
   items,
   emptyText,
+  emptyTitle,
   actionLabel,
   onAction,
   actionLoading,
@@ -1094,13 +1098,14 @@ function SidePanel({
   onBatchDownload,
   actions,
   loggedIn,
-  accentColor = 'zinc',
+  accentColor = 'emerald',
 }: {
   title: string;
   count: number;
   icon: ReactNode;
   items: SavedImage[];
   emptyText: string;
+  emptyTitle: string;
   actionLabel?: string;
   onAction?: () => void;
   actionLoading?: boolean;
@@ -1116,28 +1121,25 @@ function SidePanel({
     onClick: (selectedItems: SavedImage[]) => void;
   }>;
   loggedIn: boolean;
-  accentColor?: 'amber' | 'violet' | 'sky' | 'zinc';
+  accentColor?: 'emerald' | 'pink' | 'rose';
 }) {
+  // 每个分区的强调色与卡片上对应的归类按钮保持一致，
+  // 让「满意 / 备份 / 舍弃」在左右两侧形成同一套颜色语义。
   const accentMap = {
-    amber: {
-      iconBg: 'bg-amber-500/15 text-amber-300',
-      btn: 'text-amber-300 hover:text-amber-200 hover:bg-amber-500/10',
-      edge: 'from-amber-500/14 via-transparent to-transparent',
+    emerald: {
+      iconBg: 'bg-emerald-500/15 text-emerald-300',
+      btn: 'text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/10',
+      edge: 'from-emerald-500/14 via-transparent to-transparent',
     },
-    violet: {
-      iconBg: 'bg-violet-500/15 text-violet-300',
-      btn: 'text-violet-300 hover:text-violet-200 hover:bg-violet-500/10',
-      edge: 'from-violet-500/14 via-transparent to-transparent',
+    pink: {
+      iconBg: 'bg-pink-500/15 text-pink-300',
+      btn: 'text-pink-300 hover:text-pink-200 hover:bg-pink-500/10',
+      edge: 'from-pink-500/14 via-transparent to-transparent',
     },
-    sky: {
-      iconBg: 'bg-sky-500/15 text-sky-300',
-      btn: 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10',
-      edge: 'from-sky-500/14 via-transparent to-transparent',
-    },
-    zinc: {
-      iconBg: 'bg-zinc-500/15 text-zinc-400',
+    rose: {
+      iconBg: 'bg-rose-500/15 text-rose-300',
       btn: 'text-rose-300 hover:text-rose-200 hover:bg-rose-500/10',
-      edge: 'from-zinc-500/12 via-transparent to-transparent',
+      edge: 'from-rose-500/14 via-transparent to-transparent',
     },
   };
   const accent = accentMap[accentColor];
@@ -1188,7 +1190,7 @@ function SidePanel({
 
   return (
     <section
-      className="flex flex-col gap-1.5 p-2.5"
+      className="side-panel flex flex-col gap-1.5 p-2.5"
       style={{
         background: 'rgba(0, 0, 0, 0.7)',
         border: '1px solid rgba(255, 255, 255, 0.06)',
@@ -1246,7 +1248,7 @@ function SidePanel({
         </div>
       ) : null}
 
-      <div className="relative overflow-hidden rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
+      <div className="side-panel-inner relative overflow-hidden rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
         {items.length > 0 ? (
           <div className="grid min-w-0 grid-cols-1 gap-2 pb-1 xl:grid-cols-2">
             {items.map((item) => {
@@ -1312,11 +1314,98 @@ function SidePanel({
             })}
           </div>
         ) : (
-          <div className="flex min-h-[120px] items-center justify-center px-5 text-center text-[13px] leading-6 text-zinc-600">
-            {emptyText}
+          <div className="flex min-h-[132px] flex-col items-center justify-center gap-1.5 px-6 text-center">
+            <p className="text-[12px] font-black tracking-wide text-zinc-200">{emptyTitle}</p>
+            <p className="max-w-[210px] text-[11px] leading-5 text-zinc-500">{emptyText}</p>
           </div>
         )}
         <div className={`pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t ${accent.edge}`} />
+      </div>
+    </section>
+  );
+}
+
+function SessionGalleryPanel({
+  items,
+  downloadingUrl,
+  onPreview,
+  onDownload,
+}: {
+  items: DisplayImage[];
+  downloadingUrl: string | null;
+  onPreview: (item: DisplayImage) => void;
+  onDownload: (item: DisplayImage) => void;
+}) {
+  return (
+    <section
+      className="side-panel relative flex min-h-0 flex-col gap-1.5 p-2.5 lg:h-full"
+      style={{
+        background: 'rgba(0, 0, 0, 0.7)',
+        border: '1px solid rgba(255, 255, 255, 0.06)',
+        borderRadius: 24,
+        boxShadow: '0 24px 80px rgba(0, 0, 0, 0.45)',
+      }}
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-500/15 text-violet-300">
+          <Images size={14} />
+        </span>
+        <div className="flex items-center gap-2">
+          <h3 className="text-[13px]! font-black! tracking-wide text-white">本次生成</h3>
+          <span className="text-[11px] text-zinc-500">{items.length}张</span>
+        </div>
+      </div>
+
+      <div className="side-panel-inner relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.04] bg-[linear-gradient(180deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0)_100%)] p-2">
+        {items.length > 0 ? (
+          <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto pr-0.5">
+            {items.map((item) => {
+              const downloading = downloadingUrl === item.imageUrl;
+              return (
+                <article
+                  key={item.imageUrl}
+                  className="flex min-w-0 items-center gap-2.5 rounded-xl border border-white/6 bg-white/[0.02] p-1.5 transition hover:border-white/12 hover:bg-white/[0.045]"
+                >
+                  <button
+                    className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-white/8"
+                    type="button"
+                    title="查看大图"
+                    onClick={() => onPreview(item)}
+                  >
+                    <img
+                      alt={item.prompt}
+                      className="h-full w-full object-cover"
+                      src={item.thumbnailUrl || item.imageUrl}
+                      onError={(event) => fallbackToOriginal(event, item.imageUrl)}
+                    />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[11px] font-semibold leading-4 text-zinc-100">{item.prompt || '未命名作品'}</p>
+                    <p className="mt-0.5 truncate text-[10px] leading-4 text-zinc-500">
+                      {item.modelName} · {formatTime(item.createdAt)}
+                    </p>
+                  </div>
+                  <button
+                    className="shrink-0 rounded-md px-1.5 py-1 text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                    type="button"
+                    title="下载"
+                    aria-label="下载"
+                    disabled={downloading}
+                    onClick={() => onDownload(item)}
+                  >
+                    {downloading ? <LoaderCircle size={13} className="animate-spin" /> : <Download size={13} />}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex min-h-[132px] flex-col items-center justify-center gap-1.5 px-6 text-center">
+            <p className="text-[12px] font-black tracking-wide text-zinc-200">本次还没有出图</p>
+            <p className="max-w-[210px] text-[11px] leading-5 text-zinc-500">在左侧下单，生成的图片会依次出现在这里，可随时预览和下载。</p>
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-violet-500/14 via-transparent to-transparent" />
       </div>
     </section>
   );
@@ -1360,7 +1449,7 @@ function HomeView({
             </div>
             <h1 className="mt-5 text-4xl font-black leading-[1.16] tracking-tight text-white sm:text-5xl lg:text-[48px]">
               一站完成 AI 图片
-              <span className="block bg-[linear-gradient(90deg,#c4b5fd_0%,#f0abfc_52%,#67e8f9_100%)] bg-clip-text text-transparent">创作与批量出图</span>
+              <span className="hero-title-gradient block bg-[linear-gradient(90deg,#c4b5fd_0%,#f0abfc_52%,#67e8f9_100%)] bg-clip-text text-transparent">创作与批量出图</span>
             </h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-zinc-400 sm:text-lg">
               PIXORY 支持文生图、图生图与批量生成，多模型自由切换，一站式完成视觉创作。
@@ -1402,7 +1491,7 @@ function HomeView({
                 <span className="rounded-full bg-black/25 px-2.5 py-1">Nano Banana Pro</span>
               </div>
             </div>
-            <div className="group relative overflow-hidden rounded-[18px] bg-black">
+            <div className="keep-dark group relative overflow-hidden rounded-[18px] bg-black">
               <img
                 alt="PIXORY AI 图片创作"
                 className="aspect-[16/9] max-h-[360px] w-full object-cover transition duration-700 group-hover:scale-[1.02]"
@@ -5088,6 +5177,23 @@ export default function App() {
     if (typeof window === 'undefined') return 'home';
     return getTabFromPath(window.location.pathname, Boolean(getStoredUser()?.isAdmin));
   });
+  // 深浅色主题：默认深色（保持现有样式），仅当用户显式选择过浅色时才使用浅色
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    try {
+      return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* 隐私模式下写入失败时忽略即可，不影响当前会话的显示 */
+    }
+  }, [theme]);
   const [previewImage, setPreviewImage] = useState<DisplayImage | SavedImage | GenerationRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [submittingGeneration, setSubmittingGeneration] = useState(false);
@@ -5156,7 +5262,6 @@ export default function App() {
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
     : dimensionOptions;
-  const selectedModelSuccessRate = getModelSuccessRate(selectedModel);
   const selectedCreditBucket = selectedModel === 'gpt-image-2'
     || selectedModel === 'GPT-image-2.5-Flare'
     || selectedModel === 'GPT-image-2.5-Sunburst'
@@ -7016,6 +7121,10 @@ export default function App() {
       ? [...inFlightGeneratedImages, null, ...stageSourceCards]
       : stageSourceCards;
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
+  // 中间区域只有在下单/出图进行中时才铺开「灶台」空占位；
+  // 空闲时只保留已经出图的卡片，避免一屏「等待下单...」的空白砖块。
+  const stageSlotsActive = activeImageGenerations.length > 0 || pendingGenerationSlot || loading || submittingGeneration;
+  const renderedStageCards = stageSlotsActive ? stageCards : stageCards.filter((card) => card !== null);
   const activityStageIndex = findCreationActivityStageIndex(stageCards, {
     batchCount,
     loading: activeImageGenerations.length > 0 || loading,
@@ -7076,6 +7185,16 @@ export default function App() {
           </nav>
 
           <div className="flex w-full items-center justify-between gap-0.5 sm:w-auto sm:justify-end">
+            {/* 深浅色主题切换 */}
+            <button
+              className="inline-flex min-h-0 items-center rounded-md px-1.5 py-1 text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-100"
+              type="button"
+              title={theme === 'light' ? '切换到深色模式' : '切换到浅色模式'}
+              aria-label={theme === 'light' ? '切换到深色模式' : '切换到浅色模式'}
+              onClick={() => setTheme((current) => (current === 'light' ? 'dark' : 'light'))}
+            >
+              {theme === 'light' ? <Moon size={15} strokeWidth={2.1} /> : <Sun size={15} strokeWidth={2.1} />}
+            </button>
             {/* 客服按钮已按需求隐藏 */}
             <button
               className="group hidden min-h-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-bold text-zinc-400 transition hover:bg-sky-400/10 hover:text-sky-200 md:inline-flex"
@@ -7153,7 +7272,7 @@ export default function App() {
               <div className="relative flex min-w-0 items-center gap-2 border-l border-white/10 pl-2">
                 {/* 仅保留头像，用户名/角色/积分文本已按要求隐藏，点击头像弹出弹窗 */}
                 <button
-                  className="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)] transition hover:border-white/30"
+                  className="keep-dark relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_5px_14px_rgba(0,0,0,0.25)] transition hover:border-white/30"
                   type="button"
                   aria-label={user.username}
                   title={user.username}
@@ -7165,7 +7284,7 @@ export default function App() {
                 {creditDetailsOpen ? (
                   <div className="absolute right-0 top-8 z-[80] w-56 rounded-2xl border border-white/12 bg-[#11111a] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
                     <div className="flex items-center gap-2 border-b border-white/10 pb-3">
-                      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200">
+                      <div className="keep-dark relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[linear-gradient(145deg,#2d2d3b,#17171f)] text-zinc-200">
                         <div className="absolute inset-x-1 bottom-0 h-3 rounded-t-full bg-[var(--primary)]/45" />
                         <UserRound className="relative z-10" size={18} strokeWidth={1.8} />
                       </div>
@@ -7574,6 +7693,7 @@ export default function App() {
                 </form>
               </section>
 
+              {videoSlots.some((slot) => slot.status !== 'idle' || slot.video) ? (
               <section className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:gap-4">
                 {videoSlots.map((slot) => {
                   const running = slot.status === 'queued' || slot.status === 'processing';
@@ -7651,6 +7771,15 @@ export default function App() {
                   );
                 })}
               </section>
+              ) : (
+              <section className="flex min-h-full flex-col items-center justify-center gap-2.5 px-6 py-10 text-center">
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.03] text-zinc-500">
+                  <Film size={20} />
+                </span>
+                <p className="text-[14px] font-black tracking-wide text-zinc-200">还没有生成视频</p>
+                <p className="max-w-[260px] text-[12px] leading-5 text-zinc-500">在左侧填写提示词并选择模型，点「生成视频」，生成的视频会显示在这里。</p>
+              </section>
+              )}
             </div>
           ) : null}
 
@@ -7694,14 +7823,7 @@ export default function App() {
                       <img src={getModelLogo(selectedModel)} alt={selectedModelInfo?.name ?? ''} className="h-full w-full object-contain" />
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate text-[12px] font-semibold leading-4 text-zinc-100">{selectedModelInfo?.name}</span>
-                        {selectedModelSuccessRate ? (
-                          <span className="shrink-0 rounded-full bg-emerald-950/80 px-1.5 py-0.5 text-[9px] font-black leading-4 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.16)]">
-                            {selectedModelSuccessRate}
-                          </span>
-                        ) : null}
-                      </span>
+                      <span className="truncate text-[12px] font-semibold leading-4 text-zinc-100">{selectedModelInfo?.name}</span>
                       <span className="truncate text-[9px] font-medium leading-3 text-zinc-500">{selectedModelInfo?.description}</span>
                     </span>
                     <ChevronDown
@@ -7714,7 +7836,6 @@ export default function App() {
                       {visibleModels.map((item) => {
                         const theme = getModelTheme(item.id);
                         const isActive = selectedModel === item.id;
-                        const itemRate = getModelSuccessRate(item.id);
                         return (
                           <button
                             key={item.id}
@@ -7744,12 +7865,7 @@ export default function App() {
                               ) : null}
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className="flex items-center gap-1.5">
-                                <span className="truncate text-[13px] font-semibold text-zinc-100">{item.name}</span>
-                                {itemRate ? (
-                                  <span className="shrink-0 rounded-full bg-emerald-950/80 px-1.5 py-0.5 text-[9px] font-black leading-4 text-emerald-300">{itemRate}</span>
-                                ) : null}
-                              </span>
+                              <span className="truncate text-[13px] font-semibold text-zinc-100">{item.name}</span>
                               <span className="mt-0.5 block truncate text-[10px] font-medium text-zinc-500">{item.description}</span>
                             </span>
                           </button>
@@ -7885,11 +8001,6 @@ export default function App() {
                           }}
                         >
                           <span className="block whitespace-nowrap leading-none">{item.label}</span>
-                          {item.value === 'STANDARD' ? (
-                            <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-emerald-400/80 bg-[linear-gradient(180deg,#087f5b_0%,#056044_100%)] px-1.5 py-0 text-[9px] font-black leading-4 text-emerald-100 shadow-[0_3px_10px_rgba(5,150,105,0.3)]">
-                              {'\u5feb\u901f'}
-                            </span>
-                          ) : null}
                         </button>
                       );
                     })}
@@ -7931,11 +8042,6 @@ export default function App() {
                                 </span>
                               ) : null}
                             </button>
-                            {isHighQuality ? (
-                              <span className="pointer-events-none absolute -right-1.5 -top-1.5 z-20 rounded-full border border-[#ea580c] bg-[#ea580c] px-1.5 py-0 text-[9px] font-black leading-4 text-white">
-                                {'\u9ad8\u8d28'}
-                              </span>
-                            ) : null}
                           </div>
                         );
                       })}
@@ -8106,7 +8212,15 @@ export default function App() {
                 <span className="text-[10px] leading-tight text-amber-400/60">图片仅保存 48 小时，超时自动清理，请及时下载</span>
               </div>
               <div className="no-scrollbar grid auto-rows-auto gap-2 pr-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                {stageCards.map((item, index) => (
+                {renderedStageCards.length === 0 ? (
+                  <div className="flex min-h-full flex-col items-center justify-center gap-2.5 px-6 py-10 text-center">
+                    <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.03] text-zinc-500">
+                      <ImagePlus size={20} />
+                    </span>
+                    <p className="text-[14px] font-black tracking-wide text-zinc-200">还没有生成作品</p>
+                    <p className="max-w-[260px] text-[12px] leading-5 text-zinc-500">在左侧填写提示词并选择模型，点「下单」，生成的图片会依次出现在这里。</p>
+                  </div>
+                ) : renderedStageCards.map((item, index) => (
                   <div key={index}>
                     <StageCard
                       item={item}
@@ -8288,13 +8402,13 @@ export default function App() {
                   setEditInstruction('');
                 }}
               />
-            ) : (
+            ) : SHOW_SIDE_BUCKETS ? (
             <div className="flex h-full min-h-0 flex-col gap-2.5 lg:grid lg:grid-rows-3">
             <SidePanel
               title="收藏"
               count={sideFavoriteItems.length}
               icon={<Star size={14} />}
-              accentColor="amber"
+              accentColor="emerald"
               actions={[
                 {
                   key: 'pack',
@@ -8321,7 +8435,8 @@ export default function App() {
                 },
               ]}
               items={sideFavoriteItems}
-              emptyText="看到满意的图，就把它放进这里。"
+              emptyTitle="还没有收藏的作品"
+              emptyText="出图后点卡片上的「满意」，作品会汇总到这里，可一键打包下载。"
               onMove={moveSavedImageToMain}
               onDelete={deleteSavedImage}
               loggedIn={Boolean(user)}
@@ -8331,7 +8446,7 @@ export default function App() {
               title="备用"
               count={sideBackupItems.length}
               icon={<Bookmark size={14} />}
-              accentColor="sky"
+              accentColor="pink"
               actions={[
                 {
                   key: 'discard',
@@ -8342,7 +8457,8 @@ export default function App() {
                 },
               ]}
               items={sideBackupItems}
-              emptyText="暂时拿不准的图，先放这里备用。"
+              emptyTitle="备用区还空着"
+              emptyText="拿不准的图，出图后点卡片上的「备份」先放这儿，回头再决定去留。"
               onMove={moveSavedImageToMain}
               onDelete={deleteSavedImage}
               loggedIn={Boolean(user)}
@@ -8352,20 +8468,28 @@ export default function App() {
               title="舍弃"
               count={sideDiscardedItems.length}
               icon={<Trash2 size={14} />}
-              actionLabel="现在过来"
-              accentColor="zinc"
+              actionLabel="收入当前图"
+              accentColor="rose"
               onAction={() => {
                 if (user) {
                   void saveCurrentImage('discarded');
                 }
               }}
               items={sideDiscardedItems}
-              emptyText="不满意的图先放这里，后面统一复盘。"
+              emptyTitle="还没有待复盘的图"
+              emptyText="点右上的「收入当前图」，把不满意的图先收进来，统一复盘。"
               onMove={moveSavedImageToMain}
               onDelete={deleteSavedImage}
               loggedIn={Boolean(user)}
             />
             </div>
+            ) : (
+            <SessionGalleryPanel
+              items={stageSourceCards}
+              downloadingUrl={downloadingUrl}
+              onPreview={(item) => setPreviewImage(item)}
+              onDownload={(item) => void downloadDisplayImage(item)}
+            />
             )}
           </aside>
         </div>
@@ -8400,7 +8524,7 @@ export default function App() {
                 onClick={() => { if (!item.read) void handleReadNotification(item.id); }}
               >
                 <span className="block min-w-0">
-                  <span className="block whitespace-pre-wrap break-words tracking-[-0.01em]" style={{ color: '#f2f2f5', fontSize: 14, fontWeight: 800, lineHeight: '23px' }}>
+                  <span className="notif-body block whitespace-pre-wrap break-words tracking-[-0.01em]" style={{ color: '#f2f2f5', fontSize: 14, fontWeight: 800, lineHeight: '23px' }}>
                     {'\u901a\u77e5\uff1a'}{item.content || item.title}
                   </span>
                   <span className="mt-2 block" style={{ color: '#666873', fontSize: 11, fontWeight: 500, lineHeight: '16px' }}>{formatNotificationTime(item.publishedAt || item.createdAt)}</span>
@@ -8649,7 +8773,7 @@ export default function App() {
 
               <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]">
                 <button
-                  className="rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70"
+                  className="solid-accent rounded-2xl border border-pink-300/30 bg-[linear-gradient(90deg,#ff8fcd_0%,#db5ca8_100%)] px-4 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(219,92,168,0.24)] transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70"
                   type="button"
                   onClick={() => void openPromoPurchasePage()}
                   disabled={promoCouponClaiming}
