@@ -720,6 +720,21 @@ html[data-theme="light"] .stage-card:hover {
   box-shadow: 0 16px 40px rgba(15, 15, 20, 0.12) !important;
 }
 
+/* ---------- 创作页「生成中」面板：浅色下跟随页面，不再用深色渐变 ----------
+   该面板原本靠 keep-dark 锁定深色，浅色模式下会突兀成一块黑底。
+   改用 .stage-loading-panel 钩子，仅浅色主题下改写背景与进度槽。 */
+html[data-theme="light"] .stage-loading-panel {
+  border-color: rgba(95, 90, 199, 0.16) !important;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(255, 143, 205, 0.16), transparent 36%),
+    linear-gradient(135deg, #ffffff 0%, #f7f5fb 100%) !important;
+}
+
+html[data-theme="light"] .stage-loading-track {
+  background-color: rgba(15, 15, 20, 0.08) !important;
+  box-shadow: none !important;
+}
+
 html[data-theme="light"] .card {
   border-color: rgba(15, 15, 20, 0.06);
 }
