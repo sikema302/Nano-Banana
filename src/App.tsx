@@ -219,7 +219,7 @@ const APP_TAB_PATHS: Record<AppTab, string> = {
 };
 
 /** 深浅色主题在 localStorage 中的持久化键名 */
-const THEME_STORAGE_KEY = 'pixory-theme';
+const THEME_STORAGE_KEY = 'pixory-theme-v2';
 
 function getTabPath(tab: AppTab) {
   return APP_TAB_PATHS[tab] || '/';

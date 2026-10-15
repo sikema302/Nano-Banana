@@ -9,7 +9,7 @@
       // 在样式与 React 渲染之前先落定主题，避免深色用户看到浅色首屏闪烁
       (function () {
         try {
-          var saved = localStorage.getItem('pixory-theme');
+          var saved = localStorage.getItem('pixory-theme-v2');
           document.documentElement.setAttribute('data-theme', saved === 'dark' ? 'dark' : 'light');
         } catch (error) {
           document.documentElement.setAttribute('data-theme', 'light');
