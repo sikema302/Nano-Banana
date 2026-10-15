@@ -6,13 +6,13 @@
     <meta name="description" content="Pixory Studio - upload references, craft prompts, generate and organize images." />
     <title>PIXORY</title>
     <script>
-      // 在样式与 React 渲染之前先落定主题，避免浅色用户看到深色首屏闪烁
+      // 在样式与 React 渲染之前先落定主题，避免深色用户看到浅色首屏闪烁
       (function () {
         try {
           var saved = localStorage.getItem('pixory-theme');
-          document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+          document.documentElement.setAttribute('data-theme', saved === 'dark' ? 'dark' : 'light');
         } catch (error) {
-          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.setAttribute('data-theme', 'light');
         }
       })();
     </script>

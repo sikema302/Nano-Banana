@@ -5177,13 +5177,13 @@ export default function App() {
     if (typeof window === 'undefined') return 'home';
     return getTabFromPath(window.location.pathname, Boolean(getStoredUser()?.isAdmin));
   });
-  // 深浅色主题：默认深色（保持现有样式），仅当用户显式选择过浅色时才使用浅色
+  // 深浅色主题：默认浅色，仅当用户显式选择过深色时才使用深色
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    if (typeof window === 'undefined') return 'dark';
+    if (typeof window === 'undefined') return 'light';
     try {
-      return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+      return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
     } catch {
-      return 'dark';
+      return 'light';
     }
   });
   useEffect(() => {
