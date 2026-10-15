@@ -7121,10 +7121,10 @@ export default function App() {
       ? [...inFlightGeneratedImages, null, ...stageSourceCards]
       : stageSourceCards;
   const stageCards = Array.from({ length: MAX_BATCH_COUNT }, (_, index) => visibleStageCards[index] || null);
-  // 中间区域只有在下单/出图进行中时才铺开「灶台」空占位；
-  // 空闲时只保留已经出图的卡片，避免一屏「等待下单...」的空白砖块。
+  // 中间区域：只要已经有出图，就按「灶台」整排铺开——已出图的卡片紧挨着排在前面，
+  // 后面的空位继续占着等下一批图；仅当一张图都没有时才收起占位、显示空态提示。
   const stageSlotsActive = activeImageGenerations.length > 0 || pendingGenerationSlot || loading || submittingGeneration;
-  const renderedStageCards = stageSlotsActive ? stageCards : stageCards.filter((card) => card !== null);
+  const renderedStageCards = stageSlotsActive || stageSourceCards.length > 0 ? stageCards : [];
   const activityStageIndex = findCreationActivityStageIndex(stageCards, {
     batchCount,
     loading: activeImageGenerations.length > 0 || loading,
