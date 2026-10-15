@@ -651,6 +651,8 @@ const SHOW_CREATION_ACTIVITY = true;
 // 创作页右侧的「收藏 / 备用 / 舍弃」三个分区：内容暂时隐藏，代码保留，改成 true 即可恢复。
 const SHOW_SIDE_BUCKETS = false;
 const SHOW_PROMO_COUPON_HEADER_ENTRY = false;
+// 参考图缩略图上压着的「删除」文字浮层：暂时隐藏（会挡住图片本身），代码保留，改成 true 即可恢复。
+const SHOW_REFERENCE_REMOVE_LABEL = false;
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -5141,6 +5143,7 @@ export default function App() {
   const [autoPlace] = useState(true);
   const [draggingReferences, setDraggingReferences] = useState(false);
   const [references, setReferences] = useState<UploadPreview[]>([]);
+  const [previewReference, setPreviewReference] = useState<{ name: string; url: string } | null>(null);
   const [favorites, setFavorites] = useState<SavedImage[]>([]);
   const [backup, setBackup] = useState<SavedImage[]>([]);
   const [discarded, setDiscarded] = useState<SavedImage[]>([]);
@@ -7499,21 +7502,31 @@ export default function App() {
                         </label>
 
                         {videoReferences.map((item) => (
-                          <button
+                          <div
                             key={item.id}
                             className="group relative h-[48px] w-[48px] overflow-hidden rounded-xl border border-white/10 bg-[#101010]"
-                            type="button"
-                            onClick={() => setVideoReferences((current) => current.filter((ref) => ref.id !== item.id))}
                           >
                             <img
                               alt={item.name}
-                              className="h-full w-full object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75"
+                              className="h-full w-full cursor-zoom-in object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75"
                               src={item.previewUrl}
+                              onClick={() => setPreviewReference({ name: item.name, url: item.previewUrl })}
                             />
-                            <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
-                              删除
-                            </div>
-                          </button>
+                            <button
+                              className="absolute right-0.5 top-0.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-white shadow-[0_2px_8px_rgba(244,63,94,0.45)] transition hover:bg-rose-400"
+                              type="button"
+                              title="删除这张参考图"
+                              aria-label="删除这张参考图"
+                              onClick={() => setVideoReferences((current) => current.filter((ref) => ref.id !== item.id))}
+                            >
+                              <X size={10} strokeWidth={3.2} />
+                            </button>
+                            {SHOW_REFERENCE_REMOVE_LABEL ? (
+                              <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
+                                删除
+                              </div>
+                            ) : null}
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -7914,17 +7927,26 @@ export default function App() {
                     </label>
 
                     {references.map((item) => (
-                      <button
+                      <div
                         key={item.id}
                         className="group relative h-[48px] w-[48px] overflow-hidden rounded-xl border border-white/10 bg-[#101010]"
-                        type="button"
-                        onClick={() => removeReference(item.id)}
                       >
-                        <img alt={item.name} className="h-full w-full object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75" src={item.previewUrl} />
-                        <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
-                          {'\u5220\u9664'}
-                        </div>
-                      </button>
+                        <img alt={item.name} className="h-full w-full cursor-zoom-in object-cover transition duration-200 group-hover:scale-105 group-hover:opacity-75" src={item.previewUrl} onClick={() => setPreviewReference({ name: item.name, url: item.previewUrl })} />
+                        <button
+                          className="absolute right-0.5 top-0.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-white shadow-[0_2px_8px_rgba(244,63,94,0.45)] transition hover:bg-rose-400"
+                          type="button"
+                          title="删除这张参考图"
+                          aria-label="删除这张参考图"
+                          onClick={() => removeReference(item.id)}
+                        >
+                          <X size={10} strokeWidth={3.2} />
+                        </button>
+                        {SHOW_REFERENCE_REMOVE_LABEL ? (
+                          <div className="absolute inset-x-1.5 bottom-1.5 rounded-full bg-black/65 px-2 py-0.5 text-center text-[10px] font-semibold text-white/80 backdrop-blur">
+                            {'\u5220\u9664'}
+                          </div>
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -8707,6 +8729,28 @@ export default function App() {
               </div>
             </footer>
           </div>
+        </div>
+      ) : null}
+
+      {previewReference ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          onClick={() => setPreviewReference(null)}
+        >
+          <button
+            className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+            type="button"
+            aria-label="关闭预览"
+            onClick={() => setPreviewReference(null)}
+          >
+            <X size={18} />
+          </button>
+          <img
+            alt={previewReference.name}
+            className="max-h-[85vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+            src={previewReference.url}
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       ) : null}
 
