@@ -7,6 +7,8 @@ export type FluxBananaInput = {
   ratio: string;
   imageSize: string;
   images: string[];
+  /** Original data URLs, avoiding a temporary-file HTTP round trip. */
+  inlineImages?: string[];
   /** 固定使用指定上游模型；缺省时按 imageSize 自动选择（4K=Pro，其余=Flash）。 */
   model?: string;
 };
@@ -308,8 +310,10 @@ async function submitViaGeminiNative(
   rootUrl: string,
 ) {
   const parts: GeminiPart[] = [{ text: input.prompt }];
+  const imageSources = (input.inlineImages?.length ? input.inlineImages : input.images)
+    .slice(0, MAX_REFERENCE_IMAGES);
   parts.push(...await Promise.all(
-    input.images.slice(0, MAX_REFERENCE_IMAGES).map((source) => referencePart(source, signal, fetchImpl)),
+    imageSources.map((source) => referencePart(source, signal, fetchImpl)),
   ));
   const response = await fetchImpl(
     `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,

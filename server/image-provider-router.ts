@@ -8,6 +8,8 @@ export type ImageGenerationInput = {
   quality: string;
   optimizeChineseText: boolean;
   images: string[];
+  /** Original data URLs, when available, avoid a local-file HTTP round trip. */
+  inlineImages?: string[];
   providerRouting?: 'junliai_only' | 'junliai_dedicated';
   upstreamModelOverride?: string;
   traceId?: string;
@@ -330,10 +332,11 @@ export function createImageProviderRouter(options: RouterOptions) {
           form.set('prompt', input.prompt);
           form.set('size', requestSize(input, upstreamModel));
           form.set('response_format', requestedResponseFormat);
-          const blobs = await Promise.all(
-            input.images.slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
+          const imageSources = (input.inlineImages?.length ? input.inlineImages : input.images).slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
               ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
-              : MAX_REFERENCE_IMAGES).map((source) => imageBlob(source, controller.signal, fetchImpl)),
+              : MAX_REFERENCE_IMAGES);
+          const blobs = await Promise.all(
+            imageSources.map((source) => imageBlob(source, controller.signal, fetchImpl)),
           );
           const imageField = blobs.length > 1 ? 'image[]' : 'image';
           blobs.forEach((blob, index) => form.append(imageField, blob, `reference-${index + 1}.png`));

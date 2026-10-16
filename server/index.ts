@@ -5565,7 +5565,11 @@ async function callConfiguredImageChannel(
         const fluxInput = channelId === 'flux-flash'
           ? { ...input, model: FLUX_BANANA_FLASH_MODEL }
           : input;
-        const selected = await generateFluxBanana(fluxInput, {
+        const fluxRequest = {
+          ...fluxInput,
+          inlineImages: input.inlineImages,
+        };
+        const selected = await generateFluxBanana(fluxRequest, {
           baseUrl: FLUX_BANANA_API_BASE_URL,
           apiKey: FLUX_BANANA_API_KEY,
           maxConcurrent: FLUX_BANANA_MAX_CONCURRENCY,
@@ -9507,6 +9511,9 @@ async function start() {
           quality,
           optimizeChineseText: effectiveOptimizeChineseText,
           images: uniqueModelReferenceImages,
+          inlineImages: referenceImagesInput
+            .map((item) => normalizeString(item.data))
+            .filter((item) => item.startsWith('data:image/') || /^https?:\/\//i.test(item)),
           requestContext,
         });
         upstreamGenerationSucceeded = true;

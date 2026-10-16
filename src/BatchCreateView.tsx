@@ -858,7 +858,7 @@ export default function BatchCreateView({
 
   return (
     <section className="batch-create-shell no-scrollbar h-full min-h-0 overflow-auto px-2.5 py-2.5 sm:px-3 lg:overflow-hidden">
-      <div className="grid min-h-full gap-2.5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-full gap-2.5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)]">
         <aside className="app-panel no-scrollbar flex min-h-0 flex-col overflow-hidden p-3 lg:col-start-2 lg:row-start-1">
           {/* 顶部工具条：固定在列顶部，不随下方设置区滚动 */}
           <div className="flex-none">
@@ -1452,7 +1452,7 @@ export default function BatchCreateView({
                   </div>
                   {/* 提示词列表：统一容器 + 行式布局（左序号 / 中输入 / 右结果位） */}
                   <div className="no-scrollbar flex min-h-0 flex-1 flex-col lg:overflow-y-auto lg:pr-1">
-                    <div className="flex flex-col overflow-hidden rounded-2xl border border-white/8 bg-[#111113]">
+                    <div className="flex flex-none flex-col overflow-hidden rounded-2xl border border-white/8 bg-[#111113]">
                       {prompts.map((item, index) => {
                         const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
                         return (
@@ -1547,19 +1547,23 @@ export default function BatchCreateView({
                           </div>
                         );
                       })}
-                      {prompts.length < MAX_PROMPTS ? (
-                        <button
-                          className="flex w-full items-center justify-center gap-2 py-3 text-xs font-bold text-zinc-500 transition hover:bg-white/[0.03] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
-                          type="button"
-                          disabled={running}
-                          onClick={() => setPrompts((current) => [...current, createPromptItem()])}
-                        >
-                          <Plus size={14} />
-                          添加提示词
-                        </button>
-                      ) : null}
                     </div>
                   </div>
+                  {/* 添加提示词：常驻固定在底部，提示词变多也不会被挤出视口 */}
+                  {prompts.length < MAX_PROMPTS ? (
+                    <button
+                      className="flex min-h-[42px] flex-none items-center justify-center gap-2 rounded-xl border border-dashed border-orange-400/55 bg-orange-400/[0.07] py-2.5 text-xs font-black! text-orange-300 transition hover:border-orange-300 hover:bg-orange-400/15 hover:text-orange-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      type="button"
+                      disabled={running}
+                      onClick={() => setPrompts((current) => [...current, createPromptItem()])}
+                    >
+                      <Plus size={15} strokeWidth={2.6} />
+                      添加提示词
+                      <span className="text-[10px] font-bold text-orange-300/70">
+                        {prompts.length}/{MAX_PROMPTS}
+                      </span>
+                    </button>
+                  ) : null}
                 </div>
               )}
             </div>
