@@ -1,6 +1,8 @@
 import { type ChangeEvent, type DragEvent, useMemo, useState } from 'react';
 import {
   ArrowRight,
+  Check,
+  ChevronDown,
   Download,
   ImagePlus,
   LoaderCircle,
@@ -27,6 +29,7 @@ import {
 import type { GptImagePricing } from './lib/model-pricing';
 import { getConfiguredImageCredits, type ModelCreditPricing } from './lib/model-credit-config';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
+import { getModelLogo, getModelTheme } from './lib/model-visuals';
 import {
   MAX_GPT_IMAGE_25_REFERENCE_IMAGES,
   MAX_REFERENCE_IMAGE_BYTES,
@@ -93,6 +96,15 @@ const MAX_FILE_BYTES = MAX_REFERENCE_IMAGE_BYTES;
 const POLL_INTERVAL_MS = 2000;
 const MAX_TASK_CARDS = 30;
 const MAX_CARD_COUNT = 10;
+
+// 「多任务卡」模式暂不对外开放：改成 true 即可恢复该模式入口（模式内容代码保持完整）。
+const SHOW_BATCH_CARD_MODE = false;
+
+const BATCH_MODE_OPTIONS: Array<[BatchMode, string]> = [
+  ['multiple', '多提示词'],
+  ['unified', '统一提示词'],
+  ['cards', '多任务卡'],
+];
 
 // 后端 /api/generate/jobs 的比例白名单（auto 仅 gpt-image-2 生效，其余模型会回退 1:1）。
 const aspectOptions = ['auto', '1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9'] as const;
@@ -207,6 +219,8 @@ function UploadGrid({
   label,
   compact = false,
   disabled,
+  hint,
+  rowFlow = false,
   onFiles,
   onRemove,
 }: {
@@ -215,6 +229,8 @@ function UploadGrid({
   label: string;
   compact?: boolean;
   disabled?: boolean;
+  hint?: string;
+  rowFlow?: boolean;
   onFiles: (files: File[]) => void;
   onRemove: (id: string) => void;
 }) {
@@ -234,12 +250,17 @@ function UploadGrid({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
-        <span>{label}</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{label}</span>
+          {hint ? (
+            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-zinc-600 text-[9px] font-bold leading-none text-zinc-500" title={hint}>?</span>
+          ) : null}
+        </span>
         <span className="shrink-0 text-[10px] text-zinc-500">{items.length} / {limit}</span>
       </div>
-      <div className={`grid gap-1.5 ${compact ? 'grid-cols-4' : 'grid-cols-3 sm:grid-cols-4 xl:grid-cols-5'}`}>
+      <div className={rowFlow ? 'flex flex-wrap items-center gap-1.5' : `grid gap-1.5 ${compact ? 'grid-cols-4' : 'grid-cols-3 sm:grid-cols-4 xl:grid-cols-5'}`}>
         {items.map((item, index) => (
-          <div className="group relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-black/30" key={item.id}>
+          <div className={`group relative overflow-hidden rounded-xl border border-white/10 bg-black/30 ${rowFlow ? 'h-[72px] w-[72px] shrink-0' : 'aspect-square'}`} key={item.id}>
             <img alt={item.name} className="h-full w-full object-cover" src={item.previewUrl} />
             <span className="absolute left-1.5 top-1.5 rounded-md bg-black/70 px-1.5 py-0.5 text-xs font-black text-white">
               {index + 1}
@@ -256,7 +277,7 @@ function UploadGrid({
         ))}
         {items.length < limit ? (
           <label
-            className={`${compact ? 'aspect-square' : 'min-h-[88px]'} flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed ${
+            className={`${rowFlow ? 'h-[72px] w-[72px] shrink-0' : compact ? 'aspect-square' : 'min-h-[88px]'} flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed ${
               dragging ? 'border-orange-400 bg-orange-400/10 text-orange-200' : 'border-orange-400/35 bg-orange-400/[0.035] text-orange-200/80'
             } transition hover:border-orange-300 hover:text-orange-100 ${disabled ? 'pointer-events-none opacity-45' : ''}`}
             onDragEnter={(event) => {
@@ -268,8 +289,8 @@ function UploadGrid({
             onDrop={handleDrop}
           >
             <input className="hidden" type="file" accept="image/*" multiple disabled={disabled} onChange={handleFiles} />
-            <ImagePlus size={compact ? 15 : 19} />
-            <span className={compact ? 'mt-0.5 text-[9px] font-bold' : 'mt-1.5 text-xs font-black'}>添加图片</span>
+            <ImagePlus size={compact || rowFlow ? 15 : 19} />
+            <span className={compact || rowFlow ? 'mt-0.5 text-[9px] font-bold' : 'mt-1.5 text-xs font-black'}>添加图片</span>
           </label>
         ) : null}
       </div>
@@ -290,7 +311,7 @@ function TaskCard({
 }) {
   const imageUrl = task.image?.thumbnailPath || task.image?.imagePath;
   return (
-    <div className={`relative overflow-hidden rounded-2xl border border-white/8 bg-[#111113] ${compact ? 'flex h-full min-h-[128px] flex-col' : ''}`}>
+    <div className={`relative overflow-hidden rounded-2xl border border-white/8 bg-[#111113] ${compact ? 'flex h-full min-h-[120px] flex-col' : ''}`}>
       {imageUrl && compact ? (
         <button
           className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/15 bg-black/70 text-zinc-300 transition hover:text-white disabled:cursor-wait disabled:opacity-70"
@@ -395,8 +416,9 @@ export default function BatchCreateView({
       || item.id === 'Nano_Banana_Pro'),
     [models],
   );
-  const [mode, setMode] = useState<BatchMode>('unified');
+  const [mode, setMode] = useState<BatchMode>('multiple');
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [imageSize, setImageSize] = useState<ImageSize>('STANDARD');
   const [quality, setQuality] = useState<ImageQuality>('auto');
   const [dimensions, setDimensions] = useState<Aspect>('3:2');
@@ -836,16 +858,12 @@ export default function BatchCreateView({
 
   return (
     <section className="batch-create-shell no-scrollbar h-full min-h-0 overflow-auto px-2.5 py-2.5 sm:px-3 lg:overflow-hidden">
-      <div className="grid min-h-full gap-2.5 lg:h-full lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="app-panel no-scrollbar flex min-h-0 flex-col overflow-hidden p-3">
+      <div className="grid min-h-full gap-2.5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <aside className="app-panel no-scrollbar flex min-h-0 flex-col overflow-hidden p-3 lg:col-start-2 lg:row-start-1">
           {/* 顶部工具条：固定在列顶部，不随下方设置区滚动 */}
           <div className="flex-none">
-          <div className="grid w-full grid-cols-3 rounded-xl border border-white/8 bg-white/[0.035] p-0.5">
-            {([
-              ['unified', '统一提示词'],
-              ['multiple', '多提示词'],
-              ['cards', '多任务卡'],
-            ] as Array<[BatchMode, string]>).map(([value, label]) => (
+          <div className={`grid w-full ${SHOW_BATCH_CARD_MODE ? 'grid-cols-3' : 'grid-cols-2'} rounded-xl border border-white/8 bg-white/[0.035] p-0.5`}>
+            {BATCH_MODE_OPTIONS.filter(([value]) => SHOW_BATCH_CARD_MODE || value !== 'cards').map(([value, label]) => (
               <button
                 className={`min-h-0 whitespace-nowrap rounded-lg border px-2 py-1.5 text-[12px] font-black transition-colors ${mode === value ? 'border-orange-400/40 bg-orange-500/15 text-orange-100' : 'border-white/15 bg-white/[0.03] text-white hover:border-orange-300/45 hover:bg-orange-500/[0.08]'}`}
                 type="button"
@@ -866,7 +884,7 @@ export default function BatchCreateView({
               onClick={resetAll}
             >
               <RotateCcw size={13} />
-              重置全部
+              重置
             </button>
             <button
               className="flex min-h-0 items-center justify-center gap-1.5 rounded-lg border border-sky-400/20 bg-sky-400/10 py-2 text-xs font-bold text-sky-300 transition hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-45"
@@ -884,22 +902,75 @@ export default function BatchCreateView({
           <div className="no-scrollbar min-h-0 lg:flex-1 lg:overflow-y-auto">
           <section className="mt-4">
             <div className="mb-2 ml-1 text-[10px] font-bold text-zinc-500">选择模型</div>
-            <div className="mx-auto grid w-[95%] grid-cols-2 gap-[6px]">
-              {availableModels.map((item) => {
-                const active = item.id === model?.id;
-                return (
-                  <button
-                    className={`relative min-h-[44px] min-w-0 overflow-visible rounded-[10px] border px-2.5 py-2 text-center transition-colors ${active ? 'border-orange-400/40 bg-orange-500/15 text-orange-100' : 'border-white/15 bg-white/[0.03] text-white hover:border-orange-300/45 hover:bg-orange-500/[0.08]'}`}
-                    type="button"
-                    disabled={running}
-                    key={item.id}
-                    onClick={() => changeModel(item.id)}
-                  >
-                    <span className="block truncate text-center text-[12px] font-black leading-none">{item.id === 'gpt-image-2' ? 'GPT Image 2' : item.name}</span>
-                    <span className={`mt-1 block truncate text-center text-[9px] font-bold leading-none ${active ? 'text-orange-300/70' : 'text-white/55'}`}>{item.description}</span>
-                  </button>
-                );
-              })}
+            <div
+              className="relative"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setModelMenuOpen(false);
+              }}
+            >
+              <button
+                className="group input model-select-field flex min-h-[44px] w-full items-center gap-2.5 bg-transparent! py-1.5 pl-2.5 pr-10 text-left transition hover:border-white/20"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={modelMenuOpen}
+                disabled={running}
+                onClick={() => setModelMenuOpen((current) => !current)}
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+                  <img src={getModelLogo(model?.id ?? '')} alt={model?.name ?? ''} className="h-full w-full object-contain" />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[12px] font-semibold leading-4 text-zinc-100">{model?.name}</span>
+                  <span className="truncate text-[9px] font-medium leading-3 text-zinc-500">{model?.description}</span>
+                </span>
+                <ChevronDown
+                  size={15}
+                  className={`absolute right-3 text-zinc-400 transition-transform ${modelMenuOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {modelMenuOpen ? (
+                <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 space-y-1 overflow-hidden rounded-2xl border border-white/10 bg-[#141414]/95 p-1.5 shadow-2xl backdrop-blur-xl" role="listbox">
+                  {availableModels.map((item) => {
+                    const theme = getModelTheme(item.id);
+                    const isActive = model?.id === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        disabled={running}
+                        className={`group flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-all duration-150 ${
+                          isActive
+                            ? 'bg-violet-500/[0.12] ring-1 ring-violet-500/70'
+                            : 'hover:bg-white/[0.04] hover:ring-1 hover:ring-violet-400/30'
+                        }`}
+                        onClick={() => {
+                          changeModel(item.id);
+                          setModelMenuOpen(false);
+                        }}
+                      >
+                        <span className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                          <span
+                            className={`absolute inset-0 rounded-xl blur-md transition-opacity duration-200 ${isActive ? 'opacity-60' : 'opacity-0 group-hover:opacity-50'}`}
+                            style={{ backgroundColor: theme.glow }}
+                          />
+                          <img src={getModelLogo(item.id)} alt={item.name} className="relative h-9 w-9 rounded-xl object-contain transition-transform duration-200 group-hover:scale-110" />
+                          {isActive ? (
+                            <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white ring-2 ring-[#141414]">
+                              <Check size={9} strokeWidth={3.5} />
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="truncate text-[13px] font-semibold text-zinc-100">{item.name}</span>
+                          <span className="mt-0.5 block truncate text-[10px] font-medium text-zinc-500">{item.description}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           </section>
 
@@ -916,7 +987,7 @@ export default function BatchCreateView({
                   onRemove={(id) => setExtraReferences((current) => current.filter((item) => item.id !== id))}
                 />
               </section>
-              <section className="mt-3">
+              <section className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
                   <span className="flex items-center gap-2">
                     图像提示词
@@ -955,8 +1026,8 @@ export default function BatchCreateView({
             </>
           ) : null}
 
-          <div className="mt-4 grid gap-3">
-            <section>
+          <div className="mt-3 grid gap-2.5">
+            <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
               <div className="mb-2 text-xs font-bold text-zinc-500">清晰度</div>
               <div className={`grid gap-1.5 ${resolutionOptions.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
                 {resolutionOptions.map((item) => (
@@ -987,7 +1058,7 @@ export default function BatchCreateView({
             </section>
 
             {model?.id === 'gpt-image-2' || isGpt25 ? (
-              <section>
+              <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 text-xs font-bold text-zinc-500">质量</div>
                 <div className={`grid gap-1.5 ${isGpt25 ? 'grid-cols-3' : 'grid-cols-4'}`}>
                   {qualityOptions
@@ -1009,7 +1080,7 @@ export default function BatchCreateView({
                 </div>
               </section>
             ) : isNano ? (
-              <section>
+              <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 flex items-center gap-1 text-xs font-bold text-zinc-500" title="开启后由 AI 优化中文提示词，额外消耗积分">
                   AI 增强
                   <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-zinc-600 text-[10px] text-zinc-500">i</span>
@@ -1031,7 +1102,7 @@ export default function BatchCreateView({
             ) : null}
           </div>
 
-          <section className="mt-4">
+          <section className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-2.5">
             <div className="mb-2 ml-1 text-[10px] font-bold text-zinc-500">画面比例</div>
             <div className="flex flex-wrap gap-[6px]">
               {dimensionChoices.map((item) => {
@@ -1082,7 +1153,7 @@ export default function BatchCreateView({
           </div>
         </aside>
 
-        <div className="no-scrollbar flex min-h-0 flex-col overflow-hidden px-1">
+        <div className="no-scrollbar flex min-h-0 flex-col overflow-hidden px-1 lg:col-start-1 lg:row-start-1">
           {mode === 'cards' ? (
             <div className="no-scrollbar grid min-h-0 flex-1 auto-rows-max content-start gap-3 overflow-y-auto pr-1 grid-cols-[repeat(auto-fill,minmax(185px,1fr))]">
               {taskCards.map((card, index) => {
@@ -1345,7 +1416,7 @@ export default function BatchCreateView({
                   ) : null}
                   <label
                     className={`mx-auto flex w-full max-w-[580px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-orange-400/35 bg-orange-400/[0.025] text-orange-200/80 transition hover:border-orange-300 ${
-                      sourceImages.length > 0 ? 'min-h-[270px]' : 'min-h-[470px]'
+                      sourceImages.length > 0 ? 'min-h-[220px]' : 'min-h-[320px]'
                     } ${running ? 'pointer-events-none opacity-45' : ''}`}
                   >
                     <input
@@ -1365,96 +1436,129 @@ export default function BatchCreateView({
                   </label>
                 </div>
               ) : (
-                <div className="grid min-h-0 gap-3 lg:h-full lg:grid-cols-[minmax(200px,240px)_minmax(0,1fr)]">
-                  {/* 左：原图组（所有提示词共用） */}
-                  <div className="no-scrollbar rounded-2xl border border-white/8 bg-black/20 p-3 lg:overflow-y-auto">
+                <div className="flex min-h-0 flex-col gap-2 lg:h-full">
+                  {/* 顶部：原图组横向条（所有提示词共用） */}
+                  <div className="flex-none rounded-2xl border border-white/8 bg-black/20 p-2.5">
                     <UploadGrid
-                      compact
+                      rowFlow
                       items={sourceImages}
                       limit={MAX_GROUP_IMAGES}
                       label="原图组"
+                      hint="同一原图组会提供给每一条提示词，适合批量制作详情页、不同场景或不同角度。"
                       disabled={running}
                       onFiles={(files) => void appendFiles('sources', files)}
                       onRemove={(id) => setSourceImages((current) => current.filter((item) => item.id !== id))}
                     />
-                    <p className="mt-3 text-xs leading-5 text-zinc-600">同一原图组会提供给每一条提示词，适合批量制作详情页、不同场景或不同角度。</p>
                   </div>
-                  {/* 右：提示词卡片 + 添加按钮 */}
-                  <div className="no-scrollbar flex min-h-0 flex-col gap-2 lg:overflow-y-auto lg:pr-1">
-                    {prompts.map((item, index) => {
-                      const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
-                      return (
-                        <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]" key={item.id}>
-                          <div className="rounded-2xl border border-white/8 bg-[#111113] p-3">
-                            <div className="mb-1 flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-black text-orange-300">提示词 {index + 1}</span>
+                  {/* 提示词列表：统一容器 + 行式布局（左序号 / 中输入 / 右结果位） */}
+                  <div className="no-scrollbar flex min-h-0 flex-1 flex-col lg:overflow-y-auto lg:pr-1">
+                    <div className="flex flex-col overflow-hidden rounded-2xl border border-white/8 bg-[#111113]">
+                      {prompts.map((item, index) => {
+                        const task = tasks.find((taskItem) => taskItem.sourceLabel === `提示词 ${index + 1}`);
+                        return (
+                          <div className="flex items-stretch gap-3 border-b border-white/6 p-3 last:border-b-0" key={item.id}>
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center self-start rounded-md bg-white/8 text-[10px] font-black text-zinc-400">
+                              {index + 1}
+                            </span>
+                            <div className="flex min-w-0 flex-1 flex-col">
+                              <div className="flex items-center gap-1.5">
                                 <PromptTemplates
                                   getInitialPrompt={() => item.value}
                                   onApply={(value) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
                                 />
-                              </div>
-                              {prompts.length > 1 ? (
+                                <span className="flex-1" />
                                 <button
-                                  className="text-zinc-600 transition hover:text-white"
+                                  aria-label={`拓展编辑提示词 ${index + 1}`}
+                                  className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 transition hover:text-white"
+                                  title="拓展编辑"
                                   type="button"
-                                  disabled={running}
-                                  onClick={() => setPrompts((current) => current.filter((prompt) => prompt.id !== item.id))}
+                                  onClick={() => {
+                                    setPromptExpandPromptId(item.id);
+                                    setPromptExpandDraft(item.value);
+                                    setPromptExpandOpen(true);
+                                  }}
                                 >
-                                  <X size={14} />
+                                  <Maximize2 size={12} />
                                 </button>
-                              ) : null}
+                                {prompts.length > 1 ? (
+                                  <button
+                                    aria-label={`删除提示词 ${index + 1}`}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-600 transition hover:text-white"
+                                    type="button"
+                                    disabled={running}
+                                    onClick={() => setPrompts((current) => current.filter((prompt) => prompt.id !== item.id))}
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div className="relative mt-1.5">
+                                <textarea
+                                  className="no-scrollbar h-[54px] w-full resize-none border-0 bg-transparent px-0 pr-10 pb-5 pt-0.5 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
+                                  placeholder="描述这条提示词要生成的画面..."
+                                  value={item.value}
+                                  disabled={running}
+                                  onChange={(event) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: event.target.value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
+                                />
+                                <span className="pointer-events-none absolute bottom-1 right-1 text-[10px] text-zinc-600">
+                                  {item.value.length}/{MAX_PROMPT_LENGTH}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex min-h-[14px] items-center gap-1.5 text-[10px]">
+                                {task?.status === 'processing' ? (
+                                  <>
+                                    <LoaderCircle className="animate-spin text-orange-300" size={11} />
+                                    <span className="font-bold text-orange-200/80">生成中 {task.progress}%</span>
+                                  </>
+                                ) : task?.status === 'failed' ? (
+                                  <span className="font-bold text-rose-300">生成失败</span>
+                                ) : task?.image ? (
+                                  <span className="font-bold text-emerald-300/80">已完成</span>
+                                ) : (
+                                  <span className="text-zinc-600">等待生成</span>
+                                )}
+                              </div>
                             </div>
-                            <div className="relative">
-                              <textarea
-                                className="no-scrollbar h-[88px] w-full resize-none border-0 bg-transparent px-0 pr-8 pb-5 pt-1 text-[11px] leading-4 text-zinc-300 outline-none placeholder:text-zinc-600"
-                                placeholder="例如：图1和图5做成电商详情图..."
-                                value={item.value}
-                                disabled={running}
-                                onChange={(event) => setPrompts((current) => current.map((prompt) => prompt.id === item.id ? { ...prompt, value: event.target.value.slice(0, MAX_PROMPT_LENGTH) } : prompt))}
-                              />
-                              <button
-                                aria-label={`拓展编辑提示词 ${index + 1}`}
-                                className="absolute right-0 top-0 flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 transition hover:text-white"
-                                title="拓展编辑"
-                                type="button"
-                                onClick={() => {
-                                  setPromptExpandPromptId(item.id);
-                                  setPromptExpandDraft(item.value);
-                                  setPromptExpandOpen(true);
-                                }}
-                              >
-                                <Maximize2 size={12} />
-                              </button>
-                              <span className="pointer-events-none absolute bottom-1 right-1 text-[11px] text-zinc-600">
-                                {item.value.length}/{MAX_PROMPT_LENGTH}
-                              </span>
+                            <div className="w-14 shrink-0 self-start">
+                              {task?.image ? (
+                                <div className="group relative h-14 w-14 cursor-zoom-in overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                  <img
+                                    alt={`提示词 ${index + 1} 结果`}
+                                    className="h-full w-full object-cover"
+                                    src={task.image.thumbnailPath || task.image.imagePath}
+                                    onClick={() => window.open(task.image?.imagePath, '_blank', 'noopener')}
+                                  />
+                                  <button
+                                    aria-label={`下载提示词 ${index + 1} 结果`}
+                                    className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-md bg-black/70 text-zinc-200 opacity-0 transition group-hover:opacity-100 hover:text-white"
+                                    type="button"
+                                    onClick={() => void downloadTask(task)}
+                                    disabled={downloadingTaskId === task.id}
+                                  >
+                                    {downloadingTaskId === task.id ? <LoaderCircle size={11} className="animate-spin" /> : <Download size={11} />}
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-dashed border-white/10 text-zinc-700">
+                                  <Sparkles size={15} />
+                                </div>
+                              )}
                             </div>
                           </div>
-                          {task ? (
-                            <TaskCard task={task} compact onDownload={() => void downloadTask(task)} downloading={downloadingTaskId === task.id} />
-                          ) : (
-                            <div className="flex min-h-[128px] flex-col items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-[#111113] text-zinc-600">
-                              <Sparkles size={18} />
-                              <span className="text-xs font-black">等待生成</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {prompts.length < MAX_PROMPTS ? (
-                      <div className="grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
+                        );
+                      })}
+                      {prompts.length < MAX_PROMPTS ? (
                         <button
-                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#111113] text-sm font-bold text-zinc-200 transition hover:border-white/25 hover:bg-[#18181b] disabled:cursor-not-allowed disabled:opacity-45"
+                          className="flex w-full items-center justify-center gap-2 py-3 text-xs font-bold text-zinc-500 transition hover:bg-white/[0.03] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                           type="button"
                           disabled={running}
                           onClick={() => setPrompts((current) => [...current, createPromptItem()])}
                         >
-                          <Plus size={15} />
+                          <Plus size={14} />
                           添加提示词
                         </button>
-                      </div>
-                    ) : null}
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1490,7 +1594,7 @@ export default function BatchCreateView({
                 placeholder={promptExpandCardId
                   ? '输入提示词，描述你想生成的图片...'
                   : promptExpandPromptId
-                    ? '例如：图1和图5做成电商详情图...'
+                    ? '描述这条提示词要生成的画面...'
                     : '输入统一提示词，描述每张原图需要如何重新生成...'}
                 value={promptExpandDraft}
                 onChange={(event) => setPromptExpandDraft(event.target.value.slice(0, MAX_PROMPT_LENGTH))}

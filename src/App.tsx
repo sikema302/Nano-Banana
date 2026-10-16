@@ -159,6 +159,7 @@ import {
 } from './lib/reference-image-limits';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
+import { getModelLogo, getModelTheme } from './lib/model-visuals';
 import ChatView from './ChatView';
 import BatchCreateView from './BatchCreateView';
 import CanvasView from './CanvasView';
@@ -227,7 +228,7 @@ function getTabPath(tab: AppTab) {
 
 function getTabFromPath(pathname: string, canAccessAdmin: boolean) {
   if (pathname === '/create') return 'create';
-  if (pathname === '/batch-create') return 'create';
+  if (pathname === '/batch-create') return 'batchCreate';
   if (pathname === '/canvas') return 'canvas';
   if (pathname === '/chat') return 'home';
   if (pathname === '/history') return 'history';
@@ -729,23 +730,6 @@ function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana'
   const balances = user.creditBalances;
   if (!balances) return user.creditsRemaining ?? 0;
   return bucket === 'general' ? balances.general : balances[bucket] + balances.general;
-}
-
-// 每个模型专属的悬停辉光色，用于模型选择下拉的视觉识别。
-const MODEL_THEME: Record<string, { glow: string }> = {
-  'gpt-image-2': { glow: 'rgba(168,85,247,0.45)' },
-  'GPT-image-2.5-Flare': { glow: 'rgba(251,146,60,0.45)' },
-  'GPT-image-2.5-Sunburst': { glow: 'rgba(244,63,94,0.45)' },
-  'Nano_Banana_Pro': { glow: 'rgba(16,185,129,0.45)' },
-  'gpt-image-2-adobe': { glow: 'rgba(56,189,248,0.45)' },
-};
-
-function getModelTheme(modelId: string) {
-  return MODEL_THEME[modelId] ?? { glow: 'rgba(148,163,184,0.4)' };
-}
-
-function getModelLogo(modelId: string) {
-  return modelId === 'Nano_Banana_Pro' ? '/images/model-nano-banana.svg' : '/images/model-gpt.svg';
 }
 
 // 视频模型选择下拉的悬停辉光色，与生图模型选择器保持一致。
@@ -7149,7 +7133,7 @@ export default function App() {
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
     { id: 'home', label: '首页', icon: <Home size={15} /> },
     { id: 'create', label: '创作', icon: <Sparkles size={15} /> },
-    { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} />, hidden: true },
+    { id: 'batchCreate', label: '批量生图', icon: <Layers3 size={15} /> },
     { id: 'canvas', label: '画布', icon: <Workflow size={15} /> },
     { id: 'history', label: '历史记录', icon: <Clock3 size={15} /> },
     { id: 'apiDocs', label: 'API 文档', icon: <BookOpen size={15} /> },
