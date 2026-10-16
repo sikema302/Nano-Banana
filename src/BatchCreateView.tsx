@@ -1131,7 +1131,7 @@ export default function BatchCreateView({
                 使用积分：<span className="text-white">{estimatedCredits}</span>/<span className="text-white">{creditsRemaining}</span>
               </span>
               <button className="min-h-0 p-0 text-[11px] font-black! text-[#00b0f0] transition hover:text-[#4cc9ff]" type="button" onClick={onPurchase}>
-                点击在线购买积分(25%优惠)
+                购买积分(限时优惠25%)
               </button>
             </div>
             {mode !== 'cards' ? (

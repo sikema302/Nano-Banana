@@ -70,7 +70,6 @@ import {
   deleteImage,
   acknowledgePromoCoupon,
   claimPromoCoupon,
-  claimInvitePopup,
   fetchHealth,
   fetchNotifications,
   fetchMe,
@@ -5338,24 +5337,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!authInitialized || activeTab !== 'create' || hasVisitedCreateRef.current) return;
-    hasVisitedCreateRef.current = true;
-    if (user) return;
-    let cancelled = false;
-    void claimInvitePopup()
-      .then(({ shouldShow }) => {
-        if (cancelled || !shouldShow) return;
-        setAuthError('');
-        setAuthMode('register');
-        setAuthOpen(true);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, authInitialized, user]);
-
-  useEffect(() => {
     const handleSessionExpired = () => {
       hasVisitedCreateRef.current = true;
       setUser(null);
@@ -7119,7 +7100,18 @@ export default function App() {
     activeGenerationStageIndexes,
   });
 
+  // 未登录时「批量生图 / 画布」需先登录：硬拦截，直接弹登录且不进入页面
+  const HARD_GATED_TABS: AppTab[] = ['batchCreate', 'canvas'];
+
   function handleTabChange(nextTab: AppTab) {
+    // 未登录点击「批量生图 / 画布」：硬拦截，直接弹登录窗口，不切换页面、不改 URL
+    if (!user && HARD_GATED_TABS.includes(nextTab)) {
+      setAuthMode('login');
+      setAuthError('');
+      setAuthOpen(true);
+      return;
+    }
+
     if (typeof window !== 'undefined') {
       const nextPath = getTabPath(nextTab);
       if (window.location.pathname !== nextPath) {
@@ -7128,6 +7120,13 @@ export default function App() {
     }
 
     setActiveTab(nextTab);
+
+    // 未登录进入「创作」后自动弹登录窗口（先进入页面，再弹窗）
+    if (!user && nextTab === 'create') {
+      setAuthMode('login');
+      setAuthError('');
+      setAuthOpen(true);
+    }
   }
 
   const tabs: Array<{ id: AppTab; label: string; icon: ReactNode; hidden?: boolean }> = [
@@ -7286,6 +7285,22 @@ export default function App() {
                       <span className="text-xs font-black text-white">积分明细</span>
                       <span className="text-xs font-black text-sky-200">合计 {user.creditsRemaining ?? 0}</span>
                     </div>
+                    <button
+                      className="mt-2 flex w-full items-center justify-between gap-2 rounded-xl border border-sky-400/20 bg-sky-400/[0.07] px-3 py-2 text-[11px] font-bold text-sky-100 transition hover:border-sky-300/40 hover:bg-sky-400/15"
+                      type="button"
+                      title="复制客服微信 lzp983813676"
+                      aria-label="复制客服微信 lzp983813676"
+                      onClick={() => void handleCopyWechat()}
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <MessageCircle size={12} strokeWidth={2.2} className="shrink-0" />
+                        <span className="truncate">客服：lzp983813676</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1 text-sky-300">
+                        {wechatCopied ? <CheckCheck size={12} strokeWidth={2.4} /> : <Copy size={12} strokeWidth={2.4} />}
+                        {wechatCopied ? '已复制' : '复制'}
+                      </span>
+                    </button>
                     <div className="mt-3 space-y-2 text-xs">
                       <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">GPT 积分</span><strong className="text-white">{user.creditBalances?.gpt ?? 0}</strong></div>
                       <div className="flex justify-between rounded-xl bg-white/[0.04] px-3 py-2"><span className="text-zinc-400">Banana 积分</span><strong className="text-white">{user.creditBalances?.banana ?? 0}</strong></div>
@@ -7675,7 +7690,7 @@ export default function App() {
                         type="button"
                         onClick={openPurchasePage}
                       >
-                        点击在线购买积分(25%优惠)
+                        购买积分(限时优惠25%)
                       </button>
                     </div>
 
@@ -8132,7 +8147,7 @@ export default function App() {
                     type="button"
                     onClick={openPurchasePage}
                   >
-                    点击在线购买积分(25%优惠)
+                    购买积分(限时优惠25%)
                   </button>
                 </div>
                 {user && activePromoCoupon ? (
@@ -8143,19 +8158,6 @@ export default function App() {
                   >
                     <Sparkles size={14} className="shrink-0 text-[#ffb7df]" />
                     <span className="truncate">限时 {promoCouponDiscountLabel}优惠券，{promoCouponExpiresText || '12 小时后'}失效</span>
-                  </button>
-                ) : null}
-                {!user ? (
-                  <button
-                    className="btn-secondary group mt-1.5 h-9 min-w-[150px] px-3.5 text-[15px] font-black"
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('invite');
-                      setAuthOpen(true);
-                    }}
-                  >
-                    <KeyRound size={15} className="text-[#ffb7df] transition group-hover:text-white" />
-                    {'\u586b\u5199\u9080\u8bf7\u7801'}
                   </button>
                 ) : null}
               </div>
@@ -8970,8 +8972,20 @@ export default function App() {
               >
                 {authMode === 'register' ? '已有账号？去登录' : '没有账号？去注册'}
               </button>
-              <button className="btn-ghost min-h-0 px-0 py-0 text-sm" type="button" onClick={() => setAuthMode('invite')}>
-                填写邀请码
+              <button
+                className="btn-ghost group inline-flex min-h-0 items-center gap-1 px-0 py-0 text-sm"
+                type="button"
+                title="复制客服微信 lzp983813676"
+                aria-label="复制客服微信 lzp983813676"
+                onClick={() => void handleCopyWechat()}
+              >
+                <MessageCircle size={14} strokeWidth={2.2} className="shrink-0" />
+                <span>客服：lzp983813676</span>
+                {wechatCopied ? (
+                  <CheckCheck size={14} strokeWidth={2.4} className="shrink-0 text-emerald-500" />
+                ) : (
+                  <Copy size={14} strokeWidth={2.4} className="shrink-0" />
+                )}
               </button>
             </div>
           </div>

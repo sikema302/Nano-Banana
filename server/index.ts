@@ -5904,7 +5904,11 @@ async function pollVisionaryAsyncUntilComplete(
       throw error;
     }
 
-    const delayMs = (status.retryAfterSeconds || 5) * 1000;
+    // Most image tasks are already progressing when the first status request
+    // returns. A five-second default adds visible latency when the provider
+    // omits retryAfterSeconds, so use a shorter cadence while respecting an
+    // explicit provider hint.
+    const delayMs = (status.retryAfterSeconds || 2) * 1000;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -6076,7 +6080,21 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
     }
     try {
       imageUrl = await R2_STORAGE.putVerifiedObject(`generated/${fileName}`, buffer);
-      await verifyPublicGeneratedImage(imageUrl, buffer.byteLength);
+      // The thumbnail upload does not depend on public URL verification. Run
+      // both network operations together so storage latency is paid once.
+      const thumbnailUpload = thumbnailBuffer
+        ? R2_STORAGE.putVerifiedObject(
+            `thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`,
+            thumbnailBuffer,
+            'image/webp',
+          ).catch((error) => {
+            console.warn(`[r2-upload] thumbnail upload failed for ${fileName}:`, error);
+          })
+        : Promise.resolve();
+      await Promise.all([
+        verifyPublicGeneratedImage(imageUrl, buffer.byteLength),
+        thumbnailUpload,
+      ]);
       break;
     } catch (error) {
       lastR2Error = error;
@@ -6100,13 +6118,6 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
     return writeGeneratedImageLocally(fileName, buffer, thumbnailBuffer);
   }
 
-  if (thumbnailBuffer) {
-    try {
-      await R2_STORAGE.putVerifiedObject(`thumbnails/${fileName.replace(/\.[^.]+$/, '')}.webp`, thumbnailBuffer, 'image/webp');
-    } catch (error) {
-      console.warn(`[r2-upload] thumbnail upload failed for ${fileName}:`, error);
-    }
-  }
   return imageUrl;
 }
 

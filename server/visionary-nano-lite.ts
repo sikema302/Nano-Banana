@@ -154,7 +154,9 @@ export async function generateVisionaryNanoLite(
     }
   }
 
-  let retryAfterSeconds = Math.max(1, Number(submitted?.retry_after || 3));
+  // Avoid adding an unconditional three-second delay before the first status
+  // check when the provider does not return a retry hint.
+  let retryAfterSeconds = Math.max(1, Number(submitted?.retry_after || 1));
   let consecutivePollErrors = 0;
   for (let poll = 0; poll < maxPolls; poll += 1) {
     await sleep(retryAfterSeconds * 1_000);
