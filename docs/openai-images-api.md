@@ -60,7 +60,7 @@ PIXORY extensions supported by this endpoint:
 - `dimensions`, `aspect_ratio`, or `aspectRatio`: any ratio supported by the web UI.
 - `imageSize` or `image_size`: `gpt-image-2` supports `STANDARD`, `2K`, and `4K`; `nano-banana-pro` supports `1K`, `2K`, and `4K`; `nano-banana-2.1` supports `1K`, `2K`, and `4K` (defaults to `1K`; each tier is priced separately in the admin console).
 - `reference_images` or `images`: up to 6 HTTPS URLs or image data URLs; Base64 images must be no larger than 25 MB each.
-- `optimizeChineseText`: Nano Banana billing option (`nano-banana-pro` and `nano-banana-2.1`). When enabled it adds a per-image surcharge, configured in the admin console, but no upstream native enhancement feature or enhancement endpoint is called. `nano-banana-2.1` ignores this surcharge entirely and is billed only by its image-size tier.
+- `optimizeChineseText`: Nano Banana billing option (`nano-banana-pro` and `nano-banana-2.1`). When enabled it adds a per-image surcharge, configured in the admin console, and improves fine detail and Chinese text rendering. `nano-banana-2.1` ignores this parameter entirely and is billed only by its image-size tier.
 
 For asynchronous use, keep using:
 
@@ -109,8 +109,7 @@ and more accurate Chinese text. The request and response shapes are identical to
 - Credits: priced per image-size tier. The tiers are configured in the admin
   console, are returned by the models endpoint, and are the only billing input
   for this model.
-- `optimizeChineseText` is accepted but ignored: no surcharge and no upstream
-  enhancement call.
+- `optimizeChineseText` is accepted but ignored: no surcharge is applied.
 - `quality` is accepted but ignored; it does not change the price.
 - Single fixed upstream: unlike `nano-banana-pro`, this model does not fail over
   to another channel. If generation fails, the endpoint returns a

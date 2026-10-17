@@ -1846,14 +1846,14 @@ function ApiDocsView({
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
     ['imageSize', 'string', '否', `Nano Banana Pro 支持 1K、2K、4K（默认 2K；1K ${nanoProPricing.oneK} 积分，2K ${nanoProPricing.twoK} 积分，4K ${nanoProPricing.fourK} 积分）；Nano Banana 2.1 支持 1K、2K、4K（默认 1K；1K ${nano21Pricing.oneK} 积分，2K ${nano21Pricing.twoK} 积分，4K ${nano21Pricing.fourK} 积分）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 支持 1K、2K、4K（其他值按 1K 处理）。`],
     ['quality', 'string', '否', 'GPT-image-2 与 GPT-image-2.5 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
-    ['optimizeChineseText', 'boolean', '否', `Nano Banana Pro AI 增强计费选项：支持 1K / 2K / 4K，开启后前端账单额外增加 ${nanoProPricing.enhancement} 积分；不会调用任何上游原生增强接口。Nano Banana 2.1 固定按尺寸分档计费，传该参数不额外加价。`],
+    ['optimizeChineseText', 'boolean', '否', `Nano Banana Pro 的 AI 增强选项：开启后每张额外增加 ${nanoProPricing.enhancement} 积分，画面细节与中文文字表现更好。Nano Banana 2.1 不支持该参数，传入不额外计费。`],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', cost: `1K ${gptImage25Pricing.flare.standard} / 2K ${gptImage25Pricing.flare.twoK}（高 ${gptImage25Pricing.flare.twoKHigh}）/ 4K ${gptImage25Pricing.flare.fourK}（高 ${gptImage25Pricing.flare.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 更快迭代；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
     { model: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', cost: `1K ${gptImage25Pricing.sunburst.standard} / 2K ${gptImage25Pricing.sunburst.twoK}（高 ${gptImage25Pricing.sunburst.twoKHigh}）/ 4K ${gptImage25Pricing.sunburst.fourK}（高 ${gptImage25Pricing.sunburst.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 思考更久；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
-    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: `1K ${nanoProPricing.oneK} / 2K ${nanoProPricing.twoK} / 4K ${nanoProPricing.fourK}；AI 增强 +${nanoProPricing.enhancement}`, note: 'AI 增强仅影响前端账单，不调用上游增强接口；API Key 与网站使用相同的后台渠道顺序。' },
-    { model: 'nano-banana-2.1', name: 'Nano Banana 2.1', cost: `1K ${nano21Pricing.oneK} / 2K ${nano21Pricing.twoK} / 4K ${nano21Pricing.fourK}`, note: '按尺寸分档计价，不支持 AI 增强；固定单一上游，失败直接返回错误（不换渠道）。' },
+    { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: `1K ${nanoProPricing.oneK} / 2K ${nanoProPricing.twoK} / 4K ${nanoProPricing.fourK}；AI 增强 +${nanoProPricing.enhancement}`, note: '开启 AI 增强后画面细节与中文文字表现更好；API Key 与网站使用相同的生成配置。' },
+    { model: 'nano-banana-2.1', name: 'Nano Banana 2.1', cost: `1K ${nano21Pricing.oneK} / 2K ${nano21Pricing.twoK} / 4K ${nano21Pricing.fourK}`, note: '按尺寸分档计价，不支持 AI 增强；任务失败会直接返回错误并自动退回积分。' },
   ];
   const gptPixelGroups = [
     {
@@ -1940,7 +1940,7 @@ function ApiDocsView({
         ['1K 基础生成', `${nanoProPricing.oneK} 点 / 张`, '支持文生图与参考图生成'],
         ['2K 基础生成', `${nanoProPricing.twoK} 点 / 张`, 'imageSize=2K，或不传（默认按 2K 处理）'],
         ['4K 基础生成', `${nanoProPricing.fourK} 点 / 张`, 'imageSize=4K'],
-        ['1K / 2K / 4K AI 增强', `额外 +${nanoProPricing.enhancement} 点 / 张`, '仅影响前端账单，不调用任何上游原生增强接口'],
+        ['1K / 2K / 4K AI 增强', `额外 +${nanoProPricing.enhancement} 点 / 张`, '开启后画面细节与中文文字表现更好'],
       ],
       note: '适合参考图重绘、融合、商品图和中文场景增强。',
     },
@@ -1950,9 +1950,8 @@ function ApiDocsView({
         ['1K 基础生成', `${nano21Pricing.oneK} 点 / 张`, 'imageSize=1K，或不传（默认按 1K 处理）'],
         ['2K 基础生成', `${nano21Pricing.twoK} 点 / 张`, 'imageSize=2K'],
         ['4K 基础生成', `${nano21Pricing.fourK} 点 / 张`, 'imageSize=4K'],
-        ['AI 增强', '不支持', '传 optimizeChineseText 不额外计费，也不会调用上游增强能力'],
       ],
-      note: '谷歌最新香蕉模型 · 细节与中文文字更准。固定单一上游，失败直接返回错误并自动退回积分，不切换渠道。',
+      note: '谷歌最新香蕉模型 · 细节与中文文字更准。任务失败会直接返回错误并自动退回积分。',
     },
   ];
   const endpointSections = [
@@ -1964,7 +1963,7 @@ function ApiDocsView({
       model: 'nano-banana-pro',
       endpointPath: '/v1/async/images/generations',
       request: requestExample,
-                  bullets: ['支持 1K / 2K / 4K；每种分辨率都按网站后台的启用状态和排序依次尝试渠道。明确失败会自动切换下一渠道；失败渠道暂避 30 秒，随后恢复从第一顺位判断。', `参考图建议使用 HTTPS 图片 URL，最多 ${MAX_REFERENCE_IMAGES} 张，Base64 单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB；全部分辨率均可开启 AI 增强计费选项，额外消耗 ${nanoProPricing.enhancement} 积分，但不会调用任何上游原生增强接口。`],
+                  bullets: ['支持 1K / 2K / 4K；单张生成失败会自动重试，持续失败的任务会直接返回错误并退回积分。', `参考图建议使用 HTTPS 图片 URL，最多 ${MAX_REFERENCE_IMAGES} 张，Base64 单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB；全部分辨率均可开启 AI 增强，开启后每张额外消耗 ${nanoProPricing.enhancement} 积分，画面细节与中文文字表现更好。`],
     },
     {
       id: 'nano-banana-2-1',
@@ -1986,9 +1985,9 @@ function ApiDocsView({
       ),
       bullets: [
         `imageSize 仅支持 1K / 2K / 4K，默认 1K：1K 扣 ${nano21Pricing.oneK} 积分，2K 扣 ${nano21Pricing.twoK} 积分，4K 扣 ${nano21Pricing.fourK} 积分。`,
-        '不支持 AI 增强：传 optimizeChineseText 不会额外加价，也不会调用任何上游增强能力。',
+        '不支持 AI 增强：传 optimizeChineseText 不会额外加价。',
         `参考图最多 ${MAX_REFERENCE_IMAGES} 张，HTTPS 图片 URL 或 Base64（单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB）。`,
-        '固定单一上游，不参与后台渠道排序：任务失败会直接返回错误并自动退回积分，不会静默切换渠道。',
+        '任务失败会直接返回错误，并自动退回全部预扣积分。',
       ],
     },
     {
@@ -2048,10 +2047,15 @@ function ApiDocsView({
     const container = docsScrollRef.current;
     if (!container) return;
     const containerTop = container.getBoundingClientRect().top;
-    let current = docNavigation[0][2];
-    for (const [, , id] of docNavigation) {
-      const element = document.getElementById(id);
-      if (element && element.getBoundingClientRect().top - containerTop <= 150) current = id;
+    // 必须按「视觉位置」排序后再判定：章节用 flex order 排列，视觉顺序 ≠ docNavigation 数组顺序，
+    // 若按数组顺序遍历，视觉上在当前章节上方的章节会把高亮错误覆盖过去。
+    const ordered = docNavigation
+      .map(([, , id]) => ({ id, element: document.getElementById(id) }))
+      .filter((item): item is { id: string; element: HTMLElement } => Boolean(item.element))
+      .sort((left, right) => left.element.getBoundingClientRect().top - right.element.getBoundingClientRect().top);
+    let current = ordered[0]?.id || docNavigation[0][2];
+    for (const { id, element } of ordered) {
+      if (element.getBoundingClientRect().top - containerTop <= 200) current = id;
     }
     if (container.scrollHeight - container.scrollTop - container.clientHeight <= 4) {
       current = docNavigation[docNavigation.length - 1][2];
@@ -2298,9 +2302,9 @@ function ApiDocsView({
                   ))}
                 </div>
                 <div className="mt-4 rounded-xl border border-sky-400/20 bg-sky-500/10 px-4 py-3">
-                  <h3 className="text-sm font-black text-sky-100">{'\u667a\u80fd\u8def\u7531\uff0c\u65e7\u63a5\u5165\u96f6\u6539\u52a8'}</h3>
+                  <h3 className="text-sm font-black text-sky-100">{'智能路由，旧接入零改动'}</h3>
                   <p className="mt-1 text-xs leading-6 text-sky-100/70">
-                    {'GPT-image-2 \u4e0e Nano Banana \u90fd\u4e0e\u7f51\u7ad9\u5171\u7528\u540e\u53f0\u914d\u7f6e\u7684\u6e20\u9053\u987a\u5e8f\u3002\u67d0\u6e20\u9053\u660e\u786e\u5931\u8d25\u65f6\u4f1a\u987a\u6ed1\u5207\u6362\u5230\u4e0b\u4e00\u4e2a\uff1b\u5931\u8d25\u6e20\u9053\u6682\u907f 30 \u79d2\uff0c\u5230\u671f\u540e\u4e0b\u4e00\u4e2a\u8bf7\u6c42\u91cd\u65b0\u4ece\u7b2c\u4e00\u987a\u4f4d\u5224\u65ad\u3002\u5982\u679c\u7ed3\u679c\u72b6\u6001\u65e0\u6cd5\u786e\u8ba4\uff0c\u4e3a\u907f\u514d\u91cd\u590d\u751f\u6210\u548c\u91cd\u590d\u6210\u672c\uff0c\u5f53\u6b21\u4e0d\u4f1a\u81ea\u52a8\u5207\u6362\uff0c\u4efb\u52a1\u5931\u8d25\u4f1a\u9000\u56de\u9884\u6263\u79ef\u5206\u3002'}
+                    {'GPT-image-2 与 Nano Banana 由 PIXORY 统一调度：生成失败时会自动切换到备用通道重试；结果状态无法确认时为避免重复生成，当次不会自动切换，任务失败会退回预扣积分。'}
                   </p>
                 </div>
               </section>
@@ -2317,7 +2321,7 @@ function ApiDocsView({
               </section>
             </section>
 
-            <section id="development" className="scroll-mt-28 space-y-5">
+            <section id="development" className="order-2 scroll-mt-28 space-y-5">
               <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
                 <div className="border-b border-white/10 px-5 py-5">
                   <div className="mb-3 inline-flex rounded-md border border-orange-300/20 bg-orange-300/10 px-2.5 py-1 text-[0.72rem] font-semibold text-orange-200">开发指南</div>
@@ -2376,8 +2380,9 @@ console.log(task.results[0].url);`;
                 return item.model === 'nano-banana-pro';
               });
 
+              // 章节视觉顺序靠 order 维持（须与 docNavigation 一致）：1 快速开始 / 2 开发指南 / 3 四个模型章节 / 4 价格说明 / last API Keys
               return (
-                <div key={section.id} id={section.id} className="scroll-mt-28 space-y-5">
+                <div key={section.id} id={section.id} className="order-3 scroll-mt-28 space-y-5">
                   <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
                     <div className="border-b border-white/10 px-5 py-5">
                       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -2619,7 +2624,7 @@ Content-Type: application/json`)}</pre>
               );
             })}
 
-            <section id="pricing" className="order-3 scroll-mt-28 overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+            <section id="pricing" className="order-4 scroll-mt-28 overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
               <div className="flex items-center gap-4 border-b border-white/10 px-5 py-5">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/10 text-sky-200"><WalletCards size={20} /></div>
                 <h2 className="text-[1.15rem] font-semibold text-white">价格说明</h2>
