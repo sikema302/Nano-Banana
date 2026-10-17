@@ -21,6 +21,8 @@ export type ImageGenerationInput = {
     /** 「不确定」尝试写入的 generation_requests 行 id，供后台迟到对账翻转状态。 */
     indeterminateRequestId?: string;
     referenceImageTypes?: string[];
+    /** Deferred provider diagnostics; awaited after upstream timing is captured. */
+    diagnosticWrite?: Promise<void>;
   };
 };
 

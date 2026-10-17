@@ -5574,7 +5574,7 @@ async function callConfiguredImageChannel(
           maxConcurrent: FLUX_BANANA_MAX_CONCURRENCY,
           timeoutMs: FLUX_BANANA_TIMEOUT_MS,
         });
-        await recordImageChannelAttempt({
+        const diagnosticWrite = recordImageChannelAttempt({
           traceId,
           input,
           provider: `Flux · ${selected.model}`,
@@ -5582,12 +5582,13 @@ async function callConfiguredImageChannel(
           startedAt,
           success: true,
         });
+        if (input.requestContext) input.requestContext.diagnosticWrite = diagnosticWrite;
         return selected.source;
       } catch (error) {
         const fallbackModel = channelId === 'flux-flash'
           ? FLUX_BANANA_FLASH_MODEL
           : selectFluxBananaModel(input.imageSize);
-        await recordImageChannelAttempt({
+        const diagnosticWrite = recordImageChannelAttempt({
           traceId,
           input,
           provider: `Flux · ${fallbackModel}`,
@@ -5596,6 +5597,7 @@ async function callConfiguredImageChannel(
           success: false,
           error,
         });
+        if (input.requestContext) input.requestContext.diagnosticWrite = diagnosticWrite;
         throw error;
       }
     }
@@ -9399,7 +9401,7 @@ async function start() {
     let chargedCreditsRemaining: number | undefined;
     // 提升到外层 try 之外：上游一旦出图成功就会立刻写入 success 诊断记录（见 onAttempt），
     // 后续任何环节（转存/扣款/写历史）失败时，catch 里需要访问 successfulRequestId 同步修正该记录。
-    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; indeterminateRequestId?: string; referenceImageTypes?: string[] } | null = null;
+    let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; indeterminateRequestId?: string; referenceImageTypes?: string[]; diagnosticWrite?: Promise<void> } | null = null;
     // 「不确定」任务进入后台对账时，catch 里需要这些「请求已完成解析」的快照（图/钱/历史都要）。
     let reconciliationSnapshot: {
       input: { prompt: string; modelId: string; ratio: string; imageSize: string; quality: string; images: string[] };
@@ -9532,11 +9534,22 @@ async function start() {
           releaseCreditReservation(req.authUser!.userId, reservedGenerationCredit.bucket, reservedGenerationCredit.amount);
           reservedGenerationCredit = null;
         }
-        try {
-          await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
-        } catch (error) {
-          // 诊断记录回写失败不应让已成功生成的图片变成失败任务。
-          console.warn('[generate] failed to attach image to diagnostic request:', error);
+        const attachDiagnosticImage = async () => {
+          try {
+            await updateGenerationRequestImage(requestContext.successfulRequestId, imagePath);
+          } catch (error) {
+            // 诊断记录回写失败不应让已成功生成的图片变成失败任务。
+            console.warn('[generate] failed to attach image to diagnostic request:', error);
+          }
+        };
+        if (requestContext.diagnosticWrite) {
+          // Do not make the client wait for the diagnostic database write; link
+          // the durable image as soon as that write supplies its request id.
+          void requestContext.diagnosticWrite.then(attachDiagnosticImage).catch((error) => {
+            console.warn('[generate] deferred provider diagnostic failed:', error);
+          });
+        } else {
+          await attachDiagnosticImage();
         }
       } finally {
         await cleanupTemporaryReferenceImages(temporaryReferenceImages);
@@ -9706,6 +9719,9 @@ async function start() {
       });
       res.json({ image: publicImage });
     } catch (error) {
+      await requestContext?.diagnosticWrite?.catch((diagnosticError) => {
+        console.warn('[generate] deferred provider diagnostic failed:', diagnosticError);
+      });
       // 上游异步任务结果「不确定」（轮询窗口耗尽等）：绝不立即终局失败、绝不退款、绝不释放预留，
       // 否则上游迟到出图并计费时会造成成本泄漏。改为登记后台对账，复用既有 taskId 幂等续查。
       const indeterminateResume = resumeFromError(error);
