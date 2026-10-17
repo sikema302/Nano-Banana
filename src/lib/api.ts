@@ -1018,6 +1018,11 @@ export async function fetchModels() {
   }>('/api/models', {}, true);
 }
 
+// 公开定价接口：不需要登录，供 API 文档页对访客展示与后台一致的价格。
+export async function fetchPublicModelCreditPricing() {
+  return request<{ modelCreditPricing: ModelCreditPricing }>('/api/public/pricing', {}, false);
+}
+
 export async function generateImage(payload: {
   prompt: string;
   model: string;

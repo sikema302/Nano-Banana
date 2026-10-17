@@ -53,6 +53,7 @@ import { isConnectionTerminatedError, pooledFetch, shouldFastFailover } from './
 import { buildZipArchive, sanitizeZipEntryName, uniqueZipEntryName } from './zip-archive.js';
 import { IdempotencyRegistry } from './idempotency-registry.js';
 import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
+import { isNanoBananaModel } from '../src/lib/model-families.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
 import {
   MAX_REFERENCE_IMAGE_BYTES,
@@ -679,6 +680,21 @@ const FLUX_BANANA_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.FLUX_BANANA_TIMEOUT_MS || 15 * 60_000),
 );
+
+// Banana 2.1（gemini-nano-banana-2.1）：上游仍是 Flux / uselg 网关的 Gemini 原生接口，
+// 默认复用 NAS 上已有的 Flux banana key，可用 BANANA_21_* 单独覆盖。
+const BANANA_21_CHANNEL_ID = 'banana-21';
+const BANANA_21_MODEL = normalizeEnvValue(process.env.BANANA_21_MODEL || 'gemini-nano-banana-2.1');
+const BANANA_21_API_BASE_URL = normalizeEnvValue(
+  process.env.BANANA_21_API_BASE_URL || process.env.FLUX_BANANA_API_BASE_URL || 'https://api.ai-media.vip',
+);
+const BANANA_21_API_KEY = normalizeEnvValue(
+  process.env.BANANA_21_API_KEY || process.env.FLUX_BANANA_API_KEY,
+);
+const BANANA_21_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.BANANA_21_TIMEOUT_MS || process.env.FLUX_BANANA_TIMEOUT_MS || 15 * 60_000),
+);
 const SCHAT_BASE_URL = normalizeEnvValue(process.env.SCHAT_BASE_URL || 'https://www.schat.top/v1');
 const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
 const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
@@ -994,6 +1010,12 @@ const models = [
     name: 'Nano Banana Pro',
     description: '谷歌最强生图模型！',
     creditsCost: 24,
+  },
+  {
+    id: 'Nano_Banana_2_1',
+    name: 'Nano Banana 2.1',
+    description: '谷歌最新香蕉模型 · 细节与中文文字更准',
+    creditsCost: 26,
   },
   {
     id: 'gpt-image-2-adobe',
@@ -2342,10 +2364,11 @@ function normalizeImageSize(value: string, modelId: string) {
     return 'STANDARD';
   }
   if (modelId === 'gpt-image-2-adobe') return '1K';
-  if (modelId !== 'Nano_Banana_Pro') return VISIONARY_IMAGE_SIZE;
-  if (value === '1K') return '1K';
+  if (!isNanoBananaModel(modelId)) return VISIONARY_IMAGE_SIZE;
+  if (value === '2K') return '2K';
   if (value === '4K') return '4K';
-  return '2K';
+  // Banana 2.1 未指定尺寸时默认 1K（与公开文档一致）；Banana Pro 保持历史默认 2K。
+  return modelId === 'Nano_Banana_2_1' ? '1K' : '2K';
 }
 
 async function normalizeRoutedImageSize(
@@ -2353,7 +2376,7 @@ async function normalizeRoutedImageSize(
   modelId: string,
 ) {
   const imageSize = normalizeImageSize(value, modelId);
-  if (modelId !== 'Nano_Banana_Pro' || imageSize !== '1K' || !providerRouting) return imageSize;
+  if (!isNanoBananaModel(modelId) || imageSize !== '1K' || !providerRouting) return imageSize;
   const routing = await providerRouting.get();
   return applyProviderRoutingToImageSize(modelId, imageSize, routing);
 }
@@ -2506,6 +2529,17 @@ function modelNameFromId(modelId: string) {
 
 function normalizeModelId(modelId: string) {
   const normalized = normalizeString(modelId).toLowerCase();
+  // Banana 2.1 必须先于 Pro 判断：gemini-nano-banana-2.1 不能被当成 Banana Pro。
+  const banana21Aliases = [
+    'nano-banana-2.1',
+    'nano-banana-21',
+    'nano_banana_2_1',
+    'nano_banana_21',
+    'gemini-nano-banana-2.1',
+  ];
+  if (banana21Aliases.some((alias) => normalized === alias || normalized.endsWith(alias))) {
+    return 'Nano_Banana_2_1';
+  }
   const bananaAliases = [
     'nano-banana-pro',
     'nano_banana_pro',
@@ -2533,6 +2567,15 @@ function normalizePublicModelId(modelId: string) {
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
+
+  const banana21Aliases = new Set([
+    'nano-banana-2.1',
+    'nano-banana-21',
+    'nano_banana_2_1',
+    'nano_banana_21',
+    'gemini-nano-banana-2.1',
+  ]);
+  if (banana21Aliases.has(normalized)) return 'Nano_Banana_2_1';
 
   const bananaAliases = new Set([
     'nano-banana-pro',
@@ -5538,6 +5581,39 @@ async function callConfiguredImageChannel(
   channelId: string,
   traceId: string,
 ) {
+  // Banana 2.1：单一上游，走 Gemini 原生 generateContent（与 uselg/Flux 文档契约一致）。
+  if (input.modelId === 'Nano_Banana_2_1' && channelId === BANANA_21_CHANNEL_ID) {
+    if (!BANANA_21_API_KEY) {
+      const error = new Error('Banana 2.1 upstream key is not configured') as Error & { safeToFallback: boolean };
+      error.safeToFallback = false;
+      throw error;
+    }
+    return callMeasuredImageChannel(
+      input,
+      traceId,
+      `Flux · ${BANANA_21_MODEL}`,
+      BANANA_21_MODEL,
+      async () => {
+        const generated = await generateFluxBanana(
+          {
+            prompt: input.prompt,
+            ratio: input.ratio,
+            imageSize: input.imageSize,
+            images: input.images,
+            inlineImages: input.inlineImages,
+            model: BANANA_21_MODEL,
+          },
+          {
+            baseUrl: BANANA_21_API_BASE_URL,
+            apiKey: BANANA_21_API_KEY,
+            maxConcurrent: FLUX_BANANA_MAX_CONCURRENCY,
+            timeoutMs: BANANA_21_TIMEOUT_MS,
+          },
+        );
+        return generated.source;
+      },
+    );
+  }
   if (input.modelId === 'Nano_Banana_Pro') {
     if (channelId === 'schat-nano-banana-2') {
       return callMeasuredImageChannel(
@@ -5701,6 +5777,11 @@ async function callImageGeneration(input: ImageGenerationInput) {
       upstreamModelOverride: 'nano-banana-pro',
       traceId: crypto.randomUUID(),
     });
+  }
+  // Banana 2.1 只有一条上游（Flux / uselg 的 gemini-nano-banana-2.1），
+  // 按产品要求不做渠道回落：失败即报错，由上层退款给用户。
+  if (effectiveInput.modelId === 'Nano_Banana_2_1') {
+    return callConfiguredImageChannel(effectiveInput, BANANA_21_CHANNEL_ID, crypto.randomUUID());
   }
   const routing = providerRouting ? await providerRouting.get() : DEFAULT_PROVIDER_ROUTING;
   const resolution = routingResolution(effectiveInput.imageSize);
@@ -7094,6 +7175,13 @@ async function start() {
     });
   });
 
+  // 公开定价：API 文档页对未登录访客也要显示后台真实价格。
+  // 只暴露价格与更新时间，不含渠道、密钥等任何敏感信息。
+  app.get('/api/public/pricing', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ modelCreditPricing: activeModelCreditPricing });
+  });
+
   app.get('/api/ready', async (_req, res) => {
     try {
       if (USE_SUPABASE) {
@@ -7731,7 +7819,11 @@ async function start() {
     res.json({
       models: models.map((model) => ({
         ...model,
-        creditsCost: getModelCredits(model.id, model.id === 'gpt-image-2' ? 'STANDARD' : '2K'),
+        // 默认按模型的默认出图档位给出参考价：GPT-image-2 是 STANDARD，Banana 2.1 默认 1K，其余按 2K。
+        creditsCost: getModelCredits(
+          model.id,
+          model.id === 'gpt-image-2' ? 'STANDARD' : model.id === 'Nano_Banana_2_1' ? '1K' : '2K',
+        ),
       })),
       gptImagePricing: activeModelCreditPricing.gptImage2,
       modelCreditPricing: activeModelCreditPricing,
@@ -7950,7 +8042,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1'],
       });
       return;
     }
@@ -8595,7 +8687,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1'],
       });
       return;
     }

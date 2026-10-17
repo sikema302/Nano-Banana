@@ -28,6 +28,7 @@ import {
 } from './lib/api';
 import type { GptImagePricing } from './lib/model-pricing';
 import { getConfiguredImageCredits, type ModelCreditPricing } from './lib/model-credit-config';
+import { isNanoBananaModel } from './lib/model-families';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
 import { getModelLogo, getModelTheme } from './lib/model-visuals';
 import {
@@ -205,6 +206,10 @@ function getCredits(
         : 0
       : 0;
     return base + enhancementCredits;
+  }
+  // Banana 2.1 按尺寸分档（1K 26 / 2K 28 / 4K 28），不叠加 AI 增强。
+  if (model.id === 'Nano_Banana_2_1') {
+    return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
   }
   return typeof model.creditsCost === 'number' ? model.creditsCost : 1;
 }
@@ -413,7 +418,8 @@ export default function BatchCreateView({
     () => models.filter((item) => item.id === 'gpt-image-2'
       || item.id === 'GPT-image-2.5-Flare'
       || item.id === 'GPT-image-2.5-Sunburst'
-      || item.id === 'Nano_Banana_Pro'),
+      || item.id === 'Nano_Banana_Pro'
+      || item.id === 'Nano_Banana_2_1'),
     [models],
   );
   const [mode, setMode] = useState<BatchMode>('multiple');
@@ -441,9 +447,12 @@ export default function BatchCreateView({
   const [ratioMenuCardId, setRatioMenuCardId] = useState<string | null>(null);
 
   const model = availableModels.find((item) => item.id === selectedModel) || availableModels[0];
-  const isNano = model?.id === 'Nano_Banana_Pro';
+  const isNano = model ? isNanoBananaModel(model.id) : false;
+  // Banana 2.1 只有一条固定上游，尺寸档不受后台渠道开关影响；AI 增强仍只有 Pro 支持。
+  const isNano21 = model?.id === 'Nano_Banana_2_1';
   const isGpt25 = model ? isGpt25Model(model.id) : false;
-  const effectiveOptimizeChineseText = isNano && optimizeChineseText;
+  const canEnhanceNano = model?.id === 'Nano_Banana_Pro';
+  const effectiveOptimizeChineseText = canEnhanceNano && optimizeChineseText;
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
   const refsLimit = model && isGpt25Model(model.id) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
@@ -461,7 +470,9 @@ export default function BatchCreateView({
     ? 'gpt'
     : model?.id === 'Nano_Banana_Pro'
       ? 'banana'
-      : 'general';
+      : model?.id === 'Nano_Banana_2_1'
+        ? 'banana'
+        : 'general';
   const creditsRemaining = user?.creditBalances
     ? creditBucket === 'general'
       ? user.creditBalances.general
@@ -484,10 +495,12 @@ export default function BatchCreateView({
   const dimensionChoices: readonly string[] = isGpt25 && model
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[imageSize as string] || [])
     : aspectOptions;
-  const resolutionOptions: ImageSize[] = isNano
-    ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
-        providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
-    : isGpt25
+  const resolutionOptions: ImageSize[] = isNano21
+    ? (['1K', '2K', '4K'] as ImageSize[])
+    : isNano
+      ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
+          providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
+      : isGpt25
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
           providerRouting.image2Routes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
       : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
@@ -579,6 +592,11 @@ export default function BatchCreateView({
         ...item,
         priorityAspect: item.priorityAspect && allowed.includes(item.priorityAspect) ? item.priorityAspect : '',
       })));
+    } else if (modelId === 'Nano_Banana_2_1') {
+      // Banana 2.1 单上游、三档尺寸恒可用，默认 1K；不支持 AI 增强。
+      setImageSize('1K');
+      setQuality('auto');
+      setOptimizeChineseText(false);
     } else {
       const nextImageSize = (['1K', '2K', '4K'] as const).find((resolution) =>
         providerRouting.bananaRoutes[resolution].some((channel) => channel.enabled));
@@ -1079,7 +1097,7 @@ export default function BatchCreateView({
                     })}
                 </div>
               </section>
-            ) : isNano ? (
+            ) : canEnhanceNano ? (
               <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 flex items-center gap-1 text-xs font-bold text-zinc-500" title="开启后由 AI 优化中文提示词，额外消耗积分">
                   AI 增强

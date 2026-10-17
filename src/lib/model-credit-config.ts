@@ -15,6 +15,13 @@ export type GptImage2AdobeCreditPricing = {
   oneK: number;
 };
 
+/** Banana 2.1：按尺寸分档计价（1K 26 / 2K 28 / 4K 28），不支持 AI 增强加价。 */
+export type NanoBanana21CreditPricing = {
+  oneK: number;
+  twoK: number;
+  fourK: number;
+};
+
 /** 视频模型标识（内部规范化 ID）。 */
 export type VideoModelId = 'minimax-h3' | 'grok-imagine-video-1.5';
 
@@ -105,6 +112,7 @@ export type ModelCreditPricing = {
   gptImage25Sunburst: GptImagePricing;
   gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
+  nanoBanana21: NanoBanana21CreditPricing;
   video: VideoCreditPricing;
   updatedAt: string;
 };
@@ -128,6 +136,11 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     fourK: 24,
     enhancement: 8,
   },
+  nanoBanana21: {
+    oneK: 26,
+    twoK: 28,
+    fourK: 28,
+  },
   video: {
     minimax: { p768Base: 480, twoKBase: 520, excessPerSecond: 20 },
     grok: { p480Base: 180, p720Base: 320, excessPerSecond: 10 },
@@ -148,6 +161,10 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
     ? source.gptImage2Adobe
     : {};
+  const nanoBanana21: Partial<NanoBanana21CreditPricing> =
+    source.nanoBanana21 && typeof source.nanoBanana21 === 'object'
+      ? source.nanoBanana21 as Partial<NanoBanana21CreditPricing>
+      : {};
   // 视频定价可能是新嵌套结构（{ minimax, grok }）或旧扁平结构（{ p768Base, twoKBase, excessPerSecond }）。
   const videoRaw = (source.video && typeof source.video === 'object' ? source.video : {}) as
     Partial<VideoCreditPricing> & Partial<MinimaxVideoCreditPricing>;
@@ -169,6 +186,11 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       twoK: positiveCredit(banana.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.twoK),
       fourK: positiveCredit(banana.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.fourK),
       enhancement: positiveCredit(banana.enhancement, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana.enhancement),
+    },
+    nanoBanana21: {
+      oneK: positiveCredit(nanoBanana21.oneK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.oneK),
+      twoK: positiveCredit(nanoBanana21.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.twoK),
+      fourK: positiveCredit(nanoBanana21.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.fourK),
     },
     video: {
       minimax: {
@@ -210,6 +232,12 @@ export function getConfiguredImageCredits(
     if (imageSize === '1K') return pricing.nanoBanana.oneK;
     if (imageSize === '4K') return pricing.nanoBanana.fourK;
     return pricing.nanoBanana.twoK;
+  }
+  // Banana 2.1 按尺寸分档：1K 26 / 2K 28 / 4K 28，且不叠加 AI 增强加价。
+  if (modelId === 'Nano_Banana_2_1') {
+    if (imageSize === '2K') return pricing.nanoBanana21.twoK;
+    if (imageSize === '4K') return pricing.nanoBanana21.fourK;
+    return pricing.nanoBanana21.oneK;
   }
   return 1;
 }

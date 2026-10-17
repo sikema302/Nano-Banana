@@ -28,6 +28,28 @@ test('gpt-image-2-adobe is 1K-only priced at 26', () => {
   assert.equal(getConfiguredImageCredits(pricing, 'gpt-image-2-adobe', '1K'), 30);
 });
 
+test('Nano Banana 2.1 is tiered: 1K 26, 2K and 4K 28', () => {
+  assert.deepEqual(DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21, { oneK: 26, twoK: 28, fourK: 28 });
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Nano_Banana_2_1', '1K'), 26);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Nano_Banana_2_1', '2K'), 28);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Nano_Banana_2_1', '4K'), 28);
+  // 未指定/未知尺寸按 1K 计价（与默认出图尺寸一致）
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Nano_Banana_2_1', ''), 26);
+  // quality 参数不影响 2.1 定价
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Nano_Banana_2_1', '4K', 'high'), 28);
+
+  const pricing = normalizeModelCreditPricing({ nanoBanana21: { oneK: 30, twoK: 31, fourK: 32 } });
+  assert.equal(getConfiguredImageCredits(pricing, 'Nano_Banana_2_1', '1K'), 30);
+  assert.equal(getConfiguredImageCredits(pricing, 'Nano_Banana_2_1', '2K'), 31);
+  assert.equal(getConfiguredImageCredits(pricing, 'Nano_Banana_2_1', '4K'), 32);
+  // 非法值回落到默认档位
+  const fallback = normalizeModelCreditPricing({ nanoBanana21: { oneK: -5, twoK: 0 } });
+  assert.deepEqual(fallback.nanoBanana21, { oneK: 26, twoK: 28, fourK: 28 });
+  // 旧结构（无 oneK/twoK/fourK）一律回落到默认分档，不会把 2K/4K 压回 26
+  const legacy = normalizeModelCreditPricing({ nanoBanana21: { perImage: 25 } });
+  assert.deepEqual(legacy.nanoBanana21, { oneK: 26, twoK: 28, fourK: 28 });
+});
+
 test('invalid values fall back without dropping unrelated tiers', () => {
   const pricing = normalizeModelCreditPricing({
     nanoBanana: { oneK: -1, twoK: 88 },
