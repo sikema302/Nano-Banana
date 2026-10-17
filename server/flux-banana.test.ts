@@ -46,7 +46,7 @@ test('submits banana through the Gemini native generateContent endpoint (non-str
   assert.deepEqual(JSON.parse(String(submitInit?.body)), {
     contents: [{ role: 'user', parts: [{ text: 'Poster' }] }],
     generationConfig: {
-      responseModalities: ['TEXT', 'IMAGE'],
+      responseModalities: ['IMAGE'],
       imageConfig: { aspectRatio: '1:1', imageSize: '1K' },
     },
   });
@@ -89,7 +89,7 @@ test('sends reference images as inlineData parts in the native request body', as
       ],
     }],
     generationConfig: {
-      responseModalities: ['TEXT', 'IMAGE'],
+      responseModalities: ['IMAGE'],
       imageConfig: { aspectRatio: '16:9', imageSize: '2K' },
     },
   });

@@ -326,7 +326,9 @@ async function submitViaGeminiNative(
       body: JSON.stringify({
         contents: [{ role: 'user', parts }],
         generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
+          // The caller only consumes the generated image. Requesting TEXT as
+          // well makes the upstream model produce an unnecessary modality.
+          responseModalities: ['IMAGE'],
           imageConfig: {
             aspectRatio: input.ratio === 'auto' ? '1:1' : input.ratio || '1:1',
             imageSize: normalizeImageSize(input.imageSize),
@@ -408,7 +410,9 @@ export async function generateFluxBanana(input: FluxBananaInput, options: FluxBa
       } else {
         consecutiveFailures = 0;
       }
-      const delay = Math.min(10_000, Math.max(250, Number(payload.poll_after_ms) || 2_000));
+      // Poll quickly once when the gateway omits a retry hint, then honor the
+      // provider's explicit cadence on subsequent responses.
+      const delay = Math.min(10_000, Math.max(250, Number(payload.poll_after_ms) || (polls === 0 ? 500 : 2_000)));
       await (options.sleepImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
       let fetchedPayload: GeminiPayload = {};
       try {
