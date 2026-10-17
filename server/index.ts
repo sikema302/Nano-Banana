@@ -32,7 +32,6 @@ import {
   downloadGeneratedImage,
   generatedImageDownloadError,
   isValidImageBuffer,
-  verifyPublicGeneratedImage,
 } from './generated-image-download.js';
 import { EphemeralImageResultCache } from './ephemeral-image-results.js';
 import { classifyPublicImageError, extractUpstreamErrorMessage, publicImageErrorMessage, sanitizeUpstreamErrorForDisplay } from './public-image-error.js';
@@ -6064,7 +6063,7 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
     thumbnailBuffer = await sharp(buffer, { failOn: 'none', limitInputPixels: 100_000_000 })
       .rotate()
       .resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 60, effort: 4 })
+      .webp({ quality: 60, effort: 2 })
       .toBuffer();
   } catch (error) {
     console.warn(`[thumbnail] failed for ${fileName}:`, error);
@@ -6095,10 +6094,10 @@ async function writeGeneratedImageToR2(buffer: Buffer, extension: string) {
             console.warn(`[r2-upload] thumbnail upload failed for ${fileName}:`, error);
           })
         : Promise.resolve();
-      await Promise.all([
-        verifyPublicGeneratedImage(imageUrl, buffer.byteLength),
-        thumbnailUpload,
-      ]);
+      // putVerifiedObject already performs a HEAD and checks the exact byte
+      // length. Avoid downloading the full 4K image again through the public
+      // CDN before returning the result.
+      await thumbnailUpload;
       break;
     } catch (error) {
       lastR2Error = error;

@@ -310,7 +310,7 @@ async function submitViaGeminiNative(
   rootUrl: string,
 ) {
   const parts: GeminiPart[] = [{ text: input.prompt }];
-  const imageSources = (input.inlineImages?.length ? input.inlineImages : input.images)
+  const imageSources = (input.inlineImages?.length === input.images.length ? input.inlineImages : input.images)
     .slice(0, MAX_REFERENCE_IMAGES);
   parts.push(...await Promise.all(
     imageSources.map((source) => referencePart(source, signal, fetchImpl)),

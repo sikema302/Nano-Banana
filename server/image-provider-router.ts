@@ -332,7 +332,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           form.set('prompt', input.prompt);
           form.set('size', requestSize(input, upstreamModel));
           form.set('response_format', requestedResponseFormat);
-          const imageSources = (input.inlineImages?.length ? input.inlineImages : input.images).slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
+          const imageSources = (input.inlineImages?.length === input.images.length ? input.inlineImages : input.images).slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
               ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
               : MAX_REFERENCE_IMAGES);
           const blobs = await Promise.all(
