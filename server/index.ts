@@ -3164,6 +3164,25 @@ function ensureSchema(db: SqlDatabase) {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS credit_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      operator_user_id TEXT NOT NULL,
+      operator_username TEXT NOT NULL,
+      target_user_id TEXT NOT NULL,
+      target_username TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      bucket TEXT NOT NULL DEFAULT 'general',
+      before_total INTEGER NOT NULL,
+      after_total INTEGER NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_credit_audit_log_target ON credit_audit_log(target_user_id, created_at DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_credit_audit_log_created ON credit_audit_log(created_at DESC)');
+
   const generationColumns = new Set(
     runQuery<Record<string, unknown>>(db, 'PRAGMA table_info(generations)').map((row) => String(row.name || '')),
   );
@@ -4618,6 +4637,52 @@ function creditAudit(
     requestId,
     ...extra,
   }));
+}
+
+type AdminCreditAuditAction = 'recharge' | 'deduct' | 'invite_recharge';
+
+interface AdminCreditAuditEntry {
+  action: AdminCreditAuditAction;
+  operatorUserId: string;
+  operatorUsername: string;
+  targetUserId: string;
+  targetUsername: string;
+  amount: number;
+  bucket?: CreditBucket;
+  beforeTotal: number;
+  afterTotal: number;
+  detail?: string;
+}
+
+// 管理员手动调积分（充值/扣减/邀请码充值）的落库审计流水。
+// 消费类动作（debit/refund/reserve/release）走 creditAudit 控制台日志 + generations 表追溯，
+// 但 admin 调积分此前无持久记录，这里补上以便回答「积分从哪来 / 谁操作的」。
+function persistCreditAuditSqlite(db: SqlDatabase, entry: AdminCreditAuditEntry) {
+  db.run(
+    `INSERT INTO credit_audit_log
+      (action, operator_user_id, operator_username, target_user_id, target_username, amount, bucket, before_total, after_total, detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      entry.action,
+      entry.operatorUserId,
+      entry.operatorUsername,
+      entry.targetUserId,
+      entry.targetUsername,
+      Math.max(0, Math.floor(entry.amount)),
+      entry.bucket || 'general',
+      Math.max(0, Math.floor(entry.beforeTotal)),
+      Math.max(0, Math.floor(entry.afterTotal)),
+      entry.detail || '',
+      nowIso(),
+    ],
+  );
+}
+
+function adminOperatorIdentity(req: Request) {
+  return {
+    operatorUserId: String(req.authUser?.userId || ''),
+    operatorUsername: String(req.authUser?.username || ''),
+  };
 }
 
 async function debitUserCredits(userId: string, bucket: CreditBucket, amount: number) {
@@ -12101,6 +12166,17 @@ async function start() {
         setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
         syncInviteCodeBalanceForUser(db, userId);
         if (!isAdminTarget) adjustAdminTotalCredits(db, -requestedCredits);
+        persistCreditAuditSqlite(db, {
+          action: 'recharge',
+          ...adminOperatorIdentity(req),
+          targetUserId: userId,
+          targetUsername: String(target.username || ''),
+          amount: requestedCredits,
+          bucket: 'general',
+          beforeTotal: currentCredits.remainingCredits,
+          afterTotal: currentCredits.remainingCredits + requestedCredits,
+          detail: JSON.stringify(additions),
+        });
         return {
           credits: { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances },
           adminCredits: getAdminCreditSummary(db),
@@ -12159,7 +12235,7 @@ async function start() {
         ensureSchema(db);
         const target = getOne<Record<string, unknown>>(
           db,
-          'SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?',
+          'SELECT username, total_credits, used_credits FROM user_credits WHERE user_id = ?',
           [userId],
         );
         if (!target) throw new Error('用户积分账户不存在');
@@ -12171,6 +12247,17 @@ async function start() {
         // 人工扣除按“已使用”计入，保留用户总积分，只减少剩余额度。
         incrementUserUsedCredits(db, userId, requestedCredits);
         syncInviteCodeBalanceForUser(db, userId);
+        persistCreditAuditSqlite(db, {
+          action: 'deduct',
+          ...adminOperatorIdentity(req),
+          targetUserId: userId,
+          targetUsername: String(target.username || ''),
+          amount: requestedCredits,
+          bucket: 'general',
+          beforeTotal: currentCredits.remainingCredits,
+          afterTotal: currentCredits.remainingCredits - requestedCredits,
+          detail: '管理员手动扣除积分',
+        });
         return {
           credits: getUserCreditDetailsSqlite(db, userId),
           adminCredits: getAdminCreditSummary(db),
@@ -12182,6 +12269,56 @@ async function start() {
     } catch (error) {
       const message = error instanceof Error ? error.message : '用户积分扣除失败';
       res.status(message.includes('不存在') ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.get('/api/admin/users/:userId/credit-audit', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    const page = parsePaginationValue(req.query.page, 1, 1, 100000);
+    const pageSize = parsePaginationValue(req.query.pageSize, 20, 1, 100);
+    const action = normalizeString(req.query.action) || '';
+
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        // credit_audit_log 目前仅在 SQLite 部署落库；Supabase 部署暂无该表。
+        res.json({ entries: [], page: toPagination(page, pageSize, 0) });
+        return;
+      }
+
+      const payload = await withReadDb((db) => {
+        ensureSchema(db);
+        const where = action ? 'WHERE target_user_id = ? AND action = ?' : 'WHERE target_user_id = ?';
+        const params = action ? [userId, action] : [userId];
+        const total = Number(getOne<{ total: number }>(
+          db,
+          `SELECT COUNT(*) AS total FROM credit_audit_log ${where}`,
+          params,
+        )?.total || 0);
+        const entries = runQuery<Record<string, unknown>>(
+          db,
+          `
+            SELECT
+              id, action, operator_user_id, operator_username,
+              target_user_id, target_username, amount, bucket,
+              before_total, after_total, detail, created_at
+            FROM credit_audit_log
+            ${where}
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ? OFFSET ?
+          `,
+          [...params, pageSize, (page - 1) * pageSize],
+        );
+        return { entries, page: toPagination(page, pageSize, total) };
+      });
+      res.json(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '查询积分审计流水失败';
+      res.status(500).json({ error: message });
     }
   });
 
@@ -12891,8 +13028,26 @@ async function start() {
 
         if (redeemedBy) {
           const userCredits = getUserCredits(db, redeemedBy);
+          const targetUsername = String(
+            getOne<{ username: unknown }>(
+              db,
+              'SELECT username FROM user_credits WHERE user_id = ?',
+              [redeemedBy],
+            )?.username || '',
+          );
           setUserTotalCredits(db, redeemedBy, userCredits.totalCredits + requestedCredits);
           syncInviteCodeBalanceForUser(db, redeemedBy);
+          persistCreditAuditSqlite(db, {
+            action: 'invite_recharge',
+            ...adminOperatorIdentity(req),
+            targetUserId: redeemedBy,
+            targetUsername,
+            amount: requestedCredits,
+            bucket: 'general',
+            beforeTotal: userCredits.remainingCredits,
+            afterTotal: userCredits.remainingCredits + requestedCredits,
+            detail: `邀请码充值：${code}`,
+          });
         }
 
         adjustAdminTotalCredits(db, -requestedCredits);

@@ -172,6 +172,7 @@ npm run db:sync:supabase
 
 - `GET /api/admin/overview`
 - `GET /api/health`
+- `GET /api/admin/users/:userId/credit-audit` — 查询某用户的积分审计流水（管理员充值 / 扣减 / 邀请码充值），支持 `page`、`pageSize`、`action` 参数
 
 ---
 
