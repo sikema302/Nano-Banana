@@ -11,6 +11,9 @@
   `node node_modules/tsx/dist/cli.mjs --test server/*.test.ts src/lib/*.test.ts`
   `node node_modules/vite/bin/vite.js build`
 - 无 `gh` CLI;GitHub Actions 日志 API 需鉴权(403),只能靠本地复现定位失败原因。
+- 本地构建坑(2026-10-18):① 根目录 `_cdn_index.ts` 是 gitignore 的本地游离文件,会污染本地 tsc,
+  已加进 tsconfig `exclude`(CI 无此文件不受影响);② node_modules 可能缺 `@xyflow/react`,
+  `npm install` 补齐;③ 沙箱下 vite 清空 `dist/` 会被 safe-delete 钩子挡住,先 `rm -rf dist` 再跑 build。
 
 ## 环境限制(重要)
 
