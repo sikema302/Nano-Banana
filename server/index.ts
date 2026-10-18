@@ -70,6 +70,8 @@ import {
   getVideoReferenceImageSurcharge,
   normalizeModelCreditPricing,
   normalizeVideoModelId,
+  resolveGenerationRecordModelFilter,
+  GENERATION_RECORD_MODEL_FILTERS,
   VIDEO_MODELS,
   type ModelCreditPricing,
   type VideoModelId,
@@ -12532,9 +12534,16 @@ async function start() {
           }
         }
         if (options.model && options.model !== 'all') {
-          // 模型筛选用 model_id（前端展示的对外模型名）；model_name（渠道 · 源头模型）在记录列里直接可见。
-          where.push('model_id = ?');
-          params.push(options.model);
+          // 下拉值是前端对外展示名（七种），经映射还原为 generation_requests.model_id 集合；
+          // 未命中映射（如旧版保存的 model_id）则回退精确匹配。
+          const modelFilter = resolveGenerationRecordModelFilter(options.model);
+          if (modelFilter) {
+            where.push(`model_id IN (${modelFilter.modelIds.map(() => '?').join(', ')})`);
+            params.push(...modelFilter.modelIds);
+          } else {
+            where.push('model_id = ?');
+            params.push(options.model);
+          }
         }
         if (options.resolution && options.resolution !== 'all') {
           // 下拉只按档位分组（1K / 2K / 4K / 1080p …）：image_size 落库为 "1K / auto"、"1080p / 4s"，取第一段。
@@ -12567,12 +12576,12 @@ async function start() {
           }
           return record;
         });
-        const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT model_id, image_size FROM generation_requests WHERE username != 'demo'");
+        const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT image_size FROM generation_requests WHERE username != 'demo'");
         return {
           records,
           total,
-          // 下拉展示前端对外模型名（model_id）；源头模型（渠道 · 上游模型）在记录列里直接可见。
-          modelOptions: [...new Set(optionsRows.map((row) => String(row.model_id || '')).filter(Boolean))].sort(),
+          // 下拉固定为前端对外展示的七种模型；渠道 · 源头模型在记录列里直接可见。
+          modelOptions: GENERATION_RECORD_MODEL_FILTERS.map((item) => item.label),
           // 只按档位分组（image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分），不带比例。
           resolutionOptions: [...new Set(optionsRows.map((row) => String(row.image_size || '').split(' / ')[0].trim()).filter(Boolean))].sort(),
         };

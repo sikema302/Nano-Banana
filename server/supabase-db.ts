@@ -7,6 +7,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Agent } from 'undici';
 import WebSocket from 'ws';
 import { getInviteRedemptionCredits } from './invite-redemption.js';
+import {
+  GENERATION_RECORD_MODEL_FILTERS,
+  resolveGenerationRecordModelFilter,
+} from '../src/lib/model-credit-config.js';
 
 // ─── 类型定义 ───────────────────────────────────────────────────────
 
@@ -266,8 +270,13 @@ function applyGenerationFilters(query: any, options: GenerationFilterOptions, in
   let next = query.neq('username', 'demo');
 
   if (options.model && options.model !== 'all') {
-    // 模型筛选用 model_id（前端展示的对外模型名）；model_name（渠道 · 源头模型）在记录列里直接可见。
-    next = next.eq('model_id', options.model);
+    // 下拉值是前端对外展示名（七种），经映射还原为 model_id 集合；未命中则回退精确匹配。
+    const modelFilter = resolveGenerationRecordModelFilter(options.model);
+    if (modelFilter) {
+      next = next.in('model_id', modelFilter.modelIds);
+    } else {
+      next = next.eq('model_id', options.model);
+    }
   }
 
   if (options.resolution && options.resolution !== 'all') {
@@ -1305,17 +1314,16 @@ export async function getGenerationRequestFilterOptions(): Promise<{
     .order('created_at', { ascending: false })
     .range(0, 9999);
   if (error) return { modelOptions: [], resolutionOptions: [] };
-  const modelOptions = new Set<string>();
+  // 下拉固定为前端对外展示的七种模型；渠道 · 源头模型在记录列里直接可见。
+  const modelOptions = GENERATION_RECORD_MODEL_FILTERS.map((item) => item.label);
   const resolutionOptions = new Set<string>();
   for (const row of data || []) {
-    const modelId = String((row as { model_id: string }).model_id || '');
     const imageSize = String((row as { image_size: string }).image_size || '');
-    if (modelId) modelOptions.add(modelId);
     // 只按档位分组（image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分），不带比例。
     const imageSizeTier = imageSize.split(' / ')[0].trim();
     if (imageSizeTier) resolutionOptions.add(imageSizeTier);
   }
-  return { modelOptions: [...modelOptions].sort(), resolutionOptions: [...resolutionOptions].sort() };
+  return { modelOptions, resolutionOptions: [...resolutionOptions].sort() };
 }
 
 async function hydrateGenerationApiRequestMs(records: GenerationRow[]): Promise<GenerationRow[]> {

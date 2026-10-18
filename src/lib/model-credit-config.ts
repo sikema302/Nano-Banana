@@ -87,6 +87,29 @@ export function normalizeVideoModelId(value: unknown): VideoModelId {
   return VIDEO_DEFAULT_MODEL_ID;
 }
 
+/**
+ * 后台「请求记录」模型筛选：前端对外展示的 7 种模型（生图 5 + 生视频 2）。
+ * 下拉固定展示这些名字；筛选时按 model_id 集合匹配（IN 查询）。
+ * 注意视频历史记录落库的 model_id 是 historyModelId（如「全参MinimaxH3」），与展示名不同，这里统一映射。
+ * 已下架模型（如 gemini-veo31、firefly-video）的旧记录不归入这七种，仅在「全部模型」下可见。
+ */
+export const GENERATION_RECORD_MODEL_FILTERS: Array<{ label: string; modelIds: string[] }> = [
+  { label: 'GPT-image-2', modelIds: ['gpt-image-2'] },
+  { label: 'GPT-image-2.5 Flare', modelIds: ['GPT-image-2.5-Flare'] },
+  { label: 'GPT-image-2.5 Sunburst', modelIds: ['GPT-image-2.5-Sunburst'] },
+  { label: 'Nano Banana Pro', modelIds: ['Nano_Banana_Pro'] },
+  { label: 'Nano Banana 2.1', modelIds: ['Nano_Banana_2_1'] },
+  { label: 'MiniMax H3', modelIds: ['全参MinimaxH3', 'minimax_h3', 'minimax-h3'] },
+  { label: 'grok-imagine-video-1.5', modelIds: ['grok-imagine-video-1.5'] },
+];
+
+/** 按下拉值（展示名）解析对应的 model_id 集合；未命中返回 null 交由调用方兜底。 */
+export function resolveGenerationRecordModelFilter(value: string): { label: string; modelIds: string[] } | null {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  return GENERATION_RECORD_MODEL_FILTERS.find((item) => item.label === normalized) || null;
+}
+
 /** 全参 MinimaxH3 两档定价。 */
 export type MinimaxVideoCreditPricing = {
   p768Base: number;

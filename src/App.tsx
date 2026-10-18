@@ -139,6 +139,7 @@ import {
   getConfiguredImageCredits,
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
+  GENERATION_RECORD_MODEL_FILTERS,
   VIDEO_MODELS,
   VIDEO_REFERENCE_IMAGE_FREE_COUNT,
   VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS,
@@ -3658,8 +3659,8 @@ function AdminView({
 
   const searchableUsers = users;
 
-  // 模型筛选口径与后端一致：用 model_id（前端对外展示的模型名），而非渠道 · 源头模型。
-  const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : Array.from(new Set(records.map((item) => item.modelId))).sort();
+  // 模型筛选下拉固定为前端对外展示的七种模型（与服务端 GENERATION_RECORD_MODEL_FILTERS 一致）。
+  const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : GENERATION_RECORD_MODEL_FILTERS.map((item) => item.label);
   const resolutionOptions = recordResolutionOptions.length > 0
     ? recordResolutionOptions
     // 兜底选项与服务端口径一致：只取档位（1K / 2K / 4K / 1080p …），不带比例、不带 quality/秒数细分。
