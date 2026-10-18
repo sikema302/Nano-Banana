@@ -272,7 +272,11 @@ function applyGenerationFilters(query: any, options: GenerationFilterOptions, in
   if (options.resolution && options.resolution !== 'all') {
     const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
     if (dimensions) next = next.eq('dimensions', dimensions);
-    if (imageSize) next = next.eq('image_size', imageSize);
+    if (imageSize) {
+      // image_size 落库是 "1K / auto"、"1080p / 4s" 这类「档位 / 细分」组合；
+      // 筛选下拉只按中间档位分组，用精确匹配 + 前缀匹配覆盖同一档位的所有细分。
+      next = next.or(`image_size.eq.${imageSize},image_size.like.${imageSize} / %`);
+    }
   }
 
   if (options.range && options.range !== 'all') {
@@ -1309,7 +1313,11 @@ export async function getGenerationRequestFilterOptions(): Promise<{
     const dimensions = String((row as { dimensions: string }).dimensions || '');
     const imageSize = String((row as { image_size: string }).image_size || '');
     if (modelName) modelOptions.add(modelName);
-    if (dimensions) resolutionOptions.add(imageSize ? `${dimensions} / ${imageSize}` : dimensions);
+    if (dimensions) {
+      // 只按中间档位分组：image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分。
+      const imageSizeTier = imageSize.split(' / ')[0].trim();
+      resolutionOptions.add(imageSizeTier ? `${dimensions} / ${imageSizeTier}` : dimensions);
+    }
   }
   return { modelOptions: [...modelOptions].sort(), resolutionOptions: [...resolutionOptions].sort() };
 }

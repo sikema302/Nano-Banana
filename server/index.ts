@@ -12538,7 +12538,12 @@ async function start() {
         if (options.resolution && options.resolution !== 'all') {
           const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
           if (dimensions) { where.push('dimensions = ?'); params.push(dimensions); }
-          if (imageSize) { where.push('image_size = ?'); params.push(imageSize); }
+          if (imageSize) {
+            // image_size 落库是 "1K / auto"、"1080p / 4s" 这类「档位 / 细分」组合；
+            // 筛选下拉只按中间档位分组，因此用精确匹配 + 前缀匹配覆盖同一档位的所有细分。
+            where.push('(image_size = ? OR image_size LIKE ?)');
+            params.push(imageSize, `${imageSize} / %`);
+          }
         }
         if (options.range && options.range !== 'all') {
           const hours = options.range === '24h' ? 24 : options.range === '7d' ? 168 : options.range === '30d' ? 720 : 0;
@@ -12570,7 +12575,8 @@ async function start() {
           modelOptions: [...new Set(optionsRows.map((row) => String(row.model_name || '')).filter(Boolean))].sort(),
           resolutionOptions: [...new Set(optionsRows.map((row) => {
             const dimensions = String(row.dimensions || '');
-            const imageSize = String(row.image_size || '');
+            // 只按中间档位分组：image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分。
+            const imageSize = String(row.image_size || '').split(' / ')[0].trim();
             return dimensions ? (imageSize ? `${dimensions} / ${imageSize}` : dimensions) : '';
           }).filter(Boolean))].sort(),
         };

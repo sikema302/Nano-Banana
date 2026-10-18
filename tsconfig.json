@@ -22,5 +22,10 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "_cdn_index.ts",
+    "node_modules",
+    "dist"
+  ]
 }
