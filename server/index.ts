@@ -12536,11 +12536,9 @@ async function start() {
           params.push(options.model);
         }
         if (options.resolution && options.resolution !== 'all') {
-          const [dimensions, imageSize] = options.resolution.split(' / ').map((item) => item.trim());
-          if (dimensions) { where.push('dimensions = ?'); params.push(dimensions); }
+          // 下拉只按档位分组（1K / 2K / 4K / 1080p …）：image_size 落库为 "1K / auto"、"1080p / 4s"，取第一段。
+          const imageSize = options.resolution.split(' / ')[0].trim();
           if (imageSize) {
-            // image_size 落库是 "1K / auto"、"1080p / 4s" 这类「档位 / 细分」组合；
-            // 筛选下拉只按中间档位分组，因此用精确匹配 + 前缀匹配覆盖同一档位的所有细分。
             where.push('(image_size = ? OR image_size LIKE ?)');
             params.push(imageSize, `${imageSize} / %`);
           }
@@ -12573,12 +12571,8 @@ async function start() {
           records,
           total,
           modelOptions: [...new Set(optionsRows.map((row) => String(row.model_name || '')).filter(Boolean))].sort(),
-          resolutionOptions: [...new Set(optionsRows.map((row) => {
-            const dimensions = String(row.dimensions || '');
-            // 只按中间档位分组：image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分。
-            const imageSize = String(row.image_size || '').split(' / ')[0].trim();
-            return dimensions ? (imageSize ? `${dimensions} / ${imageSize}` : dimensions) : '';
-          }).filter(Boolean))].sort(),
+          // 只按档位分组（image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分），不带比例。
+          resolutionOptions: [...new Set(optionsRows.map((row) => String(row.image_size || '').split(' / ')[0].trim()).filter(Boolean))].sort(),
         };
       });
       res.json({

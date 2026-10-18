@@ -3661,11 +3661,8 @@ function AdminView({
   const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : Array.from(new Set(records.map((item) => item.modelName))).sort();
   const resolutionOptions = recordResolutionOptions.length > 0
     ? recordResolutionOptions
-    // 兜底选项与服务端口径一致：只按「比例 / 中间档位」分组，去掉 quality/秒数等第二段细分。
-    : Array.from(new Set(records.map((item) => {
-      const imageSizeTier = (item.imageSize || '').split(' / ')[0].trim();
-      return item.dimensions ? (imageSizeTier ? `${item.dimensions} / ${imageSizeTier}` : item.dimensions) : '';
-    }).filter(Boolean))).sort();
+    // 兜底选项与服务端口径一致：只取档位（1K / 2K / 4K / 1080p …），不带比例、不带 quality/秒数细分。
+    : Array.from(new Set(records.map((item) => (item.imageSize || '').split(' / ')[0].trim()).filter(Boolean))).sort();
 
   const filteredRecords = records;
 
