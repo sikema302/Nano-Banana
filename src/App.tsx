@@ -157,6 +157,7 @@ import {
   MAX_REFERENCE_IMAGE_MB,
   MAX_REFERENCE_IMAGES,
   MAX_GPT_IMAGE_25_REFERENCE_IMAGES,
+  maxReferenceImageMBForModel,
 } from './lib/reference-image-limits';
 import { buildImageEditPrompt, type EditLock } from './lib/image-editing';
 import { formatPromoCouponCountdown, getPromoDiscountLabel, getPromoDiscountRate } from './lib/promo-coupon';
@@ -394,8 +395,9 @@ function getMaxReferences(modelId: string) {
     ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
     : MAX_REFERENCE_IMAGES;
 }
-function getMaxReferenceMB(_modelId: string) {
-  return MAX_REFERENCE_IMAGE_MB;
+function getMaxReferenceMB(modelId: string) {
+  // GPT-image-2 上游单张参考图限 20MB，其余模型维持 25MB（口径在共享 lib）。
+  return maxReferenceImageMBForModel(modelId);
 }
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_BATCH_COUNT = 10;

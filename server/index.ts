@@ -56,10 +56,11 @@ import { normalizeGptImageQuality } from '../src/lib/model-pricing.js';
 import { isNanoBananaModel } from '../src/lib/model-families.js';
 import { resolveAiEnhancementBillingRequested } from '../src/lib/image-generation-flags.js';
 import {
-  MAX_REFERENCE_IMAGE_BYTES,
   MAX_REFERENCE_IMAGE_MB,
   MAX_REFERENCE_IMAGES,
   MAX_GPT_IMAGE_25_REFERENCE_IMAGES,
+  maxReferenceImageBytesForModel,
+  maxReferenceImageMBForModel,
 } from '../src/lib/reference-image-limits.js';
 import { createImageChannelFailover } from './image-channel-failover.js';
 import { normalizePublicApiProviderRouting } from './public-api-routing.js';
@@ -6438,8 +6439,10 @@ async function persistTemporaryReferenceImages(referenceImages: ReferenceUploadI
     if (!base64) continue;
 
     const buffer = Buffer.from(base64, 'base64');
-    if (buffer.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
-      throw new Error(`Each reference image must be ${MAX_REFERENCE_IMAGE_MB} MB or smaller`);
+    // GPT-image-2 上游单张参考图限 20MB，其余模型 25MB（口径在共享 lib）。
+    if (buffer.byteLength > maxReferenceImageBytesForModel(modelId)) {
+      const maxMB = maxReferenceImageMBForModel(modelId);
+      throw new Error(`Each reference image must be ${maxMB} MB or smaller`);
     }
     if (!isValidImageBuffer(buffer, item.mimeType)) {
       throw new Error('Reference image data is not a valid supported image');
@@ -6571,7 +6574,8 @@ function validateReferenceImageSources(referenceImages: string[], modelId?: stri
     throw new Error(`A maximum of ${maxCount} reference images is supported`);
   }
 
-  const maxMB = MAX_REFERENCE_IMAGE_MB;
+  // GPT-image-2 上游单张参考图限 20MB，其余模型 25MB（口径在共享 lib）。
+  const maxMB = maxReferenceImageMBForModel(modelId);
   const maxBytes = maxMB * 1024 * 1024;
 
   for (const source of referenceImages) {
@@ -6611,8 +6615,9 @@ function probeReferenceImageSize(url: string): Promise<number | null> {
   });
 }
 
-async function validateReferenceImageUrlSizes(referenceImages: string[], _modelId?: string) {
-  const maxMB = MAX_REFERENCE_IMAGE_MB;
+async function validateReferenceImageUrlSizes(referenceImages: string[], modelId?: string) {
+  // GPT-image-2 上游单张参考图限 20MB，其余模型 25MB（口径在共享 lib）。
+  const maxMB = maxReferenceImageMBForModel(modelId);
   const maxBytes = maxMB * 1024 * 1024;
   const urls = referenceImages
     .map((item) => normalizeString(item))
