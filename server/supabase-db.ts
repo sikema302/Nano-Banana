@@ -266,7 +266,8 @@ function applyGenerationFilters(query: any, options: GenerationFilterOptions, in
   let next = query.neq('username', 'demo');
 
   if (options.model && options.model !== 'all') {
-    next = next.eq('model_name', options.model);
+    // 模型筛选用 model_id（前端展示的对外模型名）；model_name（渠道 · 源头模型）在记录列里直接可见。
+    next = next.eq('model_id', options.model);
   }
 
   if (options.resolution && options.resolution !== 'all') {
@@ -1299,7 +1300,7 @@ export async function getGenerationRequestFilterOptions(): Promise<{
 }> {
   const { data, error } = await getSupabase()
     .from('generation_requests')
-    .select('model_name, dimensions, image_size')
+    .select('model_id, image_size')
     .neq('username', 'demo')
     .order('created_at', { ascending: false })
     .range(0, 9999);
@@ -1307,9 +1308,9 @@ export async function getGenerationRequestFilterOptions(): Promise<{
   const modelOptions = new Set<string>();
   const resolutionOptions = new Set<string>();
   for (const row of data || []) {
-    const modelName = String((row as { model_name: string }).model_name || '');
+    const modelId = String((row as { model_id: string }).model_id || '');
     const imageSize = String((row as { image_size: string }).image_size || '');
-    if (modelName) modelOptions.add(modelName);
+    if (modelId) modelOptions.add(modelId);
     // 只按档位分组（image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分），不带比例。
     const imageSizeTier = imageSize.split(' / ')[0].trim();
     if (imageSizeTier) resolutionOptions.add(imageSizeTier);

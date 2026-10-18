@@ -12532,7 +12532,8 @@ async function start() {
           }
         }
         if (options.model && options.model !== 'all') {
-          where.push('model_name = ?');
+          // 模型筛选用 model_id（前端展示的对外模型名）；model_name（渠道 · 源头模型）在记录列里直接可见。
+          where.push('model_id = ?');
           params.push(options.model);
         }
         if (options.resolution && options.resolution !== 'all') {
@@ -12566,11 +12567,12 @@ async function start() {
           }
           return record;
         });
-        const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT model_name, dimensions, image_size FROM generation_requests WHERE username != 'demo'");
+        const optionsRows = runQuery<Record<string, unknown>>(db, "SELECT model_id, image_size FROM generation_requests WHERE username != 'demo'");
         return {
           records,
           total,
-          modelOptions: [...new Set(optionsRows.map((row) => String(row.model_name || '')).filter(Boolean))].sort(),
+          // 下拉展示前端对外模型名（model_id）；源头模型（渠道 · 上游模型）在记录列里直接可见。
+          modelOptions: [...new Set(optionsRows.map((row) => String(row.model_id || '')).filter(Boolean))].sort(),
           // 只按档位分组（image_size 落库为 "1K / auto"、"1080p / 4s"，去掉第二段细分），不带比例。
           resolutionOptions: [...new Set(optionsRows.map((row) => String(row.image_size || '').split(' / ')[0].trim()).filter(Boolean))].sort(),
         };

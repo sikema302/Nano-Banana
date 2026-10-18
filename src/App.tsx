@@ -3658,7 +3658,8 @@ function AdminView({
 
   const searchableUsers = users;
 
-  const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : Array.from(new Set(records.map((item) => item.modelName))).sort();
+  // 模型筛选口径与后端一致：用 model_id（前端对外展示的模型名），而非渠道 · 源头模型。
+  const modelOptions = recordModelOptions.length > 0 ? recordModelOptions : Array.from(new Set(records.map((item) => item.modelId))).sort();
   const resolutionOptions = recordResolutionOptions.length > 0
     ? recordResolutionOptions
     // 兜底选项与服务端口径一致：只取档位（1K / 2K / 4K / 1080p …），不带比例、不带 quality/秒数细分。
@@ -4858,7 +4859,7 @@ function AdminView({
                       value={recordModelFilter}
                       onChange={(event) => setRecordModelFilter(event.target.value)}
                     >
-                      <option value="all">全部源头模型</option>
+                      <option value="all">全部模型</option>
                       {modelOptions.map((item) => (
                         <option key={item} value={item}>{item}</option>
                       ))}
