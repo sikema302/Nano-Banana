@@ -3527,6 +3527,8 @@ function AdminView({
   const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
   const [recordRange, setRecordRange] = useState<RecordRange>('all');
   const [recordPage, setRecordPage] = useState(1);
+  // 请求记录失败详情弹窗：展示记录 id + 接口返回的完整报错，方便排查
+  const [recordDetail, setRecordDetail] = useState<GenerationRecord | null>(null);
   const normalizedCredits = Math.max(0, Math.floor(Number(credits) || 0));
   const normalizedInviteBatchCount = Math.max(1, Math.min(100, Math.floor(Number(inviteBatchCount) || 1)));
   const inviteCreditsTotal = normalizedCredits * normalizedInviteBatchCount;
@@ -3830,6 +3832,30 @@ function AdminView({
 
   function truncatePrompt(prompt: string) {
     return prompt.length > 20 ? `${prompt.slice(0, 20)}...` : prompt;
+  }
+
+  async function copyRecordDetailText(value: string, label: string) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error('copy_failed');
+      }
+      onNotice(`已复制${label}`);
+    } catch {
+      onNotice('复制失败，请手动复制');
+    }
   }
 
   function renderSparkline(points: number[]) {
@@ -4913,6 +4939,7 @@ function AdminView({
                           <th className="w-[84px] px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">接口耗时</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">提示词</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">时间</th>
+                          <th className="w-[52px] px-2 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">详情</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -4947,6 +4974,17 @@ function AdminView({
                             <td className="px-3 py-3 font-semibold text-emerald-200">{formatApiRequestTime(item.apiRequestMs)}</td>
                             <td className="max-w-[360px] px-3 py-3 leading-5" title={item.prompt}>{truncatePrompt(item.prompt)}</td>
                             <td className="px-3 py-3 text-zinc-400">{formatTime(item.createdAt)}</td>
+                            <td className="px-2 py-3">
+                              {item.resultStatus === 'failed' ? (
+                                <button
+                                  className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-2 py-1 text-[10px] font-semibold text-rose-300 transition hover:border-rose-400/60 hover:text-rose-200"
+                                  type="button"
+                                  onClick={() => setRecordDetail(item)}
+                                >
+                                  详情
+                                </button>
+                              ) : <span className="text-zinc-700">-</span>}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -4985,6 +5023,100 @@ function AdminView({
           </div>
         </div>
       </div>
+      {recordDetail ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <button
+            aria-label="Close record detail dialog"
+            className="absolute inset-0"
+            type="button"
+            onClick={() => setRecordDetail(null)}
+          />
+          <div className="custom-scrollbar relative max-h-[82vh] w-full max-w-2xl overflow-auto rounded-[28px] border border-white/10 bg-[#090909] p-5 shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-black text-white">失败详情</h3>
+                <p className="mt-1 text-xs text-zinc-500">记录 ID #{recordDetail.id} · 接口返回的完整报错信息</p>
+              </div>
+              <button
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-white/25 hover:text-white"
+                type="button"
+                onClick={() => setRecordDetail(null)}
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">记录 ID</div>
+                <button
+                  className="mt-0.5 break-all font-mono font-semibold text-zinc-200 transition hover:text-white"
+                  type="button"
+                  onClick={() => void copyRecordDetailText(String(recordDetail.id), '记录 ID')}
+                >
+                  #{recordDetail.id}
+                </button>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">用户 / 用户 ID</div>
+                <div className="mt-0.5 break-all font-semibold text-zinc-200">
+                  {recordDetail.username}
+                  <span className="ml-1 font-mono text-[10px] font-normal text-zinc-500">{recordDetail.userId}</span>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">时间</div>
+                <div className="mt-0.5 text-zinc-300">{formatTime(recordDetail.createdAt)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">接口耗时 / 积分消耗</div>
+                <div className="mt-0.5 text-zinc-300">{formatApiRequestTime(recordDetail.apiRequestMs)} · {recordDetail.creditsUsed} 积分</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">前端模型 / 源头模型</div>
+                <div className="mt-0.5 break-all text-zinc-300">
+                  {recordDetail.modelId}
+                  <span className="ml-1 text-[10px] text-zinc-500">{recordDetail.modelName}</span>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">比例 / 分辨率</div>
+                <div className="mt-0.5 text-zinc-300">
+                  {recordDetail.dimensions}{recordDetail.imageSize ? ` / ${recordDetail.imageSize}` : ''}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">提示词</div>
+              <div className="mt-1 max-h-24 overflow-auto rounded-xl border border-white/10 bg-black/40 p-3 text-xs leading-5 text-zinc-300">{recordDetail.prompt}</div>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">接口返回结论（用户侧展示）</div>
+              <div className="mt-1 rounded-xl border border-white/10 bg-black/40 p-3 text-xs leading-5 text-zinc-300">
+                {recordDetail.resultMessage || '（无）'}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] font-bold tracking-[0.06em] text-zinc-500">报错根因（接口原始返回，含失败阶段）</div>
+                <button
+                  className="rounded-lg border border-white/10 px-2 py-1 text-[10px] font-semibold text-zinc-300 transition hover:border-white/25 hover:text-white"
+                  type="button"
+                  onClick={() => void copyRecordDetailText(recordDetail.errorDetail || recordDetail.resultMessage || '', '报错详情')}
+                >
+                  复制
+                </button>
+              </div>
+              <pre className="custom-scrollbar mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl border border-rose-400/20 bg-rose-400/5 p-3 font-mono text-[11px] leading-5 text-rose-200">
+                {recordDetail.errorDetail || '（上游未返回技术细节，可凭记录 ID 到上游后台核对）'}
+              </pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {generatedInviteCodes.length > 0 ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
           <button
