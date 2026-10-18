@@ -5592,6 +5592,28 @@ async function tryRecordProviderDiagnostics(attempt: ProviderDiagnosticAttempt) 
   })));
 }
 
+// 视频上游调用（Uselg 渠道）也写入 providerMetrics，使看板「今日模型与接口调用」能一并统计视频。
+async function recordVideoProviderMetric(attempt: {
+  modelId: VideoModelId;
+  resolution: VideoResolution;
+  seconds: number;
+  durationMs: number;
+  success: boolean;
+}) {
+  if (!providerMetrics) return;
+  try {
+    await providerMetrics.record({
+      modelId: attempt.modelId,
+      provider: 'Uselg',
+      configuration: `${attempt.resolution}/${attempt.seconds}s/video`,
+      durationMs: attempt.durationMs,
+      success: attempt.success,
+    });
+  } catch (error) {
+    console.warn('[provider-metrics] failed to record video attempt:', error);
+  }
+}
+
 async function callMeasuredImageChannel(
   input: ImageGenerationInput,
   traceId: string,
@@ -10299,6 +10321,7 @@ async function start() {
     let videoCreditsCharged = false;
     let videoPersisted = false;
     let chargedCreditsRemaining: number | undefined;
+    let apiRequestStartedAt = 0;
     let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
 
     try {
@@ -10381,7 +10404,7 @@ async function start() {
       };
 
       try {
-        const apiRequestStartedAt = Date.now();
+        apiRequestStartedAt = Date.now();
         const result = await callVideoGeneration({
           modelId,
           prompt,
@@ -10395,6 +10418,7 @@ async function start() {
         });
         upstreamVideoSucceeded = true;
         apiRequestMs = Math.max(0, Date.now() - apiRequestStartedAt);
+        await recordVideoProviderMetric({ modelId, resolution, seconds, durationMs: apiRequestMs, success: true });
         // 上游已出片：先写成功诊断记录，后续落盘/扣款失败时按 requestId 回写失败。
         const diagnosticRequestId = await tryRecordGenerationRequest({
           modelId: historyModelId,
@@ -10544,6 +10568,15 @@ async function start() {
       res.json({ video: payload });
     } catch (error) {
       // 失败：只释放预留，从未扣过款，无需退款。
+      if (!upstreamVideoSucceeded && apiRequestStartedAt > 0) {
+        void recordVideoProviderMetric({
+          modelId,
+          resolution,
+          seconds,
+          durationMs: Math.max(0, Date.now() - apiRequestStartedAt),
+          success: false,
+        });
+      }
       if (reservedVideoCredit) {
         creditAudit('release', req.authUser!.userId, req.authUser!.username,
           reservedVideoCredit.bucket, reservedVideoCredit.amount, { error: imageErrorText(error) || undefined }, requestId);
