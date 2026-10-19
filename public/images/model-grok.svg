@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <rect width="48" height="48" rx="12" fill="#17171c"/>
+  <!-- xAI 风格的对角 X 记号 -->
+  <g fill="#ffffff">
+    <path d="M13 11h6.6L34 37h-6.6L13 11Z"/>
+    <path d="M35 11 22.6 25.4l3.3 4.1L38.3 11H35Z"/>
+  </g>
+</svg>

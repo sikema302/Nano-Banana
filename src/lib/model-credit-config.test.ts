@@ -50,6 +50,18 @@ test('Nano Banana 2.1 is tiered: 1K 26, 2K and 4K 28', () => {
   assert.deepEqual(legacy.nanoBanana21, { oneK: 26, twoK: 28, fourK: 28 });
 });
 
+test('Grok Image is tiered 1K 20 / 2K 22', () => {
+  assert.deepEqual(DEFAULT_MODEL_CREDIT_PRICING.grokImage, { oneK: 20, twoK: 22 });
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Grok_Image', '1K'), 20);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Grok_Image', '2K'), 22);
+  // 只有 1K / 2K 两档，未指定或未知尺寸按 2K 计价
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'Grok_Image', ''), 22);
+
+  const pricing = normalizeModelCreditPricing({ grokImage: { oneK: 30, twoK: 31 } });
+  assert.equal(getConfiguredImageCredits(pricing, 'Grok_Image', '1K'), 30);
+  assert.equal(getConfiguredImageCredits(pricing, 'Grok_Image', '2K'), 31);
+});
+
 test('invalid values fall back without dropping unrelated tiers', () => {
   const pricing = normalizeModelCreditPricing({
     nanoBanana: { oneK: -1, twoK: 88 },

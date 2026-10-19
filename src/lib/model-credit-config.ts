@@ -22,6 +22,12 @@ export type NanoBanana21CreditPricing = {
   fourK: number;
 };
 
+/** Grok Image：只有 1K / 2K 两档。 */
+export type GrokImageCreditPricing = {
+  oneK: number;
+  twoK: number;
+};
+
 /** 视频模型标识（内部规范化 ID）。 */
 export type VideoModelId = 'minimax-h3' | 'grok-imagine-video-1.5';
 
@@ -88,10 +94,10 @@ export function normalizeVideoModelId(value: unknown): VideoModelId {
 }
 
 /**
- * 后台「请求记录」模型筛选：前端对外展示的 7 种模型（生图 5 + 生视频 2）。
+ * 后台「请求记录」模型筛选：前端对外展示的 8 种模型（生图 6 + 生视频 2）。
  * 下拉固定展示这些名字；筛选时按 model_id 集合匹配（IN 查询）。
  * 注意视频历史记录落库的 model_id 是 historyModelId（如「全参MinimaxH3」），与展示名不同，这里统一映射。
- * 已下架模型（如 gemini-veo31、firefly-video）的旧记录不归入这七种，仅在「全部模型」下可见。
+ * 已下架模型（如 gemini-veo31、firefly-video）的旧记录不归入这八种，仅在「全部模型」下可见。
  */
 export const GENERATION_RECORD_MODEL_FILTERS: Array<{ label: string; modelIds: string[] }> = [
   { label: 'GPT-image-2', modelIds: ['gpt-image-2'] },
@@ -99,6 +105,7 @@ export const GENERATION_RECORD_MODEL_FILTERS: Array<{ label: string; modelIds: s
   { label: 'GPT-image-2.5 Sunburst', modelIds: ['GPT-image-2.5-Sunburst'] },
   { label: 'Nano Banana Pro', modelIds: ['Nano_Banana_Pro'] },
   { label: 'Nano Banana 2.1', modelIds: ['Nano_Banana_2_1'] },
+  { label: 'Grok Image', modelIds: ['Grok_Image', 'grok-image', 'grok_image'] },
   { label: 'MiniMax H3', modelIds: ['全参MinimaxH3', 'minimax_h3', 'minimax-h3'] },
   { label: 'grok-imagine-video-1.5', modelIds: ['grok-imagine-video-1.5'] },
 ];
@@ -136,6 +143,7 @@ export type ModelCreditPricing = {
   gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
   nanoBanana21: NanoBanana21CreditPricing;
+  grokImage: GrokImageCreditPricing;
   video: VideoCreditPricing;
   updatedAt: string;
 };
@@ -164,6 +172,10 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     twoK: 28,
     fourK: 28,
   },
+  grokImage: {
+    oneK: 20,
+    twoK: 22,
+  },
   video: {
     minimax: { p768Base: 480, twoKBase: 520, excessPerSecond: 20 },
     grok: { p480Base: 180, p720Base: 320, excessPerSecond: 10 },
@@ -187,6 +199,10 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const nanoBanana21: Partial<NanoBanana21CreditPricing> =
     source.nanoBanana21 && typeof source.nanoBanana21 === 'object'
       ? source.nanoBanana21 as Partial<NanoBanana21CreditPricing>
+      : {};
+  const grokImage: Partial<GrokImageCreditPricing> =
+    source.grokImage && typeof source.grokImage === 'object'
+      ? source.grokImage as Partial<GrokImageCreditPricing>
       : {};
   // 视频定价可能是新嵌套结构（{ minimax, grok }）或旧扁平结构（{ p768Base, twoKBase, excessPerSecond }）。
   const videoRaw = (source.video && typeof source.video === 'object' ? source.video : {}) as
@@ -214,6 +230,10 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       oneK: positiveCredit(nanoBanana21.oneK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.oneK),
       twoK: positiveCredit(nanoBanana21.twoK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.twoK),
       fourK: positiveCredit(nanoBanana21.fourK, DEFAULT_MODEL_CREDIT_PRICING.nanoBanana21.fourK),
+    },
+    grokImage: {
+      oneK: positiveCredit(grokImage.oneK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.oneK),
+      twoK: positiveCredit(grokImage.twoK, DEFAULT_MODEL_CREDIT_PRICING.grokImage.twoK),
     },
     video: {
       minimax: {
@@ -261,6 +281,10 @@ export function getConfiguredImageCredits(
     if (imageSize === '2K') return pricing.nanoBanana21.twoK;
     if (imageSize === '4K') return pricing.nanoBanana21.fourK;
     return pricing.nanoBanana21.oneK;
+  }
+  // Grok Image 只有 1K / 2K 两档，其余尺寸按 2K 计价。
+  if (modelId === 'Grok_Image') {
+    return imageSize === '1K' ? pricing.grokImage.oneK : pricing.grokImage.twoK;
   }
   return 1;
 }

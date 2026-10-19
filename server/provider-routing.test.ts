@@ -48,6 +48,11 @@ const defaults: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: true }],
+    '2K': [{ id: 'junliai-grok', enabled: true }],
+    '4K': [],
+  },
 };
 
 test('persists independent provider order and switches for each resolution', async () => {

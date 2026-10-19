@@ -203,6 +203,7 @@ const defaultModels: ModelInfo[] = [
   { id: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_2_1', name: 'Nano Banana 2.1', description: '\u8c37\u6b4c\u6700\u65b0\u9999\u8549\u6a21\u578b \u00b7 \u7ec6\u8282\u4e0e\u4e2d\u6587\u6587\u5b57\u66f4\u51c6' },
+  { id: 'Grok_Image', name: 'Grok Image', description: 'xAI Grok \u56fe\u50cf\u751f\u6210' },
   { id: 'gpt-image-2-adobe', name: 'gpt-image-2 Adobe', description: 'Adobe Firefly 生图模型' },
 ];
 
@@ -320,6 +321,11 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'junliai', enabled: true },
     ],
   },
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: true }],
+    '2K': [{ id: 'junliai-grok', enabled: true }],
+    '4K': [],
+  },
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
@@ -334,6 +340,7 @@ const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
   'junliai': 'Junli · Nano Banana Pro',
   'junliai-nano-banana-2': 'Junli · Nano Banana 2',
   'schat-nano-banana-2': 'Schat · Nano Banana 2',
+  'junliai-grok': 'Junli · Grok Image',
 };
 
 function providerChannelName(id: string, resolution?: string) {
@@ -349,6 +356,8 @@ function displayModelName(modelName: string) {
   const value = String(modelName ?? '').trim();
   if (!value) return value;
   const probe = value.toLowerCase();
+  // Grok 的名字里也带 image，必须先于 gpt-image 规则判断。
+  if (probe.includes('grok')) return 'Grok Image';
   // 必须先判 2.5（gpt-image-2.5 也包含 gpt-image 子串，否则会被下面的规则误判成 2）
   if (probe.includes('gpt-image-2.5')) {
     return probe.includes('sunburst') ? 'GPT-image-2.5 Sunburst' : 'GPT-image-2.5 Flare';
@@ -378,7 +387,9 @@ function isImageResolutionEnabled(
   const resolution = imageSize === '2K' || imageSize === '4K' ? imageSize : '1K';
   const channels = isNanoBananaModel(modelId)
     ? routing.bananaRoutes[resolution]
-    : routing.image2Routes[resolution];
+    : modelId === 'Grok_Image'
+      ? routing.grokImageRoutes[resolution]
+      : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -391,9 +402,12 @@ const emptyRecordsStats: AdminRecordsStats = {
 };
 
 function getMaxReferences(modelId: string) {
-  return modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
-    ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
-    : MAX_REFERENCE_IMAGES;
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
+  }
+  // Grok Image 上游最多 3 张参考图。
+  if (modelId === 'Grok_Image') return 3;
+  return MAX_REFERENCE_IMAGES;
 }
 function getMaxReferenceMB(modelId: string) {
   // GPT-image-2 上游单张参考图限 20MB，其余模型维持 25MB（口径在共享 lib）。
@@ -723,6 +737,9 @@ function getModelCredits(
   if (model.id === 'Nano_Banana_2_1') {
     return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '1K');
   }
+  if (model.id === 'Grok_Image') {
+    return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '2K');
+  }
   if (typeof model.creditsCost === 'number') return model.creditsCost;
   return 1;
 }
@@ -733,6 +750,7 @@ function getModelSortOrder(modelId: string) {
   if (modelId === 'GPT-image-2.5-Sunburst') return 2;
   if (modelId === 'Nano_Banana_Pro') return 3;
   if (modelId === 'Nano_Banana_2_1') return 4;
+  if (modelId === 'Grok_Image') return 5;
   return 99;
 }
 
@@ -1788,6 +1806,7 @@ function ApiDocsView({
   };
   const nano21Pricing = effectivePricing.nanoBanana21;
   const nanoProPricing = effectivePricing.nanoBanana;
+  const grokImagePricing = effectivePricing.grokImage;
   const submitEndpoint = `${baseUrl}/v1/async/images/generations`;
   const queryEndpoint = `${baseUrl}/v1/async/images/generations/TASK_ID`;
   const quickStartCurl = `curl --location '${submitEndpoint}' \\
@@ -1843,7 +1862,7 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、GPT-image-2.5-Flare、GPT-image-2.5-Sunburst、nano-banana-pro、nano-banana-2.1（不区分大小写）。'],
+    ['model', 'string', '是', '支持 gpt-image-2、GPT-image-2.5-Flare、GPT-image-2.5-Sunburst、nano-banana-pro、nano-banana-2.1、grok-image（不区分大小写）。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张（GPT-image-2.5 支持 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张）。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
@@ -1857,6 +1876,7 @@ function ApiDocsView({
     { model: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', cost: `1K ${gptImage25Pricing.sunburst.standard} / 2K ${gptImage25Pricing.sunburst.twoK}（高 ${gptImage25Pricing.sunburst.twoKHigh}）/ 4K ${gptImage25Pricing.sunburst.fourK}（高 ${gptImage25Pricing.sunburst.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 思考更久；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: `1K ${nanoProPricing.oneK} / 2K ${nanoProPricing.twoK} / 4K ${nanoProPricing.fourK}；AI 增强 +${nanoProPricing.enhancement}`, note: '开启 AI 增强后画面细节与中文文字表现更好；API Key 与网站使用相同的生成配置。' },
     { model: 'nano-banana-2.1', name: 'Nano Banana 2.1', cost: `1K ${nano21Pricing.oneK} / 2K ${nano21Pricing.twoK} / 4K ${nano21Pricing.fourK}`, note: '按尺寸分档计价，不支持 AI 增强；任务失败会直接返回错误并自动退回积分。' },
+    { model: 'grok-image', name: 'Grok Image', cost: `1K ${grokImagePricing.oneK} / 2K ${grokImagePricing.twoK}`, note: 'xAI Grok 图像生成；imageSize 仅支持 1K / 2K，最多 3 张参考图。' },
   ];
   const gptPixelGroups = [
     {
@@ -1955,6 +1975,14 @@ function ApiDocsView({
         ['4K 基础生成', `${nano21Pricing.fourK} 点 / 张`, 'imageSize=4K'],
       ],
       note: '谷歌最新香蕉模型 · 细节与中文文字更准。任务失败会直接返回错误并自动退回积分。',
+    },
+    {
+      model: 'grok-image',
+      rows: [
+        ['1K 基础生成', `${grokImagePricing.oneK} 点 / 张`, 'imageSize=1K'],
+        ['2K 基础生成', `${grokImagePricing.twoK} 点 / 张`, 'imageSize=2K，或不传（默认按 2K 处理）'],
+      ],
+      note: 'xAI Grok 图像生成 · 支持文生图与参考图生成（最多 3 张）。',
     },
   ];
   const endpointSections = [
@@ -3270,6 +3298,9 @@ function AdminModelCreditPanel({
   const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
   };
+  const setGrokImage = (key: keyof ModelCreditPricing['grokImage'], value: number) => {
+    setDraft((current) => ({ ...current, grokImage: { ...current.grokImage, [key]: value } }));
+  };
   const setMinimaxVideo = (key: keyof MinimaxVideoCreditPricing, value: number) => {
     setDraft((current) => ({ ...current, video: { ...current.video, minimax: { ...current.video.minimax, [key]: value } } }));
   };
@@ -3369,6 +3400,15 @@ function AdminModelCreditPanel({
             {row('1K', '默认档位', creditInput(draft.nanoBanana21.oneK, (value) => setBanana21('oneK', value)))}
             {row('2K', '标准档位', creditInput(draft.nanoBanana21.twoK, (value) => setBanana21('twoK', value)))}
             {row('4K', '高清档位', creditInput(draft.nanoBanana21.fourK, (value) => setBanana21('fourK', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-zinc-100">Grok Image</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；只有 1K / 2K 两档。</p>
+          <div className="mt-3">
+            {row('1K', '基础档位', creditInput(draft.grokImage.oneK, (value) => setGrokImage('oneK', value)))}
+            {row('2K', '标准档位', creditInput(draft.grokImage.twoK, (value) => setGrokImage('twoK', value)))}
           </div>
         </section>
 
@@ -4169,13 +4209,14 @@ function AdminView({
               <div>
                 <h2 className="text-base font-black text-white">生图渠道顺序</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  Image2 与 Banana 独立管理；每个分辨率都可以单独调整优先级或停用渠道。
+                  Image2、Banana 与 Grok 独立管理；每个分辨率都可以单独调整优先级或停用渠道。
                 </p>
               </div>
               <div className="mt-5 space-y-6">
                 {([
-                  { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理' },
-                  { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由' },
+                  { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理', resolutions: ['1K', '2K', '4K'] },
+                  { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由', resolutions: ['1K', '2K', '4K'] },
+                  { key: 'grokImageRoutes', title: 'Grok Image', subtitle: '只有 1K / 2K 两档', resolutions: ['1K', '2K'] },
                 ] as const).map((group) => (
                   <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -4183,7 +4224,7 @@ function AdminView({
                       <span className="text-[11px] text-zinc-500">{group.subtitle}</span>
                     </div>
                     <div className="mt-4 grid gap-4 xl:grid-cols-3">
-                      {(['1K', '2K', '4K'] as const)
+                      {group.resolutions
                         .map((resolution) => {
                         const channels = providerRouting[group.key][resolution];
                         return (
@@ -5490,12 +5531,16 @@ export default function App() {
     modelCreditPricing,
   });
   const selectedResolutionOptions = isNanoBanana || isGptImage2_5 ? imageSizeOptions : gptImageSizeOptions;
-  const visibleResolutionOptions = selectedModel === 'gpt-image-2-adobe'
-    ? imageSizeOptions.filter((item) => item.value === '1K')
-    : selectedResolutionOptions;
+  const visibleResolutionOptions = selectedModel === 'Grok_Image'
+    ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
+    : selectedModel === 'gpt-image-2-adobe'
+      ? imageSizeOptions.filter((item) => item.value === '1K')
+      : selectedResolutionOptions;
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
-    : dimensionOptions;
+    : selectedModel === 'Grok_Image'
+      ? dimensionOptions.filter((item) => item.value !== '21:9')
+      : dimensionOptions;
   const selectedCreditBucket = selectedModel === 'gpt-image-2'
     || selectedModel === 'GPT-image-2.5-Flare'
     || selectedModel === 'GPT-image-2.5-Sunburst'
@@ -5704,7 +5749,9 @@ export default function App() {
     if (!isImageResolutionEnabled(providerRouting, selectedModel, imageSize)) {
       const candidates: ImageSizeOption[] = isNanoBanana
         ? ['1K', '2K', '4K']
-        : ['STANDARD', '2K', '4K'];
+        : selectedModel === 'Grok_Image'
+          ? ['1K', '2K']
+          : ['STANDARD', '2K', '4K'];
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }
@@ -5712,6 +5759,7 @@ export default function App() {
     imageSize,
     providerRouting.image2Routes,
     providerRouting.bananaRoutes,
+    providerRouting.grokImageRoutes,
     selectedModel,
   ]);
 
@@ -5781,6 +5829,14 @@ export default function App() {
       setImageSize('1K');
       setGptQuality('auto');
       setOptimizeChineseText(false);
+      return;
+    }
+    // Grok Image 只有 1K / 2K，且不支持 21:9。
+    if (modelId === 'Grok_Image') {
+      setImageSize('1K');
+      setGptQuality('auto');
+      setOptimizeChineseText(false);
+      setDimensions((current) => (current === '21:9' ? '1:1' : current));
       return;
     }
     setImageSize((current) => {
@@ -5951,20 +6007,22 @@ export default function App() {
 
   function startEditSession(image: DisplayImage) {
     const normalizedName = image.modelName.toLowerCase();
-    const normalizedModel = normalizedName.includes('banana 2.1')
-      ? 'Nano_Banana_2_1'
-      : normalizedName.includes('nano banana')
-        ? 'Nano_Banana_Pro'
-        : normalizedName.includes('gpt-image-2.5')
-          ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
-          : normalizedName.includes('adobe')
-            ? 'gpt-image-2-adobe'
-            : 'gpt-image-2';
+    const normalizedModel = normalizedName.includes('grok')
+      ? 'Grok_Image'
+      : normalizedName.includes('banana 2.1')
+        ? 'Nano_Banana_2_1'
+        : normalizedName.includes('nano banana')
+          ? 'Nano_Banana_Pro'
+          : normalizedName.includes('gpt-image-2.5')
+            ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
+            : normalizedName.includes('adobe')
+              ? 'gpt-image-2-adobe'
+              : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
     } else {
-      setImageSize(isNanoBananaModel(normalizedModel) ? '1K' : 'STANDARD');
+      setImageSize(isNanoBananaModel(normalizedModel) || normalizedModel === 'Grok_Image' ? '1K' : 'STANDARD');
     }
     if (dimensionOptions.some((item) => item.value === image.dimensions)) {
       setDimensions(image.dimensions as DimensionOption);

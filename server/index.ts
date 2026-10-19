@@ -702,6 +702,8 @@ const SCHAT_BASE_URL = normalizeEnvValue(process.env.SCHAT_BASE_URL || 'https://
 const SCHAT_API_KEY = normalizeEnvValue(process.env.SCHAT_API_KEY);
 const SCHAT_GPT_IMAGE_2_MODEL = normalizeEnvValue(process.env.SCHAT_GPT_IMAGE_2_MODEL || 'gpt-image-2');
 const SCHAT_NANO_BANANA_2_MODEL = normalizeEnvValue(process.env.SCHAT_NANO_BANANA_2_MODEL || '香蕉nano banana-2');
+// Grok Image：走 junliai 专用的 grok-image 上游模型，只有 1K / 2K 两档。
+const GROK_IMAGE_MODEL = normalizeEnvValue(process.env.GROK_IMAGE_MODEL || 'grok-image');
 const SCHAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.SCHAT_TIMEOUT_MS || 15 * 60_000));
 
 // Uselg(FluxPort) 生图渠道：标准(STANDARD/1K)用 STANDARD key，2K/4K 用 HD key。
@@ -826,6 +828,12 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'junliai', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-nano-banana-2', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
+  },
+  // Grok Image 仅支持 1K / 2K，4K 无渠道（前端也不会展示 4K 档）。
+  grokImageRoutes: {
+    '1K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '2K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '4K': [],
   },
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
@@ -1019,6 +1027,12 @@ const models = [
     name: 'Nano Banana 2.1',
     description: '谷歌最新香蕉模型 · 细节与中文文字更准',
     creditsCost: 26,
+  },
+  {
+    id: 'Grok_Image',
+    name: 'Grok Image',
+    description: 'xAI Grok 图像生成',
+    creditsCost: 22,
   },
   {
     id: 'gpt-image-2-adobe',
@@ -2367,6 +2381,8 @@ function normalizeImageSize(value: string, modelId: string) {
     return 'STANDARD';
   }
   if (modelId === 'gpt-image-2-adobe') return '1K';
+  // Grok Image 只有 1K / 2K，其余输入统一归到 2K。
+  if (modelId === 'Grok_Image') return value === '1K' ? '1K' : '2K';
   if (!isNanoBananaModel(modelId)) return VISIONARY_IMAGE_SIZE;
   if (value === '2K') return '2K';
   if (value === '4K') return '4K';
@@ -2557,6 +2573,7 @@ function normalizeModelId(modelId: string) {
   if (bananaAliases.some((alias) => normalized === alias || normalized.endsWith(alias))) {
     return 'Nano_Banana_Pro';
   }
+  if (['grok-image', 'grok_image', 'grok'].includes(normalized)) return 'Grok_Image';
 
   return models.find((item) => item.id.toLowerCase() === normalized)?.id || 'gpt-image-2';
 }
@@ -2567,6 +2584,7 @@ function normalizePublicModelId(modelId: string) {
   if (['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'].includes(normalized)) {
     return 'gpt-image-2';
   }
+  if (['grok-image', 'grok_image', 'grok'].includes(normalized)) return 'Grok_Image';
 
   const directModel = models.find((item) => item.id.toLowerCase() === normalized);
   if (directModel) return directModel.id;
@@ -5847,6 +5865,16 @@ async function callConfiguredImageChannel(
     }
   }
 
+  // Grok Image：只有 junliai 的 grok-image 上游一条路，不做跨渠道回落。
+  if (input.modelId === 'Grok_Image' && channelId === 'junliai-grok' && imageProviderRouter) {
+    return imageProviderRouter.generate({
+      ...input,
+      providerRouting: 'junliai_only',
+      upstreamModelOverride: GROK_IMAGE_MODEL,
+      traceId,
+    });
+  }
+
   const error = new Error(`Image channel ${channelId} is unavailable`) as Error & { safeToFallback: boolean };
   error.safeToFallback = true;
   throw error;
@@ -5877,13 +5905,15 @@ async function callImageGeneration(input: ImageGenerationInput) {
   const resolution = routingResolution(effectiveInput.imageSize);
   let configuredChannels: string[] = effectiveInput.modelId === 'Nano_Banana_Pro'
     ? enabledProviderIds(routing.bananaRoutes[resolution])
-    : effectiveInput.modelId === 'gpt-image-2-adobe'
-      ? enabledProviderIds(routing.image2Routes[resolution])
-          .filter((channelId) => channelId === 'junliai-firefly')
-      : enabledProviderIds(routing.image2Routes[resolution])
-        .filter((channelId) => channelId !== 'junliai-gpt-image-25'
-          || effectiveInput.modelId === 'GPT-image-2.5-Flare'
-          || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
+    : effectiveInput.modelId === 'Grok_Image'
+      ? enabledProviderIds(routing.grokImageRoutes[resolution])
+      : effectiveInput.modelId === 'gpt-image-2-adobe'
+        ? enabledProviderIds(routing.image2Routes[resolution])
+            .filter((channelId) => channelId === 'junliai-firefly')
+        : enabledProviderIds(routing.image2Routes[resolution])
+          .filter((channelId) => channelId !== 'junliai-gpt-image-25'
+            || effectiveInput.modelId === 'GPT-image-2.5-Flare'
+            || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
   // 旧配置可能没有新渠道，normalize 会把它追加到末尾；2.5 的 1K
   // 必须稳定按“变体主渠道 -> 通用 gpt-image-2.5”顺序自动切换。
   if (resolution === '1K' && (effectiveInput.modelId === 'GPT-image-2.5-Flare' || effectiveInput.modelId === 'GPT-image-2.5-Sunburst')) {
@@ -6562,6 +6592,8 @@ function maxReferenceImageCountForModel(modelId?: string) {
   if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
     return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
   }
+  // Grok Image 上游最多接受 3 张参考图。
+  if (modelId === 'Grok_Image') return 3;
   if (isVideoModelHistoryId(modelId)) {
     return VIDEO_MAX_REFERENCE_IMAGES;
   }
@@ -7014,6 +7046,11 @@ async function start() {
         ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
         maxImages: 10,
       },
+      'grok-image': {
+        imageSizes: ['1K', '2K'],
+        ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
+        maxImages: 3,
+      },
     },
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
@@ -7021,9 +7058,11 @@ async function start() {
       return input.modelId === 'Nano_Banana_Pro'
         ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
           || isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
-        : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
-          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
-          || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
+        : input.modelId === 'Grok_Image'
+          ? isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok')
+          : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
@@ -7032,6 +7071,9 @@ async function start() {
         return upstreamModel === 'nano-banana-2'
           ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
           : isProviderEnabled(routing.bananaRoutes[resolution], 'junliai');
+      }
+      if (input.modelId === 'Grok_Image') {
+        return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
       // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，其余走 junliai-economy
       if (upstreamModel.startsWith('firefly-gpt-image-2') || upstreamModel.endsWith('-firefly')) {
@@ -8136,7 +8178,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1', 'grok-image'],
       });
       return;
     }
@@ -8781,7 +8823,7 @@ async function start() {
     if (!modelId) {
       res.status(400).json({
         error: `Unsupported model: ${model || '(empty)'}`,
-        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1'],
+        supportedModels: ['gpt-image-2', 'nano-banana-pro', 'nano-banana-2.1', 'grok-image'],
       });
       return;
     }
@@ -11639,6 +11681,9 @@ async function start() {
       }
       if (req.body?.bananaRoutes && typeof req.body.bananaRoutes === 'object') {
         patch.bananaRoutes = req.body.bananaRoutes;
+      }
+      if (req.body?.grokImageRoutes && typeof req.body.grokImageRoutes === 'object') {
+        patch.grokImageRoutes = req.body.grokImageRoutes;
       }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });

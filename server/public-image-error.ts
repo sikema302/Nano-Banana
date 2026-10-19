@@ -37,6 +37,7 @@ const INTERNAL_DETAIL_PATTERN = new RegExp(
     'openrouter',
     'openai',
     'gpt-image[^\\s,，;；:：)]*',
+    'grok-image[^\\s,，;；:：)]*',
     'nano-?banana[^\\s,，;；:：)]*',
     'schat-[a-z0-9-]+',
     'banana',
