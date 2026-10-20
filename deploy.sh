@@ -58,13 +58,14 @@ tar -czf "$BACKUPS/$TIMESTAMP-pre-deploy.tar.gz" \
   --exclude='./.deploy-incoming' \
   --exclude='./uploads' \
   --exclude='./.uploads' \
+  --exclude='./data/sqlite-backups' \
   --exclude='core' \
   --exclude='core.*' \
   --exclude='*.core' \
   -C "$PROJECT" . 2>/dev/null || true
 
-# 只保留最近 5 个备份
-ls -1t "$BACKUPS"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+# 只保留最近 2 个备份（每个 tar 含 data/ 主库，体积不小；sqlite-backups 本身已有 14 份轮转快照，不再重复打进 tar）
+ls -1t "$BACKUPS"/*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
 
 # ─── 部署新版本 ───────────────────────────────────────────────────────
 cd "$PROJECT"
