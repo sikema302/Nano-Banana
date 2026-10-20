@@ -10103,7 +10103,7 @@ async function start() {
 
   function videoModelName(modelId: VideoModelId, resolution: VideoResolution) {
     const spec = VIDEO_MODELS[modelId];
-    return `${spec.label} ${resolution}`;
+    return spec.label.includes(resolution) ? spec.label : `${spec.label} ${resolution}`;
   }
 
   function publicVideoJob(job: AuthenticatedVideoJob) {

@@ -106,6 +106,15 @@ test('grok video credits: 480p 底价 180、720p 底价 320，超 10 秒每秒 +
   assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'grok-imagine-video-1.5', '768p', 5), 180);
 });
 
+test('minimax-h3-768p video credits = per-second linear (48/s)', () => {
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', 5), 240);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', 10), 480);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', 15), 720);
+  // 非法秒数按 0 处理
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', 0), 0);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', Number.NaN), 0);
+});
+
 test('normalizes nested minimax + grok video pricing', () => {
   const pricing = normalizeModelCreditPricing({
     video: {

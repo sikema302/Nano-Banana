@@ -36,6 +36,11 @@ test('normalizes resolution, aspect and seconds per model', () => {
   assert.equal(normalizeVideoAspect('grok-imagine-video-1.5', '4:3'), '4:3');
   assert.equal(normalizeVideoAspect('grok-imagine-video-1.5', '3:4'), '3:4');
   assert.equal(normalizeVideoAspect('grok-imagine-video-1.5', '21:9'), '16:9');
+  // minimax-h3-768p：只有 768p 一档，比例 16:9/9:16/1:1
+  assert.equal(normalizeVideoResolution('minimax-h3-768p', '768p'), '768p');
+  assert.equal(normalizeVideoResolution('minimax-h3-768p', '2K'), '768p');
+  assert.equal(normalizeVideoAspect('minimax-h3-768p', '16:9'), '16:9');
+  assert.equal(normalizeVideoAspect('minimax-h3-768p', '21:9'), '16:9');
 });
 
 test('submits 全参MinimaxH3 with resolution and aspect_ratio', async () => {

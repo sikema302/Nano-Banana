@@ -149,6 +149,7 @@ import {
   type VideoAspect,
   type MinimaxVideoCreditPricing,
   type GrokVideoCreditPricing,
+  type MinimaxH3_768pVideoCreditPricing,
 } from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
@@ -797,6 +798,7 @@ function getAvailableUserCredits(user: UserInfo | null, bucket: 'gpt' | 'banana'
 const VIDEO_MODEL_THEME: Record<VideoModelId, { glow: string }> = {
   'minimax-h3': { glow: 'rgba(251,146,60,0.45)' },
   'grok-imagine-video-1.5': { glow: 'rgba(56,189,248,0.45)' },
+  'minimax-h3-768p': { glow: 'rgba(250,204,21,0.45)' },
 };
 
 function getVideoModelTheme(modelId: VideoModelId) {
@@ -806,6 +808,7 @@ function getVideoModelTheme(modelId: VideoModelId) {
 function getVideoModelDescription(modelId: VideoModelId) {
   if (modelId === 'minimax-h3') return '全参 MinimaxH3 视频模型';
   if (modelId === 'grok-imagine-video-1.5') return 'grok 视频生成模型';
+  if (modelId === 'minimax-h3-768p') return '可传参考视频';
   return '';
 }
 
@@ -3339,6 +3342,9 @@ function AdminModelCreditPanel({
   const setGrokVideo = (key: keyof GrokVideoCreditPricing, value: number) => {
     setDraft((current) => ({ ...current, video: { ...current.video, grok: { ...current.video.grok, [key]: value } } }));
   };
+  const setMinimaxH3_768pVideo = (key: keyof MinimaxH3_768pVideoCreditPricing, value: number) => {
+    setDraft((current) => ({ ...current, video: { ...current.video, minimaxH3_768p: { ...current.video.minimaxH3_768p, [key]: value } } }));
+  };
   const creditInput = (value: number, onChange: (value: number) => void) => (
     <input
       className="input w-28 text-right font-black"
@@ -3461,6 +3467,14 @@ function AdminModelCreditPanel({
             {row('480p 底价', '10 秒内固定扣分', creditInput(draft.video.grok.p480Base, (value) => setGrokVideo('p480Base', value)))}
             {row('720p 底价', '10 秒内固定扣分', creditInput(draft.video.grok.p720Base, (value) => setGrokVideo('p720Base', value)))}
             {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.grok.excessPerSecond, (value) => setGrokVideo('excessPerSecond', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-emerald-100">视频生成 · MiniMax H3 768p</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；纯按秒计费，总价 = 秒数 × 每秒单价。</p>
+          <div className="mt-3">
+            {row('每秒单价', '总价 = 秒数 × 单价', creditInput(draft.video.minimaxH3_768p.perSecond, (value) => setMinimaxH3_768pVideo('perSecond', value)))}
           </div>
         </section>
       </div>
@@ -5421,9 +5435,11 @@ export default function App() {
   const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
+  const [videoRefVideos, setVideoRefVideos] = useState<UploadPreview[]>([]);
   const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
   const [videoPromptExpandOpen, setVideoPromptExpandOpen] = useState(false);
   const [videoPromptExpandDraft, setVideoPromptExpandDraft] = useState('');
+  const videoRefVideoInputRef = useRef<HTMLInputElement>(null);
   const videoRefAudioInputRef = useRef<HTMLInputElement>(null);
   const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
   const [videoDragging, setVideoDragging] = useState(false);
@@ -5928,6 +5944,24 @@ export default function App() {
     setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
   }
 
+  // minimax_h3-768p 支持参考视频（最多 3 段，单文件 ≤50MB，由服务端转存临时文件）。
+  async function appendVideoRefVideoFiles(files: File[]) {
+    const filtered = files.filter((file) => file.type.startsWith('video/'));
+    if (filtered.length === 0) {
+      setNotice('请选择视频文件');
+      return;
+    }
+    const maxCount = 3;
+    const remaining = Math.max(0, maxCount - videoRefVideos.length);
+    if (remaining === 0) {
+      setNotice('参考视频最多上传 3 段');
+      return;
+    }
+    const accepted = filtered.slice(0, remaining);
+    const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
+    setVideoRefVideos((current) => [...current, ...next].slice(0, maxCount));
+  }
+
   function selectVideoModel(next: VideoModelId) {
     if (next === videoModel) return;
     setVideoModel(next);
@@ -5938,6 +5972,9 @@ export default function App() {
     setVideoReferences((current) => current.slice(0, spec.maxReferenceImages(nextResolution)));
     if (next !== 'minimax-h3') {
       setVideoRefAudios([]);
+    }
+    if (next !== 'minimax-h3-768p') {
+      setVideoRefVideos([]);
     }
   }
 
@@ -6005,6 +6042,7 @@ export default function App() {
         aspect: videoAspect,
         seconds: videoSeconds,
         reference_images: videoReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        reference_videos: videoRefVideos.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         reference_audios: videoRefAudios.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
       });
       updateVideoSlot(slotId, { jobId: job.id });
@@ -7876,6 +7914,57 @@ export default function App() {
                       </div>
                     </div>
                   </section>
+
+                  {videoModel === 'minimax-h3-768p' ? (
+                  <section className="space-y-1.5">
+                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
+                      <span>
+                        参考视频
+                        <span className="ml-1 text-zinc-500">（可选）</span>
+                      </span>
+                      <span>{videoRefVideos.length} / 3</span>
+                    </div>
+                    <input
+                      ref={videoRefVideoInputRef}
+                      accept="video/*"
+                      className="hidden"
+                      multiple
+                      type="file"
+                      onChange={(event) => {
+                        void appendVideoRefVideoFiles(Array.from(event.target.files || []));
+                        event.target.value = '';
+                      }}
+                    />
+                    <button
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
+                      type="button"
+                      onClick={() => videoRefVideoInputRef.current?.click()}
+                    >
+                      <Film size={13} />
+                      添加视频
+                    </button>
+                    {videoRefVideos.length > 0 ? (
+                      <div className="space-y-1">
+                        {videoRefVideos.map((item, index) => (
+                          <div
+                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
+                            key={`${item.id}-${index}`}
+                          >
+                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
+                            <button
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
+                              title="移除"
+                              type="button"
+                              onClick={() => setVideoRefVideos((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            >
+                              <X size={11} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+                  ) : null}
 
                   {videoModel === 'minimax-h3' ? (
                   <section className="space-y-1.5">
