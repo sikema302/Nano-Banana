@@ -174,6 +174,52 @@ test('groups gpt-image-2-adobe by 1K ignoring ratio', async () => {
   ]);
 });
 
+test('groups Grok Image by 1K and 2K ignoring ratio', async () => {
+  const values = new Map<string, string>();
+  const metrics = createProviderMetrics({
+    store: {
+      get: async (key, fallback) => values.get(key) || fallback,
+      set: async (key, value) => {
+        values.set(key, value);
+      },
+    },
+  });
+
+  await metrics.record({
+    modelId: 'Grok_Image',
+    provider: 'Junliai · grok-image',
+    configuration: '1K / default / 1:1',
+    durationMs: 100,
+    success: true,
+  });
+  await metrics.record({
+    modelId: 'Grok_Image',
+    provider: 'Junliai · grok-image',
+    configuration: '1K / default / 16:9',
+    durationMs: 200,
+    success: true,
+  });
+  await metrics.record({
+    modelId: 'Grok_Image',
+    provider: 'Junliai · grok-image',
+    configuration: '2K / default / 16:9',
+    durationMs: 300,
+    success: false,
+  });
+
+  assert.deepEqual((await metrics.getToday()).map((row) => [
+    row.modelId,
+    row.provider,
+    row.configuration,
+    row.callCount,
+    row.successCount,
+    row.failureCount,
+  ]), [
+    ['Grok_Image', 'Junliai · grok-image', '1K', 2, 2, 0],
+    ['Grok_Image', 'Junliai · grok-image', '2K', 1, 0, 1],
+  ]);
+});
+
 test('combines Nano Banana metrics by 1K, 2K, and 4K', async () => {
   const values = new Map<string, string>();
   const metrics = createProviderMetrics({

@@ -1,6 +1,10 @@
 export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type GrokImageProviderId = 'junliai-grok';
+// GPT-image-2.5 Flare / Sunburst 独立渠道组：只有 junliai 的三个真 2.5 上游
+// （经济版/通用渠道仅 1K，Firefly 支持 1K/2K/4K）。Uselg/Visionary 走的是
+// 自家模型（Flux、gpt-image-2），不是 2.5 上游，不进这两组。
+export type GptImage25ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly';
 export type ProviderResolution = '1K' | '2K' | '4K';
 
 export type ProviderChannel<T extends string = string> = {
@@ -17,6 +21,8 @@ export type ProviderRoutingConfig = {
   image2Routes: ProviderResolutionRoutes<Image2ProviderId>;
   bananaRoutes: ProviderResolutionRoutes<BananaProviderId>;
   grokImageRoutes: ProviderResolutionRoutes<GrokImageProviderId>;
+  flareRoutes: ProviderResolutionRoutes<GptImage25ProviderId>;
+  sunburstRoutes: ProviderResolutionRoutes<GptImage25ProviderId>;
 };
 
 export type ProviderRoutingPatch = Partial<ProviderRoutingConfig>;
@@ -55,6 +61,8 @@ function cloneConfig(config: ProviderRoutingConfig): ProviderRoutingConfig {
     image2Routes: cloneRoutes(config.image2Routes),
     bananaRoutes: cloneRoutes(config.bananaRoutes),
     grokImageRoutes: cloneRoutes(config.grokImageRoutes),
+    flareRoutes: cloneRoutes(config.flareRoutes),
+    sunburstRoutes: cloneRoutes(config.sunburstRoutes),
   };
 }
 
@@ -148,6 +156,20 @@ function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): Provi
       record.grokImageRoutes,
       undefined,
       defaults.grokImageRoutes,
+      {},
+    ),
+    // 旧配置没有 flare/sunburst 组：normalize 会按 defaults 兜底补齐，
+    // 与旧版「2.5 共用 image2Routes」行为对齐（junliai 渠道优先，Uselg/Visionary 兜底）。
+    flareRoutes: normalizeRoutes(
+      record.flareRoutes,
+      undefined,
+      defaults.flareRoutes,
+      {},
+    ),
+    sunburstRoutes: normalizeRoutes(
+      record.sunburstRoutes,
+      undefined,
+      defaults.sunburstRoutes,
       {},
     ),
   };

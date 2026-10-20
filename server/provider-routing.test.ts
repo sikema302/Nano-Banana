@@ -53,6 +53,24 @@ const defaults: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: true }],
     '4K': [],
   },
+  flareRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-gpt-image-25', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
+  sunburstRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-gpt-image-25', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
@@ -151,4 +169,40 @@ test('maps STANDARD to the independently managed 1K route', () => {
   assert.equal(routingResolution('2K'), '2K');
   assert.equal(routingResolution('4K'), '4K');
   assert.equal(applyProviderRoutingToImageSize('Nano_Banana_Pro', '1K', defaults), '1K');
+});
+
+test('fills legacy configs missing flare/sunburst groups from defaults', async () => {
+  const values = new Map<string, string>();
+  const routing = createProviderRouting({
+    defaults,
+    store: {
+      get: async (key, fallback) => values.get(key) ?? fallback,
+      set: async (key, value) => {
+        values.set(key, value);
+      },
+    },
+  });
+  // 模拟升级前的存量配置：只有 image2/banana/grok 三组。
+  values.set('provider_routing_v1', JSON.stringify({
+    image2Routes: defaults.image2Routes,
+    bananaRoutes: defaults.bananaRoutes,
+    grokImageRoutes: defaults.grokImageRoutes,
+  }));
+
+  const config = await routing.get();
+  assert.deepEqual(config.flareRoutes, defaults.flareRoutes);
+  assert.deepEqual(config.sunburstRoutes, defaults.sunburstRoutes);
+
+  // 独立调整 Flare 1K 顺序时，不影响 Sunburst 与 Image2。
+  const nextFlare1K = [
+    { id: 'junliai-gpt-image-25' as const, enabled: true },
+    { id: 'junliai-economy' as const, enabled: false },
+    { id: 'junliai-firefly' as const, enabled: true },
+  ];
+  const updated = await routing.update({
+    flareRoutes: { ...defaults.flareRoutes, '1K': nextFlare1K },
+  });
+  assert.deepEqual(updated.flareRoutes['1K'], nextFlare1K);
+  assert.deepEqual(updated.sunburstRoutes['1K'], defaults.sunburstRoutes['1K']);
+  assert.deepEqual(updated.image2Routes['1K'], defaults.image2Routes['1K']);
 });

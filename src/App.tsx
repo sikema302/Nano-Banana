@@ -326,6 +326,24 @@ const defaultProviderRouting: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: true }],
     '4K': [],
   },
+  flareRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-gpt-image-25', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
+  sunburstRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-gpt-image-25', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
@@ -347,6 +365,16 @@ function providerChannelName(id: string, resolution?: string) {
   // 独立 Flash 渠道恒为 Flash；'flux' 渠道按分辨率解析上游模型（1K/2K=Flash，4K=Pro）
   if (id === 'flux-flash') return 'Flux Flash';
   if (id === 'flux') return resolution === '4K' ? 'Flux Pro' : 'Flux Flash';
+  return PROVIDER_CHANNEL_NAMES[id] ?? id;
+}
+
+// GPT-image-2.5 渠道显示名：同一 channel id 在 image2 和 2.5 组里对应不同上游，
+// 这里按真实上游模型命名，与 image2 的「经济版 / Firefly」区分开。
+function gpt25ChannelName(groupKey: 'flareRoutes' | 'sunburstRoutes', id: string) {
+  const variant = groupKey === 'flareRoutes' ? 'flare' : 'sunburst';
+  if (id === 'junliai-economy') return `Junli · gpt-image-2.5-${variant}`;
+  if (id === 'junliai-gpt-image-25') return 'Junli · gpt-image-2.5';
+  if (id === 'junliai-firefly') return `Junli · gpt-image-2.5-${variant}-firefly`;
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
 }
 
@@ -389,7 +417,11 @@ function isImageResolutionEnabled(
     ? routing.bananaRoutes[resolution]
     : modelId === 'Grok_Image'
       ? routing.grokImageRoutes[resolution]
-      : routing.image2Routes[resolution];
+      : modelId === 'GPT-image-2.5-Flare'
+        ? routing.flareRoutes[resolution]
+        : modelId === 'GPT-image-2.5-Sunburst'
+          ? routing.sunburstRoutes[resolution]
+          : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -4209,7 +4241,7 @@ function AdminView({
               <div>
                 <h2 className="text-base font-black text-white">生图渠道顺序</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  Image2、Banana 与 Grok 独立管理；每个分辨率都可以单独调整优先级或停用渠道。
+                  Image2、Banana、Grok 与 GPT-image-2.5 独立管理；每个分辨率都可以单独调整优先级或停用渠道。
                 </p>
               </div>
               <div className="mt-5 space-y-6">
@@ -4217,6 +4249,8 @@ function AdminView({
                   { key: 'image2Routes', title: 'Image2', subtitle: 'STANDARD 在这里按 1K 管理', resolutions: ['1K', '2K', '4K'] },
                   { key: 'bananaRoutes', title: 'Banana', subtitle: '1K / 2K / 4K 分别路由', resolutions: ['1K', '2K', '4K'] },
                   { key: 'grokImageRoutes', title: 'Grok Image', subtitle: '只有 1K / 2K 两档', resolutions: ['1K', '2K'] },
+                  { key: 'flareRoutes', title: 'GPT-image-2.5 Flare', subtitle: '1K / 2K / 4K 独立路由', resolutions: ['1K', '2K', '4K'] },
+                  { key: 'sunburstRoutes', title: 'GPT-image-2.5 Sunburst', subtitle: '1K / 2K / 4K 独立路由', resolutions: ['1K', '2K', '4K'] },
                 ] as const).map((group) => (
                   <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -4235,7 +4269,9 @@ function AdminView({
                             </div>
                             <div className="space-y-2">
                               {channels.map((channel, index) => {
-                                const routeLabel = providerChannelName(channel.id, resolution);
+                                const routeLabel = group.key === 'flareRoutes' || group.key === 'sunburstRoutes'
+                                  ? gpt25ChannelName(group.key, channel.id)
+                                  : providerChannelName(channel.id, resolution);
                                 const routeKey = `${group.key}:${resolution}:${channel.id}`;
                                 const updating = updatingProviderRoute === routeKey;
                                 const saveChannels = async (
@@ -5760,6 +5796,8 @@ export default function App() {
     providerRouting.image2Routes,
     providerRouting.bananaRoutes,
     providerRouting.grokImageRoutes,
+    providerRouting.flareRoutes,
+    providerRouting.sunburstRoutes,
     selectedModel,
   ]);
 

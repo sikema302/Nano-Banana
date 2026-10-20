@@ -52,6 +52,10 @@ function canonicalConfiguration(modelId: string, configuration: string) {
   }
   // gpt-image-2-adobe 仅 1K，不收比例作为分组维度。
   if (normalizedModel === 'gpt-image-2-adobe') return '1K';
+  // Grok Image 仅 1K / 2K 两档，同样只按分辨率区分。
+  if (normalizedModel === 'grok_image' || normalizedModel === 'grok-image') {
+    return imageSize === '1K' ? '1K' : '2K';
+  }
   return configuration || 'default';
 }
 

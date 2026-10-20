@@ -835,6 +835,27 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-grok', enabled: JUNLIAI_PRIMARY_ENABLED }],
     '4K': [],
   },
+  // GPT-image-2.5 Flare / Sunburst 独立渠道组（原先与 gpt-image-2 共用 image2Routes）。
+  // 1K：变体主渠道 → 通用 gpt-image-2.5 → Firefly（上游 1K 也支持）；
+  // 2K / 4K：只有 Firefly。Uselg/Visionary 走自家模型（Flux、gpt-image-2），不是 2.5 上游。
+  flareRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '4K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+  },
+  sunburstRoutes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '2K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '4K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+  },
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -5907,22 +5928,14 @@ async function callImageGeneration(input: ImageGenerationInput) {
     ? enabledProviderIds(routing.bananaRoutes[resolution])
     : effectiveInput.modelId === 'Grok_Image'
       ? enabledProviderIds(routing.grokImageRoutes[resolution])
-      : effectiveInput.modelId === 'gpt-image-2-adobe'
-        ? enabledProviderIds(routing.image2Routes[resolution])
-            .filter((channelId) => channelId === 'junliai-firefly')
-        : enabledProviderIds(routing.image2Routes[resolution])
-          .filter((channelId) => channelId !== 'junliai-gpt-image-25'
-            || effectiveInput.modelId === 'GPT-image-2.5-Flare'
-            || effectiveInput.modelId === 'GPT-image-2.5-Sunburst');
-  // 旧配置可能没有新渠道，normalize 会把它追加到末尾；2.5 的 1K
-  // 必须稳定按“变体主渠道 -> 通用 gpt-image-2.5”顺序自动切换。
-  if (resolution === '1K' && (effectiveInput.modelId === 'GPT-image-2.5-Flare' || effectiveInput.modelId === 'GPT-image-2.5-Sunburst')) {
-    const preferred = ['junliai-economy', 'junliai-gpt-image-25'];
-    configuredChannels = [
-      ...preferred.filter((id) => configuredChannels.includes(id)),
-      ...configuredChannels.filter((id) => !preferred.includes(id)),
-    ];
-  }
+      : effectiveInput.modelId === 'GPT-image-2.5-Flare'
+        ? enabledProviderIds(routing.flareRoutes[resolution])
+        : effectiveInput.modelId === 'GPT-image-2.5-Sunburst'
+          ? enabledProviderIds(routing.sunburstRoutes[resolution])
+          : effectiveInput.modelId === 'gpt-image-2-adobe'
+            ? enabledProviderIds(routing.image2Routes[resolution])
+              .filter((channelId) => channelId === 'junliai-firefly')
+            : enabledProviderIds(routing.image2Routes[resolution]);
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -7055,6 +7068,14 @@ async function start() {
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
       const resolution = routingResolution(input.imageSize);
+      if (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst') {
+        const routes = input.modelId === 'GPT-image-2.5-Flare'
+          ? routing.flareRoutes[resolution]
+          : routing.sunburstRoutes[resolution];
+        return isProviderEnabled(routes, 'junliai-economy')
+          || isProviderEnabled(routes, 'junliai-firefly')
+          || isProviderEnabled(routes, 'junliai-gpt-image-25');
+      }
       return input.modelId === 'Nano_Banana_Pro'
         ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
           || isProviderEnabled(routing.bananaRoutes[resolution], 'junliai-nano-banana-2')
@@ -7074,6 +7095,20 @@ async function start() {
       }
       if (input.modelId === 'Grok_Image') {
         return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
+      }
+      // GPT-image-2.5 Flare / Sunburst 有独立渠道组：变体主渠道 → junliai-economy，
+      // 通用 gpt-image-2.5 → junliai-gpt-image-25，*firefly → junliai-firefly。
+      if (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst') {
+        const routes = input.modelId === 'GPT-image-2.5-Flare'
+          ? routing.flareRoutes[resolution]
+          : routing.sunburstRoutes[resolution];
+        if (upstreamModel === 'gpt-image-2.5') {
+          return isProviderEnabled(routes, 'junliai-gpt-image-25');
+        }
+        if (upstreamModel.endsWith('-firefly')) {
+          return isProviderEnabled(routes, 'junliai-firefly');
+        }
+        return isProviderEnabled(routes, 'junliai-economy');
       }
       // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，其余走 junliai-economy
       if (upstreamModel.startsWith('firefly-gpt-image-2') || upstreamModel.endsWith('-firefly')) {
@@ -11684,6 +11719,12 @@ async function start() {
       }
       if (req.body?.grokImageRoutes && typeof req.body.grokImageRoutes === 'object') {
         patch.grokImageRoutes = req.body.grokImageRoutes;
+      }
+      if (req.body?.flareRoutes && typeof req.body.flareRoutes === 'object') {
+        patch.flareRoutes = req.body.flareRoutes;
+      }
+      if (req.body?.sunburstRoutes && typeof req.body.sunburstRoutes === 'object') {
+        patch.sunburstRoutes = req.body.sunburstRoutes;
       }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });

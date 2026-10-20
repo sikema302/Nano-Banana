@@ -501,8 +501,14 @@ export default function BatchCreateView({
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
           providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
       : isGpt25
-      ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
-          providerRouting.image2Routes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
+      ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) => {
+          const routes = model?.id === 'GPT-image-2.5-Flare'
+            ? providerRouting.flareRoutes
+            : model?.id === 'GPT-image-2.5-Sunburst'
+              ? providerRouting.sunburstRoutes
+              : providerRouting.image2Routes;
+          return routes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled);
+        })
       : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
         const routeResolution = resolution === 'STANDARD' ? '1K' : resolution;
         return providerRouting.image2Routes[routeResolution].some((channel) => channel.enabled);
