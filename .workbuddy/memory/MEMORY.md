@@ -91,4 +91,15 @@
 - **同一文件禁止并行 `Edit`**:并行调用会各自基于旧快照回写,导致部分编辑「报成功但没落盘」(2026-10-05 踩过,5 处丢失)。
   改同一文件必须**串行**,改完用 `grep` 复核实际内容。
 
+## 积分记录 / admin 操作可见性(约定,2026-10-21)
+
+- 管理员对积分的任何操作(充值 `recharge`、邀请码充值 `invite_recharge`、扣除 `deduct`)
+  **只允许在 admin 后台可见,绝不能展示给普通用户**。
+  - 落库:`credit_audit_log` 表(仅 SQLite 部署有),字段含 action/operator/target/amount/detail。
+  - 只读出口(均为 `requireAdmin`):`/api/admin/users/:userId/invite-redemptions`(已合并流水,
+    弹窗「积分记录」)+ `/api/admin/users/:userId/credit-audit`。
+  - 普通用户端「积分明细」弹窗(点头像)只显示余额三类,不显示任何流水;用户端无任何积分流水接口。
+- 后续若给普通用户做「积分明细流水」,必须过滤掉 `credit_audit_log` 里的 admin 动作,只展示其自身消费/兑换。
+- 生产确认为 SQLite(`/api/health` 的 `databaseProvider:"sqlite"`);Supabase 模式无 credit_audit_log 表。
+
 
