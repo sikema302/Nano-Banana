@@ -10690,6 +10690,24 @@ async function start() {
         } catch (markError) {
           console.warn('[video] failed to mark orphaned request as failed:', markError);
         }
+      } else if (requestContext) {
+        // 上游直接失败（未产出视频，故此前没有成功诊断记录可回写）：
+        // 补写一条失败记录，让后台「生成记录」也能复盘视频失败（与图片对齐）。
+        try {
+          await tryRecordGenerationRequest({
+            modelId: spec.historyModelId,
+            provider: 'Uselg',
+            configuration: `${resolution}/${seconds}s/video`,
+            durationMs: apiRequestStartedAt > 0 ? Math.max(0, Date.now() - apiRequestStartedAt) : 0,
+            success: false,
+            errorMessage: failureDetail,
+            sourceModel: spec.historyModelId,
+            prompt,
+            requestContext,
+          });
+        } catch (recordError) {
+          console.warn('[video] failed to persist failed diagnostic record:', recordError);
+        }
       }
       setVideoJobTerminal(queuedJobId, {
         status: 'failed',
