@@ -261,6 +261,12 @@ if [ -f "$IMG_CONF" ]; then
   else
     mkdir -p /www/wwwcache/pixory-img
     chown -R www:www /www/wwwcache/pixory-img 2>/dev/null || true
+    # 宝塔签证书时生成的站点 server 块会和缓存层抢 server_name，签发后挪开
+    BT_IMG_CONF="/www/server/panel/vhost/nginx/img.pixory.top.conf"
+    if [ -f "$BT_IMG_CONF" ]; then
+      mv "$BT_IMG_CONF" "${BT_IMG_CONF}.bak-deploy"
+      log "已挪开宝塔 img.pixory.top 站点配置（续期证书时需临时恢复）"
+    fi
     if ! cmp -s "$IMG_CONF" "$IMG_TARGET" 2>/dev/null; then
       log "更新图片缓存层 Nginx 配置..."
       cp "$IMG_CONF" "$IMG_TARGET"
