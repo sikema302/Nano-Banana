@@ -116,6 +116,7 @@ import {
   type ImageCategory,
   type InviteCodeInfo,
   type InviteRedemptionRecord,
+  type CreditRecordType,
   type ModelInfo,
   type NotificationPayload,
   type PaginationInfo,
@@ -583,6 +584,18 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+// 积分记录来源：邀请码兑换显示码本身，充值/扣除显示人工操作标签。
+function creditRecordSourceLabel(record: InviteRedemptionRecord): string {
+  const type: CreditRecordType = record.type || 'redeem';
+  if (type === 'recharge') return '管理员充值';
+  if (type === 'deduct') return '管理员扣除';
+  if (type === 'invite_recharge') {
+    const code = record.detail.replace(/^邀请码充值：/, '').trim();
+    return code ? `邀请码充值（${code}）` : '邀请码充值';
+  }
+  return record.code || '邀请码兑换';
 }
 
 function formatNotificationTime(value: string) {
@@ -3711,7 +3724,7 @@ function AdminView({
       const payload = await fetchAdminUserInviteRedemptions(user.userId);
       setRedemptionRecords(payload.redemptions);
     } catch (error) {
-      setRedemptionError(error instanceof Error ? error.message : '积分兑换记录加载失败');
+      setRedemptionError(error instanceof Error ? error.message : '积分记录加载失败');
     } finally {
       setRedemptionLoading(false);
     }
@@ -4888,7 +4901,7 @@ function AdminView({
                                       type="button"
                                       onClick={() => void handleViewRedemptions(item)}
                                     >
-                                      兑换记录
+                                      积分记录
                                     </button>
                                   ) : null}
                                   <button
@@ -5337,7 +5350,7 @@ function AdminView({
       {redemptionUser ? (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
           <button
-            aria-label="关闭积分兑换记录"
+            aria-label="关闭积分记录"
             className="absolute inset-0"
             type="button"
             onClick={() => setRedemptionUser(null)}
@@ -5345,7 +5358,7 @@ function AdminView({
           <div className="relative max-h-[82vh] w-full max-w-2xl overflow-hidden rounded-[26px] border border-white/10 bg-[#0d0f17] shadow-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
               <div>
-                <h2 className="text-lg font-black text-white">积分兑换记录</h2>
+                <h2 className="text-lg font-black text-white">积分记录</h2>
                 <p className="mt-1 text-xs text-zinc-500">
                   {redemptionUser.username} · 用户 ID {redemptionUser.userId}
                 </p>
@@ -5361,7 +5374,15 @@ function AdminView({
             <div className="border-b border-white/8 px-5 py-3 text-xs text-zinc-400">
               共 {redemptionRecords.length} 条，累计兑换{' '}
               <span className="font-bold text-sky-200">
-                {redemptionRecords.reduce((sum, record) => sum + record.credits, 0)}
+                {redemptionRecords
+                  .filter((record) => (record.type || 'redeem') === 'redeem')
+                  .reduce((sum, record) => sum + record.credits, 0)}
+              </span>{' '}
+              积分，累计充值{' '}
+              <span className="font-bold text-emerald-300">
+                {redemptionRecords
+                  .filter((record) => record.type === 'recharge' || record.type === 'invite_recharge')
+                  .reduce((sum, record) => sum + record.credits, 0)}
               </span>{' '}
               积分
             </div>
@@ -5369,7 +5390,7 @@ function AdminView({
               {redemptionLoading ? (
                 <div className="flex items-center justify-center gap-2 py-12 text-sm text-zinc-400">
                   <LoaderCircle className="animate-spin" size={18} />
-                  正在加载兑换记录...
+                  正在加载积分记录...
                 </div>
               ) : redemptionError ? (
                 <div className="app-alert app-alert-error">{redemptionError}</div>
@@ -5378,16 +5399,21 @@ function AdminView({
                   <table className="w-full text-left text-xs">
                     <thead className="bg-black/35 text-zinc-500">
                       <tr>
-                        <th className="px-4 py-3 font-medium">邀请码</th>
-                        <th className="px-4 py-3 text-right font-medium">兑换积分</th>
-                        <th className="px-4 py-3 text-right font-medium">兑换时间</th>
+                        <th className="px-4 py-3 font-medium">来源</th>
+                        <th className="px-4 py-3 text-right font-medium">积分变动</th>
+                        <th className="px-4 py-3 text-right font-medium">时间</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/6">
-                      {redemptionRecords.map((record) => (
-                        <tr key={`${record.code}-${record.redeemedAt}`} className="text-zinc-300">
-                          <td className="break-all px-4 py-3 font-mono text-white">{record.code}</td>
-                          <td className="px-4 py-3 text-right font-bold text-sky-200">+{record.credits}</td>
+                      {redemptionRecords.map((record, index) => (
+                        <tr key={`${record.type || 'redeem'}-${record.code}-${record.redeemedAt}-${index}`} className="text-zinc-300">
+                          <td className="break-all px-4 py-3 text-white">
+                            {creditRecordSourceLabel(record)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-sky-200">
+                            {record.type === 'deduct' ? '-' : '+'}
+                            {record.credits}
+                          </td>
                           <td className="whitespace-nowrap px-4 py-3 text-right text-zinc-400">
                             {formatTime(record.redeemedAt)}
                           </td>
@@ -5397,7 +5423,7 @@ function AdminView({
                   </table>
                 </div>
               ) : (
-                <div className="py-12 text-center text-sm text-zinc-500">该用户暂无积分兑换记录</div>
+                <div className="py-12 text-center text-sm text-zinc-500">该用户暂无积分记录</div>
               )}
             </div>
           </div>

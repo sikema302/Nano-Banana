@@ -160,11 +160,16 @@ export interface AdminUserSummary {
   usageTrend?: number[];
 }
 
+export type CreditRecordType = 'redeem' | 'recharge' | 'invite_recharge' | 'deduct';
+
 export interface InviteRedemptionRecord {
   code: string;
   credits: number;
   redeemedAt: string;
   createdAt: string;
+  /** redeem=邀请码兑换；recharge=管理员充值；invite_recharge=邀请码充值；deduct=管理员扣除 */
+  type?: CreditRecordType;
+  detail?: string;
 }
 
 export interface CreditSummary {

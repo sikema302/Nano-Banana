@@ -12194,7 +12194,7 @@ async function start() {
         ? await (await getSupabaseDb()).getInviteRedemptionsForUser(userId)
         : await withReadDb((db) => {
             ensureSchema(db);
-            return runQuery<Record<string, unknown>>(
+            const redemptions = runQuery<Record<string, unknown>>(
               db,
               `SELECT code, credits, issued_credits, created_at, redeemed_at
                FROM invite_codes
@@ -12202,15 +12202,37 @@ async function start() {
                ORDER BY datetime(redeemed_at) DESC, datetime(created_at) DESC`,
               [userId],
             );
+            // 管理员手动调积分（充值/邀请码充值/扣除）的审计流水一并并入，
+            // 让「积分记录」能完整回答积分从哪来（复盘用）。
+            const auditEntries = runQuery<Record<string, unknown>>(
+              db,
+              `SELECT action, amount, detail, created_at
+               FROM credit_audit_log
+               WHERE target_user_id = ? AND action IN ('recharge', 'invite_recharge', 'deduct')
+               ORDER BY datetime(created_at) DESC, id DESC`,
+              [userId],
+            );
+            return (
+              [
+                ...redemptions.map((row) => ({ ...row, record_type: 'redeem' })),
+                ...auditEntries.map((row) => ({ ...row, record_type: row.action })),
+              ] as Array<Record<string, unknown>>
+            ).sort((a, b) => {
+              const at = String(a.redeemed_at || a.created_at || '');
+              const bt = String(b.redeemed_at || b.created_at || '');
+              return bt.localeCompare(at);
+            });
           });
 
       res.setHeader('Cache-Control', 'no-store');
       res.json({
         redemptions: rows.map((row) => ({
           code: String(row.code || ''),
-          credits: Math.max(0, Number(row.issued_credits || row.credits || 0)),
-          redeemedAt: String(row.redeemed_at || ''),
+          credits: Math.max(0, Number(row.issued_credits || row.credits || row.amount || 0)),
+          redeemedAt: String(row.redeemed_at || row.created_at || ''),
           createdAt: String(row.created_at || ''),
+          type: String(row.record_type || 'redeem'),
+          detail: String(row.detail || ''),
         })),
       });
     } catch (error) {
