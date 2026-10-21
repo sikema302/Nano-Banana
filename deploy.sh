@@ -249,6 +249,33 @@ if [ -f "$NGINX_CONF" ]; then
   fi
 fi
 
+# ─── 同步图片缓存层配置（img.pixory.top 灰云直连 → 缓存回源 R2） ──────
+# 占位符 REPLACE_WITH_R2_DEV_DOMAIN 未替换时自动跳过，不影响主站部署。
+IMG_CONF="$PROJECT/deploy/nginx-img-cache.conf"
+IMG_TARGET="/www/server/panel/vhost/nginx/img-cache.conf"
+if [ -f "$IMG_CONF" ]; then
+  if grep -q 'REPLACE_WITH_R2_DEV_DOMAIN' "$IMG_CONF"; then
+    log "跳过图片缓存层配置: nginx-img-cache.conf 里还未填入 r2.dev 回源域名"
+  elif [ ! -f /www/server/panel/vhost/cert/img.pixory.top/fullchain.pem ]; then
+    log "跳过图片缓存层配置: 缺少 img.pixory.top 证书，请先在宝塔申请"
+  else
+    mkdir -p /www/wwwcache/pixory-img
+    chown -R www:www /www/wwwcache/pixory-img 2>/dev/null || true
+    if ! cmp -s "$IMG_CONF" "$IMG_TARGET" 2>/dev/null; then
+      log "更新图片缓存层 Nginx 配置..."
+      cp "$IMG_CONF" "$IMG_TARGET"
+      if nginx -t 2>/dev/null; then
+        nginx -s reload 2>/dev/null || service nginx reload 2>/dev/null || true
+        log "图片缓存层 Nginx 配置已更新并重载"
+      else
+        log "警告: 图片缓存层 Nginx 配置语法错误，跳过重载"
+      fi
+    else
+      log "图片缓存层 Nginx 配置未变化，跳过"
+    fi
+  fi
+fi
+
 # ─── 重启服务 ───────────────────────────────────────────────────────
 	# 先写成功状态，防止 PM2 重启时误杀 deploy.sh 导致状态丢失
 	# 所有部署实质性工作（解压/密钥/依赖/Nginx）已在此前完成
