@@ -97,6 +97,12 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
 export const VIDEO_MODEL_IDS = Object.keys(VIDEO_MODELS) as VideoModelId[];
 export const VIDEO_DEFAULT_MODEL_ID: VideoModelId = 'minimax-h3';
 
+/**
+ * 暂时在前端隐藏的模型（模型有问题先下架展示）。
+ * 只从创建页选择列表里隐藏，配置与生成链路代码全部保留，恢复时清空数组即可。
+ */
+export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3'];
+
 /** 把前端/历史传入的模型名归一化为内部 VideoModelId，非法值回退 minimax-h3。 */
 export function normalizeVideoModelId(value: unknown): VideoModelId {
   if (value === 'minimax-h3' || value === 'minimax_h3' || value === '全参MinimaxH3') return 'minimax-h3';

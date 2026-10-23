@@ -141,6 +141,7 @@ import {
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
   GENERATION_RECORD_MODEL_FILTERS,
+  HIDDEN_VIDEO_MODEL_IDS,
   VIDEO_MODELS,
   VIDEO_REFERENCE_IMAGE_FREE_COUNT,
   VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS,
@@ -1914,7 +1915,7 @@ function ApiDocsView({
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
     ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张（GPT-image-2.5 支持 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张）。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
-    ['imageSize', 'string', '否', `Nano Banana Pro 支持 1K、2K、4K（默认 2K；1K ${nanoProPricing.oneK} 积分，2K ${nanoProPricing.twoK} 积分，4K ${nanoProPricing.fourK} 积分）；Nano Banana 2.1 支持 1K、2K、4K（默认 1K；1K ${nano21Pricing.oneK} 积分，2K ${nano21Pricing.twoK} 积分，4K ${nano21Pricing.fourK} 积分）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 支持 1K、2K、4K（其他值按 1K 处理）。`],
+    ['imageSize', 'string', '否', `Nano Banana Pro 支持 1K、2K、4K（默认 2K；1K ${nanoProPricing.oneK} 积分，2K ${nanoProPricing.twoK} 积分，4K ${nanoProPricing.fourK} 积分）；Nano Banana 2.1 支持 1K、2K、4K（默认 1K；1K ${nano21Pricing.oneK} 积分，2K ${nano21Pricing.twoK} 积分，4K ${nano21Pricing.fourK} 积分）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 支持 1K、2K、4K（其他值按 1K 处理）；Grok Image 支持 1K、2K（默认 2K）。`],
     ['quality', 'string', '否', 'GPT-image-2 与 GPT-image-2.5 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', `Nano Banana Pro 的 AI 增强选项：开启后每张额外增加 ${nanoProPricing.enhancement} 积分，画面细节与中文文字表现更好。Nano Banana 2.1 不支持该参数，传入不额外计费。`],
   ];
@@ -2110,6 +2111,30 @@ function ApiDocsView({
       ),
       bullets: ['imageSize 仅支持 1K / 2K / 4K，不支持 STANDARD；其他值会按 1K 处理。', 'quality 可传 auto / low / medium / high，2K 与 4K 的高质量按高质量档计费。', `参考图最多 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张，HTTPS URL 或 Base64（单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB）。`, '不同档位支持的画面比例不同，见下方比例说明。'],
     },
+    {
+      id: 'grok-image',
+      label: 'Grok Image 接口',
+      title: 'Grok Image 图像生成',
+      subtitle: 'xAI Grok 图像生成，支持文生图与参考图生成。model 固定传 grok-image。',
+      model: 'grok-image',
+      endpointPath: '/v1/async/images/generations',
+      request: JSON.stringify(
+        {
+          model: 'grok-image',
+          prompt: '生成一张具有高级质感的品牌海报',
+          images: ['https://example.com/reference-1.png'],
+          aspectRatio: '1:1',
+          imageSize: '2K',
+        },
+        null,
+        2,
+      ),
+      bullets: [
+        `imageSize 仅支持 1K / 2K，默认 2K：1K 扣 ${grokImagePricing.oneK} 积分，2K 扣 ${grokImagePricing.twoK} 积分。`,
+        `参考图最多 3 张，HTTPS 图片 URL 或 Base64。`,
+        '不支持 21:9 比例。',
+      ],
+    },
   ];
   const docNavigation = [
     ['1', '快速开始', 'quick-start'],
@@ -2119,8 +2144,9 @@ function ApiDocsView({
     ['5', 'Nano Banana 2.1 接口', 'nano-banana-2-1'],
     ['6', 'GPT-Image-2 接口', 'gpt-image-2'],
     ['7', 'GPT-Image-2.5 接口', 'gpt-image-2-5'],
+    ['8', 'Grok Image 接口', 'grok-image'],
   ];
-  docNavigation.push(['8', '\u6211\u7684 API Keys', 'developer-center']);
+  docNavigation.push(['9', '\u6211\u7684 API Keys', 'developer-center']);
 
   function handleDocsScroll() {
     const container = docsScrollRef.current;
@@ -2456,6 +2482,7 @@ console.log(task.results[0].url);`;
                 if (section.id === 'gpt-image-2') return item.model === 'gpt-image-2';
                 if (section.id === 'gpt-image-2-5') return item.model === 'GPT-image-2.5-Flare' || item.model === 'GPT-image-2.5-Sunburst';
                 if (section.id === 'nano-banana-2-1') return item.model === 'nano-banana-2.1';
+                if (section.id === 'grok-image') return item.model === 'grok-image';
                 return item.model === 'nano-banana-pro';
               });
 
@@ -5455,9 +5482,10 @@ export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [videoPrompt, setVideoPrompt] = useState('');
-  const [videoModel, setVideoModel] = useState<VideoModelId>('minimax-h3');
+  // minimax-h3 暂时前端隐藏（HIDDEN_VIDEO_MODEL_IDS），默认选中第一个可见模型。
+  const [videoModel, setVideoModel] = useState<VideoModelId>('grok-imagine-video-1.5');
   const [videoModelMenuOpen, setVideoModelMenuOpen] = useState(false);
-  const [videoResolution, setVideoResolution] = useState<VideoResolution>('768p');
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>('480p');
   const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
@@ -7820,7 +7848,7 @@ export default function App() {
                       </button>
                       {videoModelMenuOpen ? (
                         <div className="absolute inset-x-0 top-[calc(100%+6px)] z-50 space-y-1 overflow-hidden rounded-2xl border border-white/10 bg-[#141414]/95 p-1.5 shadow-2xl backdrop-blur-xl" role="listbox">
-                          {Object.values(VIDEO_MODELS).map((spec) => {
+                          {Object.values(VIDEO_MODELS).filter((spec) => !HIDDEN_VIDEO_MODEL_IDS.includes(spec.id)).map((spec) => {
                             const theme = getVideoModelTheme(spec.id);
                             const isActive = videoModel === spec.id;
                             return (
