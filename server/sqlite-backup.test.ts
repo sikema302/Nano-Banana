@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import initSqlJs from 'sql.js';
+import Database from 'better-sqlite3';
 
 import { createEncryptedSqliteBackup, verifyEncryptedSqliteBackup } from './sqlite-backup.js';
 
@@ -14,12 +14,11 @@ test('creates and verifies an encrypted SQLite backup', async () => {
   const temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pixory-sqlite-backup-'));
 
   try {
-    const SQL = await initSqlJs();
-    const db = new SQL.Database();
-    db.run('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)');
-    db.run('INSERT INTO users (id, username) VALUES (?, ?)', [1, 'backup-user']);
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)');
+    db.prepare('INSERT INTO users (id, username) VALUES (?, ?)').run(1, 'backup-user');
     const sourceFile = path.join(temporaryDir, 'app.sqlite');
-    await fs.writeFile(sourceFile, db.export());
+    await fs.writeFile(sourceFile, db.serialize());
     db.close();
 
     const created = await createEncryptedSqliteBackup({

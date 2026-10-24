@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import initSqlJs from 'sql.js';
+import Database from 'better-sqlite3';
 
 import {
   ADMIN_OVERVIEW_RECORDS_SQL,
@@ -11,9 +11,23 @@ import {
   buildSqliteAdminUsersPage,
 } from './sqlite-admin-queries.js';
 
+type TestDb = Database.Database & { run: (sql: string, params?: unknown[]) => void };
+
+function makeTestDb(): TestDb {
+  const db = new Database(':memory:') as TestDb;
+  db.pragma('busy_timeout = 5000');
+  db.run = (sql: string, params?: unknown[]) => {
+    if (params && params.length > 0) {
+      db.prepare(sql).run(...params);
+    } else {
+      db.exec(sql);
+    }
+  };
+  return db;
+}
+
 test('SQLite invite code query filters by code, redeemer, username, and status', async () => {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  const db = makeTestDb();
   db.run('CREATE TABLE invite_codes (code TEXT PRIMARY KEY, credits INTEGER, created_at TEXT, redeemed_by TEXT)');
   db.run('CREATE TABLE user_credits (user_id TEXT PRIMARY KEY, username TEXT)');
   db.run('CREATE TABLE user_migrations (legacy_user_id INTEGER PRIMARY KEY, supabase_user_id TEXT UNIQUE, username TEXT)');
@@ -22,10 +36,7 @@ test('SQLite invite code query filters by code, redeemer, username, and status',
   db.run("INSERT INTO user_credits VALUES ('user-uuid', 'Alice')");
 
   const query = buildSqliteInviteCodeListQuery({ status: 'used', search: 'alice' });
-  const statement = db.prepare(`SELECT i.code ${query.fromClause} ${query.whereClause} ORDER BY ${query.orderBy}`, query.parameters);
-  const rows: Record<string, unknown>[] = [];
-  while (statement.step()) rows.push(statement.getAsObject());
-  statement.free();
+  const rows = db.prepare(`SELECT i.code ${query.fromClause} ${query.whereClause} ORDER BY ${query.orderBy}`).all(...query.parameters) as Record<string, unknown>[];
   db.close();
 
   assert.equal(rows.length, 1);
@@ -33,8 +44,7 @@ test('SQLite invite code query filters by code, redeemer, username, and status',
 });
 
 test('SQLite admin overview records query executes and excludes demo rows', async () => {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  const db = makeTestDb();
   db.run(`
     CREATE TABLE generation_requests (
       id INTEGER PRIMARY KEY,
@@ -64,10 +74,7 @@ test('SQLite admin overview records query executes and excludes demo rows', asyn
     '2026-08-08T00:00:01.000Z',
   ]);
 
-  const statement = db.prepare(ADMIN_OVERVIEW_RECORDS_SQL, [10, 0]);
-  const rows: Record<string, unknown>[] = [];
-  while (statement.step()) rows.push(statement.getAsObject());
-  statement.free();
+  const rows = db.prepare(ADMIN_OVERVIEW_RECORDS_SQL).all(10, 0) as Record<string, unknown>[];
   db.close();
 
   assert.equal(rows.length, 1);
@@ -75,8 +82,7 @@ test('SQLite admin overview records query executes and excludes demo rows', asyn
 });
 
 test('SQLite admin users query returns migrated users with credits, invites, usage, and search', async () => {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  const db = makeTestDb();
   db.run('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)');
   db.run('CREATE TABLE user_migrations (legacy_user_id INTEGER PRIMARY KEY, supabase_user_id TEXT NOT NULL)');
   db.run(`CREATE TABLE user_credits (
@@ -99,11 +105,7 @@ test('SQLite admin users query returns migrated users with credits, invites, usa
   db.run("INSERT INTO generations VALUES (2, 'api-key:key-1', 'external key', 3, '2026-08-09T12:00:00.000Z')");
 
   function query(sql: string) {
-    const statement = db.prepare(sql);
-    const rows: Record<string, unknown>[] = [];
-    while (statement.step()) rows.push(statement.getAsObject());
-    statement.free();
-    return rows;
+    return db.prepare(sql).all() as Record<string, unknown>[];
   }
 
   const rows = query(ADMIN_USERS_SQL);

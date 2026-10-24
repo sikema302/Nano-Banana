@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import dns from 'node:dns';
 import fs from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
@@ -17,6 +17,7 @@ import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 import WebSocket from 'ws';
+import Database from 'better-sqlite3';
 
 import { startBusinessDataBackupScheduler } from './business-backup.js';
 import { startSqliteBackupScheduler } from './sqlite-backup.js';
@@ -161,16 +162,6 @@ const IS_VERCEL = Boolean(process.env.VERCEL);
 
 // 鈹€鈹€鈹€ 鍔ㄦ€佸鍏ユā鍧楋紙閬垮厤 Vercel 鏋勫缓鏃跺姞杞斤級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-// sql.js 鍙湪 SQLite 妯″紡涓嬩娇鐢?// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let initSqlJs: any = null;
-
-async function getSqlJs() {
-  if (!initSqlJs && !isSupabasePersistenceEnabled()) {
-    const sql = await import('sql.js');
-    initSqlJs = sql.default;
-  }
-  return initSqlJs;
-}
 
 // Supabase 鏁版嵁搴撳眰鍦ㄤ换浣曞惎鐢ㄤ簡 Supabase 鐨勮繍琛岀幆澧冧笅閮藉彲浣跨敤
 let supabaseDb: typeof import('./supabase-db.js') | null = null;
@@ -442,16 +433,10 @@ type PublicGenerateResult = {
   };
 };
 
-type SqlDatabase = {
+type SqlDatabase = Database.Database & {
+  // 兼容旧 sql.js 调用风格：db.run(sql, params?) 执行单条/多条语句。
+  // 有参数走 prepared statement，无参数走 exec（支持多语句 DDL）。
   run: (sql: string, params?: unknown[]) => void;
-  exec: (sql: string) => Array<{ columns: string[]; values: unknown[][] }>;
-  prepare: (sql: string, params?: unknown[]) => {
-    step: () => boolean;
-    getAsObject: () => Record<string, unknown>;
-    free: () => void;
-  };
-  export: () => Uint8Array;
-  close: () => void;
 };
 
 declare global {
@@ -944,23 +929,6 @@ const supabaseUserSyncStatus = {
   lastSyncedAt: '',
   lastError: '',
 };
-
-// 鈹€鈹€鈹€ SQLite 鍒濆鍖栵紙浠呮湰鍦扮幆澧冿級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-
-const require = createRequire(import.meta.url);
-
-// sql.js 鍒濆鍖栵紙鍙湪 SQLite 妯″紡锛?// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let sqlJsReady: Promise<any> | null = null;
-
-async function getSqlJsReady() {
-  if (!sqlJsReady && !USE_SUPABASE) {
-    const sql = await import('sql.js');
-    sqlJsReady = sql.default({
-      locateFile: (file: string) => require.resolve(`sql.js/dist/${file}`),
-    });
-  }
-  return sqlJsReady!;
-}
 
 // 鈹€鈹€鈹€ 甯搁噺 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -2747,37 +2715,24 @@ function generateInviteCode() {
 
 // 鈹€鈹€鈹€ SQLite 杈呭姪鍑芥暟锛堜粎鏈湴鐜浣跨敤锛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-async function openDatabase() {
-  const SQL = await getSqlJsReady();
-  try {
-    const file = await fs.readFile(DB_FILE);
-    return new SQL.Database(file) as SqlDatabase;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return new SQL.Database() as SqlDatabase;
-    }
-    throw error;
+function openDatabase(): SqlDatabase {
+  // better-sqlite3 直接打开磁盘上的 SQLite 文件（与 sql.js 导出的标准 SQLite 格式完全兼容，无需迁移）。
+  // 写操作即时增量落盘，不再有 sql.js 的全量 export() 同步序列化——这是本次改造消除事件循环阻塞的关键。
+  if (!IS_VERCEL) {
+    mkdirSync(DATA_DIR, { recursive: true });
   }
-}
-
-// 落盘串行链：enqueueDb 的深度直通允许两个 flush 并发执行，共用 tmp 路径会让后一个 rename 扑空
-// （ENOENT）；即使各自唯一路径，先启动的旧快照也必须先落盘，否则新快照会被旧快照覆盖。
-let saveChain: Promise<unknown> = Promise.resolve();
-
-async function saveDatabase(db: SqlDatabase) {
-  const bytes = db.export();
-  const temporaryPath = `${DB_FILE}.${process.pid}.${Date.now()}.${randomHex(4)}.tmp`;
-  const run = saveChain.then(async () => {
-    try {
-      await fs.writeFile(temporaryPath, bytes, { mode: 0o600 });
-      await fs.rename(temporaryPath, DB_FILE);
-    } catch (error) {
-      await fs.unlink(temporaryPath).catch(() => undefined);
-      throw error;
+  const db = new Database(IS_VERCEL ? ':memory:' : DB_FILE) as SqlDatabase;
+  db.pragma('busy_timeout = 5000');
+  // 保持默认 DELETE journal（不启用 WAL）：写都走全局串行队列、无并发读写竞争，
+  // 且主库文件始终是最新完整快照，备份脚本直接读 DB_FILE 就能拿到一致数据。
+  db.run = (sql: string, params?: unknown[]) => {
+    if (params && params.length > 0) {
+      db.prepare(sql).run(...params);
+    } else {
+      db.exec(sql);
     }
-  });
-  saveChain = run.catch(() => undefined);
-  return run;
+  };
+  return db;
 }
 
 function isSupabasePersistenceEnabled() {
@@ -2861,8 +2816,7 @@ async function restoreSqliteFromSupabase() {
   if (!isSupabasePersistenceEnabled()) return;
 
   await ensureSupabaseReady();
-  const SQL = await getSqlJsReady();
-  const db = new SQL.Database() as SqlDatabase;
+  const db = openDatabase();
 
   try {
     ensureSchema(db);
@@ -2873,7 +2827,7 @@ async function restoreSqliteFromSupabase() {
         db.run(table.insert, valuesFromRow(row, table.select));
       }
     }
-    await saveDatabase(db);
+    // better-sqlite3 写即落盘，无需再全量导出。
   } finally {
     db.close();
   }
@@ -2893,53 +2847,27 @@ async function syncSqliteToSupabase(db: SqlDatabase) {
   }
 }
 
-function runQuery<T extends Record<string, unknown>>(db: SqlDatabase, sql: string, params: unknown[] = []) {
-  const statement = db.prepare(sql, params);
-  const rows: T[] = [];
-
-  try {
-    while (statement.step()) {
-      rows.push(statement.getAsObject() as T);
-    }
-  } finally {
-    statement.free();
-  }
-
-  return rows;
+function runQuery<T extends Record<string, unknown>>(db: SqlDatabase, sql: string, params: unknown[] = []): T[] {
+  return db.prepare(sql).all(...params) as T[];
 }
 
-function getOne<T extends Record<string, unknown>>(db: SqlDatabase, sql: string, params: unknown[] = []) {
-  return runQuery<T>(db, sql, params)[0] || null;
+function getOne<T extends Record<string, unknown>>(db: SqlDatabase, sql: string, params: unknown[] = []): T | null {
+  return (db.prepare(sql).get(...params) as T | undefined) ?? null;
 }
 
 // ─── SQLite 常驻实例 + 事务 + 去抖合并落盘 ───
-// 根因：旧实现每次读/写都全量加载(openDatabase)并反序列化整个 SQLite 文件，写操作再全量序列化(export)落盘，
-// 且全局串行队列在高并发下互相阻塞——上游 43s 的生图被本地数据库 IO 放大到几百秒（与「下载 9 秒」同源）。
-// 方案：常驻单个内存数据库实例，读写串行、写走事务（异常自动回滚），落盘去抖合并到后台异步执行。
+// better-sqlite3 是原生 SQLite：写操作即时增量落盘、无全量导出，不再需要去抖合并/节流。
+// 保留全局串行队列：读写串行、写走事务（异常自动回滚），避免并发写事务相互干扰。
 let residentDb: SqlDatabase | null = null;
-let dbDirty = false;
-let flushTimer: NodeJS.Timeout | null = null;
-let flushScheduled = false;
 let activeWriteTransaction = false;
-// 合并中的「立即落盘」promise：同一时刻多个扣款/退款/充值并发完成时，共享同一次全量导出，
-// 避免对事件循环的叠加阻塞（线上生图并发完成曾把整站 API 拖慢十几秒）。
-let flushNowPromise: Promise<void> | null = null;
-
-const SQLITE_FLUSH_DEBOUNCE_MS = 40;
-const SQLITE_FLUSH_RETRY_DELAY_MS = 1_000;
-// 全量导出（db.export）的最小间隔：25-30 并发生图完成时，若每次写都立即全量序列化，
-// 同步 CPU 会把事件循环打爆（触发负载熔断）。这里硬性限制相邻两次导出的间隔，
-// 间隔内新产生的写只标记 dirty，合并到下一次导出。0 表示不节流。
-const SQLITE_FLUSH_MIN_INTERVAL_MS = Math.floor(boundedEnvNumber('SQLITE_FLUSH_MIN_INTERVAL_MS', 2_000, 0, 60_000));
-let lastSqliteFlushAt = 0;
 
 // 「是否在数据库操作内部」必须用 AsyncLocalStorage 按异步上下文判定，不能用全局计数器：
 // 全局计数无法区分真正的嵌套延续与恰好并发的其它请求，后者会在写事务未提交时直通执行，
 // 把不相关的读写串进别人的事务（线上表现为 cannot commit - no transaction is active）。
 const dbExecutionContext = new AsyncLocalStorage<{ nested: true }>();
 
-async function getResidentDb(): Promise<SqlDatabase> {
-  if (!residentDb) residentDb = await openDatabase();
+function getResidentDb(): SqlDatabase {
+  if (!residentDb) residentDb = openDatabase();
   return residentDb;
 }
 
@@ -2957,71 +2885,6 @@ function enqueueDb<T>(op: () => Promise<T> | T): Promise<T> {
   return result;
 }
 
-async function flushSqlite(): Promise<void> {
-  if (!residentDb || !dbDirty) return;
-  if (activeWriteTransaction) {
-    // 写事务未提交时落盘会把未提交的数据写进库文件；保持脏标记，延后到事务结束再合并落盘。
-    scheduleFlush(SQLITE_FLUSH_RETRY_DELAY_MS);
-    return;
-  }
-  // 落盘节流：距上次导出不足最小间隔时保留脏标记、延后导出，避免并发写密集时段反复全量序列化。
-  const elapsed = Date.now() - lastSqliteFlushAt;
-  if (SQLITE_FLUSH_MIN_INTERVAL_MS > 0 && elapsed < SQLITE_FLUSH_MIN_INTERVAL_MS) {
-    scheduleFlush(SQLITE_FLUSH_MIN_INTERVAL_MS - elapsed);
-    return;
-  }
-  dbDirty = false;
-  lastSqliteFlushAt = Date.now();
-  try {
-    await saveDatabase(residentDb);
-    await syncSqliteToSupabase(residentDb);
-  } catch (error) {
-    // 落盘失败必须恢复脏标记并延迟重试，否则本次写入会滞留内存、进程一掉就丢。
-    dbDirty = true;
-    scheduleFlush(SQLITE_FLUSH_RETRY_DELAY_MS);
-    throw error;
-  }
-}
-
-function scheduleFlush(delayMs = SQLITE_FLUSH_DEBOUNCE_MS) {
-  dbDirty = true;
-  if (flushScheduled) return;
-  flushScheduled = true;
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    flushScheduled = false;
-    // 定时器在事务内被调度时会继承事务的异步上下文，必须显式脱离，
-    // 否则 flush 会被误判为嵌套操作而直通，在事务未提交时导出数据库。
-    dbExecutionContext.exit(() => {
-      void enqueueDb(() => flushSqlite()).catch((error) => console.error('[sqlite-flush]', error));
-    });
-  }, delayMs);
-}
-
-async function flushSqliteNow(): Promise<void> {
-  // 调用方（扣款/退款/充值）此刻已在内存库提交。这里保留「等待落盘完成」的语义（关键账目
-  // 在 HTTP 返回前必须已持久化），但把并发调用合并：多个生图同时完成会几乎同时走到这里，
-  // 若各自 db.export() 全量序列化，同步 CPU 会把事件循环阻塞十几秒（线上 eventLoopLag 1s+）。
-  // 共享同一个 in-flight promise，同一批只做一次全量导出。
-  if (!flushNowPromise) {
-    if (flushTimer) {
-      clearTimeout(flushTimer);
-      flushTimer = null;
-      flushScheduled = false;
-    }
-    flushNowPromise = enqueueDb(() => flushSqlite()).finally(() => {
-      flushNowPromise = null;
-    });
-  }
-  // 落盘瞬时失败由 flushSqlite 的脏标记重试兜底，
-  // 不能让 IO 抖动把已生效的账判成失败（曾导致「图已生成却被标记失败」）。
-  try {
-    await flushNowPromise;
-  } catch (error) {
-    console.error('[sqlite-flush-now] flush failed; dirty data will retry in background:', error);
-  }
-}
-
 async function withReadDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promise<T> {
   return enqueueDb(async () => {
     const db = await getResidentDb();
@@ -3034,16 +2897,13 @@ async function withWriteDb<T>(task: (db: SqlDatabase) => Promise<T> | T): Promis
     const db = await getResidentDb();
     if (activeWriteTransaction) {
       // 嵌套在外层写事务内：不开启嵌套事务，直接执行（由外层统一提交/回滚）
-      const result = await task(db);
-      scheduleFlush();
-      return result;
+      return await task(db);
     }
     activeWriteTransaction = true;
     try {
       db.run('BEGIN IMMEDIATE');
       const result = await task(db);
       db.run('COMMIT');
-      scheduleFlush();
       return result;
     } catch (error) {
       try {
@@ -4773,7 +4633,6 @@ async function debitUserCredits(userId: string, bucket: CreditBucket, amount: nu
       creditAudit('debit', userId, '', bucket, amount, { remainingCredits: summary.remainingCredits, supabase: false });
       return { ...summary, remainingCredits: totalCreditBalance(charged.balances), creditBalances: charged.balances, debit: charged.debit };
     });
-    await flushSqliteNow();
     return result;
   });
 }
@@ -4802,7 +4661,6 @@ async function refundUserCredits(userId: string, debit: CreditDebit) {
       setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
       return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     });
-    await flushSqliteNow();
     return result;
   });
 }
@@ -4849,7 +4707,6 @@ async function rechargeUserCreditPools(userId: string, additions: CreditBalances
       setSetting(db, userCreditPoolsSettingKey(userId), JSON.stringify(balances));
       return { ...getUserCredits(db, userId), remainingCredits: totalCreditBalance(balances), creditBalances: balances };
     });
-    await flushSqliteNow();
     return result;
   });
 }
@@ -4956,7 +4813,7 @@ function syncInviteCodeBalanceForUser(db: SqlDatabase, userId: string) {
 function syncRedeemedInviteCodeBalances(db: SqlDatabase) {
   const redeemedUsers = runQuery<Record<string, unknown>>(
     db,
-    'SELECT DISTINCT redeemed_by FROM invite_codes WHERE redeemed_by IS NOT NULL AND redeemed_by != ""',
+    'SELECT DISTINCT redeemed_by FROM invite_codes WHERE redeemed_by IS NOT NULL AND redeemed_by != \'\'',
   );
 
   for (const row of redeemedUsers) {
@@ -7935,7 +7792,7 @@ async function start() {
             ensureUserCredits(db, req.authUser!.userId, req.authUser!.username, 0);
             adjustUserTotalCredits(db, req.authUser!.userId, credits);
             db.run(
-              'UPDATE invite_codes SET credits = 0, redeemed_by = ?, redeemed_at = ?, low_balance_since = NULL WHERE code = ? AND (redeemed_by IS NULL OR redeemed_by = "") AND credits = ?',
+              'UPDATE invite_codes SET credits = 0, redeemed_by = ?, redeemed_at = ?, low_balance_since = NULL WHERE code = ? AND (redeemed_by IS NULL OR redeemed_by = \'\') AND credits = ?',
               [req.authUser!.userId, nowIso(), inviteCode, credits],
             );
             return credits;
@@ -14082,12 +13939,12 @@ async function start() {
     if (!R2_STORAGE) setTimeout(() => void backfillGeneratedThumbnails(), 10_000);
   });
   const shutdown = async () => {
-    // 退出前落盘：先等在途 flush 完成，再经 saveChain 做最后一次落盘（串行链保证不撞车）。
+    // 退出前：等串行队列排空后关闭常驻数据库连接（better-sqlite3 写即落盘，无需手动 flush）。
     try {
       await writeQueue.catch(() => undefined);
-      if (residentDb && dbDirty) {
-        await saveDatabase(residentDb);
-        dbDirty = false;
+      if (residentDb) {
+        residentDb.close();
+        residentDb = null;
       }
     } catch (error) {
       console.error('[sqlite-exit-flush]', error);
