@@ -2921,6 +2921,9 @@ let dbDirty = false;
 let flushTimer: NodeJS.Timeout | null = null;
 let flushScheduled = false;
 let activeWriteTransaction = false;
+// 合并中的「立即落盘」promise：同一时刻多个扣款/退款/充值并发完成时，共享同一次全量导出，
+// 避免对事件循环的叠加阻塞（线上生图并发完成曾把整站 API 拖慢十几秒）。
+let flushNowPromise: Promise<void> | null = null;
 
 const SQLITE_FLUSH_DEBOUNCE_MS = 40;
 const SQLITE_FLUSH_RETRY_DELAY_MS = 1_000;
@@ -2984,15 +2987,24 @@ function scheduleFlush(delayMs = SQLITE_FLUSH_DEBOUNCE_MS) {
 }
 
 async function flushSqliteNow(): Promise<void> {
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-    flushScheduled = false;
+  // 调用方（扣款/退款/充值）此刻已在内存库提交。这里保留「等待落盘完成」的语义（关键账目
+  // 在 HTTP 返回前必须已持久化），但把并发调用合并：多个生图同时完成会几乎同时走到这里，
+  // 若各自 db.export() 全量序列化，同步 CPU 会把事件循环阻塞十几秒（线上 eventLoopLag 1s+）。
+  // 共享同一个 in-flight promise，同一批只做一次全量导出。
+  if (!flushNowPromise) {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+      flushScheduled = false;
+    }
+    flushNowPromise = enqueueDb(() => flushSqlite()).finally(() => {
+      flushNowPromise = null;
+    });
   }
-  // 调用方（扣款/退款/充值）此刻已在内存库提交；落盘瞬时失败由 flushSqlite 的脏标记重试兜底，
+  // 落盘瞬时失败由 flushSqlite 的脏标记重试兜底，
   // 不能让 IO 抖动把已生效的账判成失败（曾导致「图已生成却被标记失败」）。
   try {
-    await enqueueDb(() => flushSqlite());
+    await flushNowPromise;
   } catch (error) {
     console.error('[sqlite-flush-now] flush failed; dirty data will retry in background:', error);
   }
