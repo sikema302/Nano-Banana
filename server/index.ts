@@ -2927,6 +2927,11 @@ let flushNowPromise: Promise<void> | null = null;
 
 const SQLITE_FLUSH_DEBOUNCE_MS = 40;
 const SQLITE_FLUSH_RETRY_DELAY_MS = 1_000;
+// 全量导出（db.export）的最小间隔：25-30 并发生图完成时，若每次写都立即全量序列化，
+// 同步 CPU 会把事件循环打爆（触发负载熔断）。这里硬性限制相邻两次导出的间隔，
+// 间隔内新产生的写只标记 dirty，合并到下一次导出。0 表示不节流。
+const SQLITE_FLUSH_MIN_INTERVAL_MS = Math.floor(boundedEnvNumber('SQLITE_FLUSH_MIN_INTERVAL_MS', 2_000, 0, 60_000));
+let lastSqliteFlushAt = 0;
 
 // 「是否在数据库操作内部」必须用 AsyncLocalStorage 按异步上下文判定，不能用全局计数器：
 // 全局计数无法区分真正的嵌套延续与恰好并发的其它请求，后者会在写事务未提交时直通执行，
@@ -2959,7 +2964,14 @@ async function flushSqlite(): Promise<void> {
     scheduleFlush(SQLITE_FLUSH_RETRY_DELAY_MS);
     return;
   }
+  // 落盘节流：距上次导出不足最小间隔时保留脏标记、延后导出，避免并发写密集时段反复全量序列化。
+  const elapsed = Date.now() - lastSqliteFlushAt;
+  if (SQLITE_FLUSH_MIN_INTERVAL_MS > 0 && elapsed < SQLITE_FLUSH_MIN_INTERVAL_MS) {
+    scheduleFlush(SQLITE_FLUSH_MIN_INTERVAL_MS - elapsed);
+    return;
+  }
   dbDirty = false;
+  lastSqliteFlushAt = Date.now();
   try {
     await saveDatabase(residentDb);
     await syncSqliteToSupabase(residentDb);
