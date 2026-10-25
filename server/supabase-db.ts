@@ -57,6 +57,8 @@ type GenerationFilterOptions = {
   model?: string;
   resolution?: string;
   range?: string;
+  /** 'failed' 只看失败记录；'success' 排除失败记录；'all' / 空 = 不过滤 */
+  status?: string;
 };
 
 type GenerationStatRow = {
@@ -292,6 +294,13 @@ function applyGenerationFilters(query: any, options: GenerationFilterOptions, in
     if (hours > 0) {
       next = next.gte('created_at', new Date(Date.now() - hours * 60 * 60 * 1000).toISOString());
     }
+  }
+
+  // 请求结果筛选：failed 只看失败（排查报错），success 排除失败（兼容历史脏数据）
+  if (options.status === 'failed') {
+    next = next.eq('result_status', 'failed');
+  } else if (options.status === 'success') {
+    next = next.neq('result_status', 'failed');
   }
 
   if (keyword) {

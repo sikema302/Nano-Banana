@@ -12455,6 +12455,7 @@ async function start() {
       model: normalizeString(req.query.model),
       resolution: normalizeString(req.query.resolution),
       range: normalizeString(req.query.range),
+      status: normalizeString(req.query.status),
     };
 
     try {
@@ -12568,6 +12569,12 @@ async function start() {
         if (options.range && options.range !== 'all') {
           const hours = options.range === '24h' ? 24 : options.range === '7d' ? 168 : options.range === '30d' ? 720 : 0;
           if (hours) { where.push('datetime(created_at) >= datetime(?)'); params.push(new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()); }
+        }
+        // 请求结果筛选：failed 只看失败（排查报错），success 排除失败（兼容历史脏数据）
+        if (options.status === 'failed') {
+          where.push("result_status = 'failed'");
+        } else if (options.status === 'success') {
+          where.push("result_status != 'failed'");
         }
         const clause = `WHERE ${where.join(' AND ')}`;
         const total = Number(getOne<{ total: number }>(db, `SELECT COUNT(*) AS total FROM generation_requests ${clause}`, params)?.total || 0);

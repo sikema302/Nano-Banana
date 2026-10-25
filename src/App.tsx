@@ -3609,6 +3609,8 @@ function AdminView({
   type InviteSortMode = 'created-desc' | 'created-asc' | 'credits-desc' | 'credits-asc';
   type UserSortMode = 'recent-desc' | 'recent-asc';
   type RecordRange = 'all' | '24h' | '7d' | '30d';
+  // 请求结果筛选：只看失败（排查报错）/ 只看成功
+  type RecordStatusFilter = 'all' | 'failed' | 'success';
 
   const [section, setSection] = useState<AdminSection>('dashboard');
   useEffect(() => {
@@ -3654,6 +3656,7 @@ function AdminView({
   const [recordModelFilter, setRecordModelFilter] = useState('all');
   const [recordResolutionFilter, setRecordResolutionFilter] = useState('all');
   const [recordRange, setRecordRange] = useState<RecordRange>('all');
+  const [recordStatusFilter, setRecordStatusFilter] = useState<RecordStatusFilter>('all');
   const [recordPage, setRecordPage] = useState(1);
   // 请求记录失败详情弹窗：展示记录 id + 接口返回的完整报错，方便排查
   const [recordDetail, setRecordDetail] = useState<GenerationRecord | null>(null);
@@ -3860,6 +3863,7 @@ function AdminView({
         model: recordModelFilter,
         resolution: recordResolutionFilter,
         range: recordRange,
+        status: recordStatusFilter,
       };
     }
 
@@ -3895,7 +3899,7 @@ function AdminView({
 
   useEffect(() => {
     setRecordPage(1);
-  }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange]);
+  }, [recordUserFilter, recordModelFilter, recordResolutionFilter, recordRange, recordStatusFilter]);
 
   useEffect(() => {
     if (section === 'apiKeys') return;
@@ -3919,6 +3923,7 @@ function AdminView({
     recordModelFilter,
     recordResolutionFilter,
     recordRange,
+    recordStatusFilter,
   ]);
 
   function formatPercent(value: number) {
@@ -5001,7 +5006,7 @@ function AdminView({
                     <h2 className="text-base font-black text-white">请求记录</h2>
                     <p className="mt-1 text-xs text-zinc-500">记录每一次实际上游调用；失败时可直接查看接口返回的报错。</p>
                   </div>
-                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-5">
+                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto xl:grid-cols-6">
                     <input
                       className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none"
                       placeholder="搜索用户"
@@ -5043,6 +5048,18 @@ function AdminView({
                       <option value="24h">近 24 小时</option>
                       <option value="7d">近 7 天</option>
                       <option value="30d">近 30 天</option>
+                    </select>
+                    <select
+                      className={`rounded-xl border bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none ${
+                        recordStatusFilter === 'all' ? 'border-white/10' : 'border-white/30'
+                      }`}
+                      title="按请求结果筛选；选「仅失败」可快速定位报错记录"
+                      value={recordStatusFilter}
+                      onChange={(event) => setRecordStatusFilter(event.target.value as RecordStatusFilter)}
+                    >
+                      <option value="all">全部结果</option>
+                      <option value="failed">仅失败</option>
+                      <option value="success">仅成功</option>
                     </select>
                     <button
                       className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-black/40 text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
@@ -6396,6 +6413,7 @@ export default function App() {
         model: params.model,
         resolution: params.resolution,
         range: params.range,
+        status: params.status,
       });
       setAdminOverview((current) => ({
         ...current,

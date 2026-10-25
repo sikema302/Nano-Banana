@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN" data-seo-preview="false" data-seo-content="true">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="alternate" type="text/markdown" href="/docs.md?page=images" title="API 文档（Markdown）" />
+  <link rel="icon" type="image/svg+xml" href="/assets/neutral-logo-D1LrQWoL.svg" />
+  <title>生成图片 | Junli Studio</title>
+<meta name="description" content="通过 OpenAI 兼容接口同步生成图片，提供 cURL、Python 与 JavaScript 示例。" />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="生成图片 | Junli Studio" />
+<meta name="twitter:description" content="通过 OpenAI 兼容接口同步生成图片，提供 cURL、Python 与 JavaScript 示例。" />
+<meta property="og:title" content="生成图片 | Junli Studio" />
+<meta property="og:description" content="通过 OpenAI 兼容接口同步生成图片，提供 cURL、Python 与 JavaScript 示例。" />
+<meta property="og:url" content="https://img.junliai.org/docs/images" />
+<meta property="og:site_name" content="Junli Studio" />
+<meta property="og:type" content="website" />
+<meta property="og:locale" content="zh_CN" />
+<link rel="canonical" href="https://img.junliai.org/docs/images" />
+<script type="application/ld+json" id="page-structured-data">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://img.junliai.org/#website","url":"https://img.junliai.org/","name":"Junli Studio","inLanguage":"zh-CN"},{"@type":"WebPage","@id":"https://img.junliai.org/docs/images#webpage","url":"https://img.junliai.org/docs/images","name":"生成图片 | Junli Studio","description":"通过 OpenAI 兼容接口同步生成图片，提供 cURL、Python 与 JavaScript 示例。","inLanguage":"zh-CN","isPartOf":{"@id":"https://img.junliai.org/#website"}}]}</script>
+  <script>
+    // Resolve the saved theme before the application bundle or styles arrive.
+    (() => {
+      let savedTheme
+      try { savedTheme = localStorage.getItem('gw_theme') } catch {}
+      const dark = savedTheme === 'dark' || (savedTheme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.classList.toggle('dark', dark)
+    })()
+  </script>
+  <style>
+    html { --boot-bg: #fafafb; --boot-fg: #65706a; --boot-line: #e2e6e3; --boot-accent: #237a50; background: var(--boot-bg); color-scheme: light; }
+    html.dark { --boot-bg: #111111; --boot-fg: #a0a0a0; --boot-line: #363636; --boot-accent: #a1bca5; color-scheme: dark; }
+    body { margin: 0; }
+    .boot { min-height: 100vh; display: grid; place-content: center; gap: 14px; justify-items: center; color: var(--boot-fg); background: var(--boot-bg); font: 14px system-ui, sans-serif; }
+    .boot-mark { width: 28px; height: 28px; border: 3px solid var(--boot-line); border-top-color: var(--boot-accent); border-radius: 50%; animation: boot-spin 1s linear infinite; }
+    .boot button { border: 1px solid var(--boot-line); border-radius: 8px; padding: 8px 18px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+    html[data-seo-content="true"] .boot { min-height: auto; display: flex; justify-content: center; padding: 18px; }
+    .seo-fallback { max-width: 1200px; margin: 0 auto; padding: 24px; font-family: system-ui, sans-serif; }
+    @keyframes boot-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .boot-mark { animation: none; } }
+  </style>
+  <script type="module" crossorigin src="/assets/index-Cy-wQ5W3.js"></script>
+<link rel="stylesheet" href="/assets/main-BMzPTtwV.css" />
+<link rel="stylesheet" href="/assets/wiki-BxztvEhv.css" />
+</head>
+<body>
+  <noscript><style>.boot { display: none !important; }</style>交互创作需要启用 JavaScript。你仍可阅读<a href="/docs">接口文档</a>或<a href="/docs.md">Markdown 版本</a>。</noscript>
+  <div id="app"><div class="boot" role="status"><span class="boot-mark" aria-hidden="true"></span><span id="boot-message">正在加载…</span><button id="boot-retry" type="button" hidden>重新加载</button></div><div class="seo-fallback"><main class="wiki-shell wiki-ssr"><nav aria-label="文档目录"><a href="/docs">文档中心</a> · <a href="/docs/quickstart">快速开始</a> · <a href="/docs/keys">API Key 与权限</a> · <a href="/docs/billing">积分与计费</a> · <a href="/docs/model-catalog">模型目录</a> · <a href="/docs/images">生成图片</a> · <a href="/docs/midjourney">MJ 接入概览与任务约定</a> · <a href="/docs/video">创建视频</a> · <a href="/docs/text">文本对话与原生协议</a> · <a href="/docs/formats">尺寸与格式</a> · <a href="/docs/examples">示例阅读指南</a> · <a href="/docs/gemini">Gemini 图片接口</a> · <a href="/docs/grok">Grok 图像接口</a> · <a href="/docs/seedance">Seedance 任务接口</a> · <a href="/docs/minimax">MiniMax 视频接口</a> · <a href="/docs/apps/chatgpt-recharge">接入概览</a> · <a href="/docs/apps/chatgpt-refund">接入概览</a> · <a href="/docs/faq">常见问题导航</a> · <a href="/docs/image-edit">编辑图片</a> · <a href="/docs/image-options">透明背景与思考模式</a> · <a href="/docs/image-tasks">异步图片任务</a> · <a href="/docs/image-results">图片结果与下载</a> · <a href="/docs/video-results">视频任务与下载</a> · <a href="/docs/mj-create">MJ 生成、融合与提示词</a> · <a href="/docs/mj-actions">MJ 放大、变体与图片编辑</a> · <a href="/docs/mj-results">MJ 查询、下载与辅助接口</a> · <a href="/docs/mj-examples">MJ 完整客户端示例</a> · <a href="/docs/mj-errors">MJ 计费、重试与排障</a> · <a href="/docs/apps/chatgpt-recharge/prices">地区价格与套餐</a> · <a href="/docs/apps/chatgpt-recharge/quote">确认服务费</a> · <a href="/docs/apps/chatgpt-recharge/submit">创建充值订单</a> · <a href="/docs/apps/chatgpt-recharge/orders">订单查询与取消</a> · <a href="/docs/apps/chatgpt-recharge/errors">状态、费用与错误</a> · <a href="/docs/apps/chatgpt-refund/catalog">服务费目录</a> · <a href="/docs/apps/chatgpt-refund/submit">创建退款批次</a> · <a href="/docs/apps/chatgpt-refund/tasks">查询与刷新任务</a> · <a href="/docs/apps/chatgpt-refund/actions">验证码与取消</a> · <a href="/docs/apps/chatgpt-refund/errors">状态、费用与重试</a> · <a href="/docs/endpoints">接口速查</a> · <a href="/docs/errors">错误处理与重试</a> · <a href="/docs/model-status">模型状态</a> · <a href="/docs/grok-video">Grok 视频接口</a> · <a href="/docs/workbuddy-txt">WorkBuddy 接入</a></nav><div class="wiki-prose"><article class="docs-page"><h1>生成图片</h1><div id="image-generation" data-wiki-anchor="" class="wiki-anchor"></div><h2 id="文生图">文生图</h2><p><code>POST /v1/images/generations</code></p><p>此 OpenAI 兼容接口不适用于 MidJourney（MJ）。MJ 请使用图像 API 下的 MJ 原生任务接口文档。其他模型发送提示词后同步返回图像结果。使用 <code>response_format: "url"</code> 获取临时地址，或使用 <code>b64_json</code> 获取内联内容。</p><div data-wiki-reference="models:image-generation:table:1" class="wiki-reference-placeholder" contenteditable="false"><table class="param-table" data-v-b02e20cc=""><thead data-v-b02e20cc=""><tr data-v-b02e20cc=""><th data-v-b02e20cc="">参数</th><th data-v-b02e20cc="">类型</th><th data-v-b02e20cc="">必填</th><th data-v-b02e20cc="">说明</th></tr></thead><tbody data-v-b02e20cc=""><!--[--><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">thinking</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">boolean</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">是否开启思考，默认 false。仅 thinking_supported=true 的 ChatGPT 原生图片模型支持；开启后每张加收模型配置的 thinking_price 积分，不支持时返回 400。思考模式按模型公布的附加价格计费，不重复扣费。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">model</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="required" data-v-b02e20cc="">是</span></td><td data-v-b02e20cc="">公开模型 ID，可从模型目录获取。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">prompt</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="required" data-v-b02e20cc="">是</span></td><td data-v-b02e20cc="">描述期望图像的文字提示。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">n</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">integer</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">当前每次生成 1 张图片，n 默认 1；JSON 请求不接受其他数量。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">size</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">WIDTHxHEIGHT；必须落在模型支持的比例与分辨率内。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">resolution</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">可选分辨率档位；优先使用模型目录和 size 对照表。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">quality</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">low、medium、high 或 auto；是否支持由模型能力决定，省略时使用模型默认值。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">background</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">transparent 透明背景、opaque 不透明背景、auto 默认行为。支持 Adobe GPT Image 系列；其他兼容图片模型以其能力为准，不支持时返回 400。</td></tr><tr data-v-b02e20cc=""><td data-v-b02e20cc=""><code data-v-b02e20cc="">response_format</code></td><td data-v-b02e20cc=""><code class="muted-code" data-v-b02e20cc="">string</code></td><td data-v-b02e20cc=""><span class="optional" data-v-b02e20cc="">否</span></td><td data-v-b02e20cc="">url 或 b64_json；省略时使用后台配置的默认值。</td></tr><!--]--></tbody></table></div><div data-wiki-reference="models:image-generation:example:image-generation" class="wiki-reference-placeholder" contenteditable="false"><div class="example-block" data-wiki-key="image-generation" data-v-ea5d1c6e="" data-v-038dacd9=""><div class="example-head" data-v-038dacd9=""><div class="min-w-0" data-v-038dacd9=""><strong data-v-038dacd9="">文生图</strong><code data-v-038dacd9="">POST /v1/images/generations</code></div></div><!--[--><pre class="code-wrap" tabindex="0" aria-label="文生图 curl 示例代码" data-v-038dacd9=""><code class="language-bash" data-v-038dacd9="">curl https://img.junliai.org/v1/images/generations \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "firefly-gpt-image-2",
+    "prompt": "a corgi running in a golden wheat field, cinematic",
+    "size": "1024x1024",
+    "response_format": "url"
+  }'</code></pre><pre class="code-wrap" tabindex="0" aria-label="文生图 python 示例代码" data-v-038dacd9=""><code class="language-python" data-v-038dacd9="">from openai import OpenAI
+
+client = OpenAI(api_key="YOUR_API_KEY", base_url="https://img.junliai.org/v1")
+result = client.images.generate(
+    model="firefly-gpt-image-2",
+    prompt="a corgi running in a golden wheat field, cinematic",
+    size="1024x1024",
+    response_format="url",
+)
+print(result.data[0].url)</code></pre><!--]--></div></div></article></div></main></div></div>
+</body>
+</html>

@@ -1408,6 +1408,7 @@ export async function fetchAdminRecords(params: {
   model?: string;
   resolution?: string;
   range?: string;
+  status?: string;
 } = {}) {
   const query = new URLSearchParams();
   appendOptionalParam(query, 'page', params.page);
@@ -1416,6 +1417,7 @@ export async function fetchAdminRecords(params: {
   appendOptionalParam(query, 'model', params.model);
   appendOptionalParam(query, 'resolution', params.resolution);
   appendOptionalParam(query, 'range', params.range);
+  appendOptionalParam(query, 'status', params.status);
   const suffix = query.toString() ? `?${query.toString()}` : '';
 
   const result = await request<{
