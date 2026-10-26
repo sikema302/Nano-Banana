@@ -4232,7 +4232,7 @@ function AdminView({
                 </div>
               ))}
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3">
               <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
                 <h2 className="text-base font-black text-white">今日生图数量排名</h2>
                 <p className="mt-1 text-xs text-zinc-500">仅按生图数量排序，积分仅供参考、不计入排名</p>
@@ -4258,37 +4258,6 @@ function AdminView({
                       {generationRanking.today.length === 0 && (
                         <tr>
                           <td className="px-3 py-8 text-center text-zinc-500" colSpan={4}>今日暂无数据</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="rounded-[22px] border border-white/8 bg-black/35 p-4">
-                <h2 className="text-base font-black text-white">总生图数量排名</h2>
-                <p className="mt-1 text-xs text-zinc-500">全量累计，仅按生图数量排序</p>
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-white/[0.04] text-zinc-500">
-                      <tr>
-                        <th className="px-3 py-2 font-bold">排名</th>
-                        <th className="px-3 py-2 font-bold">用户</th>
-                        <th className="px-3 py-2 text-right font-bold">生图数量</th>
-                        <th className="px-3 py-2 text-right font-bold">消耗积分</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/8">
-                      {generationRanking.total.map((item, index) => (
-                        <tr key={item.userId} className="text-zinc-300">
-                          <td className="px-3 py-2.5 font-black text-white">{index + 1}</td>
-                          <td className="px-3 py-2.5">{item.username}</td>
-                          <td className="px-3 py-2.5 text-right font-black text-white">{item.generationCount}</td>
-                          <td className="px-3 py-2.5 text-right text-amber-200">{item.creditsUsed}</td>
-                        </tr>
-                      ))}
-                      {generationRanking.total.length === 0 && (
-                        <tr>
-                          <td className="px-3 py-8 text-center text-zinc-500" colSpan={4}>暂无数据</td>
                         </tr>
                       )}
                     </tbody>
@@ -5564,7 +5533,7 @@ export default function App() {
     dashboardStats: emptyDashboardStats,
     providerMetrics: [],
     providerRisks: [],
-    generationRanking: { today: [], total: [] },
+    generationRanking: { today: [] },
     recordsStats: emptyRecordsStats,
     recordModelOptions: [],
     recordResolutionOptions: [],
@@ -7515,7 +7484,7 @@ export default function App() {
       dashboardStats: emptyDashboardStats,
       providerMetrics: [],
       providerRisks: [],
-      generationRanking: { today: [], total: [] },
+      generationRanking: { today: [] },
       recordsStats: emptyRecordsStats,
       recordModelOptions: [],
       recordResolutionOptions: [],

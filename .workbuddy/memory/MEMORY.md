@@ -15,6 +15,20 @@
   已加进 tsconfig `exclude`(CI 无此文件不受影响);② node_modules 可能缺 `@xyflow/react`,
   `npm install` 补齐;③ 沙箱下 vite 清空 `dist/` 会被 safe-delete 钩子挡住,先 `rm -rf dist` 再跑 build。
 
+## 数据库引擎(重要,2026-10-24 已迁移)
+
+- **生产/主库已从 sql.js 迁移到 better-sqlite3**(commit 6fbde51,已部署上线)。动机:sql.js 每次写后全量 `db.export()`
+  同步序列化整个库(227MB 单次 1-3s)阻塞事件循环 → 负载熔断全站卡死。better-sqlite3 写即增量落盘、无全量导出,
+  实测 eventLoopLagMs 从 1000ms+ 降到 ~20ms。
+- `server/index.ts` 热路径:import `Database from 'better-sqlite3'`,`openDatabase()` = `new Database(DB_FILE)` +
+  `busy_timeout=5000` + run 适配器(有参 `prepare(sql).run(...params)`/无参 `exec(sql)`);
+  `runQuery/getOne` = `.prepare(sql).all(...params)/.get(...params)`。**无 saveDatabase/flushSqlite/scheduleFlush**。
+- **关键兼容性坑**:better-sqlite3 把 SQL 里双引号 `""` 当**列名标识符**(sql.js 当空字符串)→ 会崩 `no such column: ""`。
+  写 SQL 字符串字面量必须用**单引号** `''`。
+- 数据格式为标准 SQLite,与 sql.js 导出文件**完全兼容、无需迁移**;`data/app.sqlite` 原地打开。
+- sql.js 依赖**保留**——`scripts/migrate-supabase-to-sqlite.ts`、`sync-sqlite-to-supabase.ts` 两个离线脚本仍在用,勿删。
+- 回滚:git revert 6fbde51 + push;deploy.sh 部署前会自动 tar 备份含 `data/` 主库到 `.deploy-backups/`。
+
 ## 环境限制(重要)
 
 - git 在本机 sandbox 现可正常执行(2026-10-08 实测 `git status`/`log`/`rev-list` 均正常,此前 127/0xC0000142 DLL 初始化失败已不复发)。

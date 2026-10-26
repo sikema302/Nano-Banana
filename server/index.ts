@@ -472,6 +472,9 @@ const THUMBNAIL_RETENTION_DAYS = Math.max(
   Number(process.env.THUMBNAIL_RETENTION_DAYS || process.env.IMAGE_RETENTION_DAYS || 2),
 );
 const IMAGE_RETENTION_DAYS = THUMBNAIL_RETENTION_DAYS;
+// 生图历史（generations）与请求记录（generation_requests）的保留期。累计排名已移除，
+// 明细历史不再需要永久保留，超期即清理，避免 SQLite 与随之而来的每日加密快照无限增长。
+const GENERATION_HISTORY_RETENTION_DAYS = Math.max(1, Number(process.env.GENERATION_HISTORY_RETENTION_DAYS || 30));
 const IMAGE_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.IMAGE_CLEANUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const DISK_WARNING_PERCENT = Math.min(99, Math.max(1, Number(process.env.DISK_WARNING_PERCENT || 70)));
 const DISK_EMERGENCY_PERCENT = Math.min(100, Math.max(DISK_WARNING_PERCENT, Number(process.env.DISK_EMERGENCY_PERCENT || 85)));
@@ -1648,11 +1651,9 @@ async function withRecordingRetry(task: () => Promise<void>) {
   }
 }
 
-// 公共 API Key 生图成功后，把历史（generations）与累计统计（user_generation_stats）一并写入。
-// 这里沿用 generation_requests 的伪 id（`api-key:<id>` / `api-<id>`），排名接口会据此把
-// 绑定了 owner 的 key 的请求映射回真实的 owner（见 /api/admin/generation-ranking 与
-// /api/admin/users 的合并口径，二者都必须只看 ownerUserId、不看 billingMode），
-// 从而让今日排名与总排名口径一致，且不会与启动时的 backfill 去重（user_id + image_path）产生重复计数。
+// 公共 API Key 生图成功后写入历史（generations）。
+// 这里沿用 generation_requests 的伪 id（`api-key:<id>` / `api-<id>`），
+// 绑定 owner 的 key 的请求会映射回真实 owner（口径只看 ownerUserId、不看 billingMode）。
 async function recordPublicGenerationHistory(record: {
   userId: string;
   username: string;
@@ -1671,11 +1672,6 @@ async function recordPublicGenerationHistory(record: {
   if (USE_SUPABASE) {
     const db = await getSupabaseDb();
     await withRecordingRetry(() => db.insertGeneration(record));
-    try {
-      await db.incrementGenerationCount(record.userId, record.username, record.creditsUsed, record.createdAt);
-    } catch (statsError) {
-      console.warn('[public-generate] failed to update generation stats after history insert:', statsError);
-    }
     return;
   }
 
@@ -1713,26 +1709,6 @@ async function recordPublicGenerationHistory(record: {
       throw insertError;
     }
     return;
-  }
-
-  try {
-    await withWriteDb((db) => {
-      ensureSchema(db);
-      db.run(
-        `
-          INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-          VALUES (?, ?, 1, ?, ?)
-          ON CONFLICT(user_id) DO UPDATE SET
-            username = excluded.username,
-            generations_total = generations_total + 1,
-            credits_total = credits_total + excluded.credits_total,
-            updated_at = excluded.updated_at
-        `,
-        [record.userId, record.username, record.creditsUsed, record.createdAt],
-      );
-    });
-  } catch (statsError) {
-    console.warn('[public-generate] failed to update generation stats after history insert:', statsError);
   }
 }
 
@@ -3002,33 +2978,6 @@ function ensureSchema(db: SqlDatabase) {
       updated_at TEXT NOT NULL
     )
   `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS user_generation_stats (
-      user_id TEXT PRIMARY KEY,
-      username TEXT NOT NULL DEFAULT '',
-      generations_total INTEGER NOT NULL DEFAULT 0,
-      credits_total INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL
-    )
-  `);
-
-  try {
-    const statCount = getOne<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM user_generation_stats');
-    if (Number(statCount?.c || 0) === 0) {
-      db.run(
-        `
-          INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-          SELECT user_id, MAX(username) AS username, COUNT(*), COALESCE(SUM(credits_used), 0), MAX(created_at)
-          FROM generations
-          GROUP BY user_id
-          ON CONFLICT(user_id) DO NOTHING
-        `,
-      );
-    }
-  } catch {
-    // Backfill can run against an un-migrated generations table; seed the next startup.
-  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS generation_requests (
@@ -4878,16 +4827,39 @@ function purgeExpiredImageDataSqlite(db: SqlDatabase, retentionDays = IMAGE_RETE
     )?.total || 0,
   );
 
-  // 历史记录（generations）是轻量元数据，必须与后台累计统计（user_generation_stats）
-  // 保持一致并永久保留；磁盘回收只针对 images 表与物理图片文件，因此不再删除 generations 行。
-  // 若删除 generations，会出现「后台累计成功 N 张、用户历史只有 N-k 张」的永久性差异。
+  // 生图明细（generations）与请求记录（generation_requests）按独立的长保留期清理，
+  // 不再为了「累计统计」永久保留——累计排名（user_generation_stats）已移除。
+  // 超期行直接删除，避免明细表与随之而来的每日加密快照无限增长。
+  const historyCutoffIso = subtractDaysIso(GENERATION_HISTORY_RETENTION_DAYS);
+  const deletedGenerations = Number(
+    getOne<{ total: number }>(
+      db,
+      'SELECT COUNT(*) AS total FROM generations WHERE datetime(created_at) < datetime(?)',
+      [historyCutoffIso],
+    )?.total || 0,
+  );
+  const deletedGenerationRequests = Number(
+    getOne<{ total: number }>(
+      db,
+      'SELECT COUNT(*) AS total FROM generation_requests WHERE datetime(created_at) < datetime(?)',
+      [historyCutoffIso],
+    )?.total || 0,
+  );
+
   if (deletedImages > 0) {
     db.run('DELETE FROM images WHERE datetime(created_at) < datetime(?)', [cutoffIso]);
   }
+  if (deletedGenerations > 0) {
+    db.run('DELETE FROM generations WHERE datetime(created_at) < datetime(?)', [historyCutoffIso]);
+  }
+  if (deletedGenerationRequests > 0) {
+    db.run('DELETE FROM generation_requests WHERE datetime(created_at) < datetime(?)', [historyCutoffIso]);
+  }
 
   return {
-    deletedGenerations: 0,
+    deletedGenerations,
     deletedImages,
+    deletedGenerationRequests,
     cutoffIso,
   };
 }
@@ -5066,9 +5038,9 @@ async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RE
       const deletedGeneratedFiles = await purgeExpiredGeneratedFiles(ORIGINAL_IMAGE_RETENTION_DAYS);
       const deletedThumbnailFiles = await purgeExpiredThumbnailFiles(retentionDays);
       const diskPressure = await enforceDiskPressure(reason);
-      if (result.deletedGenerations > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0 || deletedThumbnailFiles > 0 || diskPressure.deletedEmergencyFiles > 0) {
+      if (result.deletedGenerations > 0 || result.deletedGenerationRequests > 0 || result.deletedImages > 0 || deletedReferenceFiles > 0 || deletedGeneratedFiles > 0 || deletedThumbnailFiles > 0 || diskPressure.deletedEmergencyFiles > 0) {
         console.log(
-          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles} thumbnailFiles=${deletedThumbnailFiles} emergencyOriginals=${diskPressure.deletedEmergencyFiles}`,
+          `[image-cleanup:${reason}] cutoff=${result.cutoffIso} generations=${result.deletedGenerations} generationRequests=${result.deletedGenerationRequests} images=${result.deletedImages} referenceFiles=${deletedReferenceFiles} generatedFiles=${deletedGeneratedFiles} thumbnailFiles=${deletedThumbnailFiles} emergencyOriginals=${diskPressure.deletedEmergencyFiles}`,
         );
       }
       return {
@@ -5086,6 +5058,7 @@ async function runImageRetentionCleanup(reason: string, retentionDays = IMAGE_RE
       return {
         cutoffIso: subtractDaysIso(retentionDays),
         deletedGenerations: 0,
+        deletedGenerationRequests: 0,
         deletedImages: 0,
         deletedReferenceFiles: 0,
         deletedGeneratedFiles: 0,
@@ -9165,11 +9138,6 @@ async function start() {
         createdAt: entry.createdAt,
         requestId: entry.submissionRequestId,
       }));
-      try {
-        await db.incrementGenerationCount(entry.userId, entry.username, entry.creditsUsed, entry.createdAt);
-      } catch (statsError) {
-        console.warn('[generation-reconcile] failed to update stats:', statsError);
-      }
       return;
     }
     try {
@@ -9193,23 +9161,6 @@ async function start() {
         throw insertError;
       }
       return; // 幂等键已写过历史，不重复累加统计
-    }
-    try {
-      await withWriteDb((db) => {
-        ensureSchema(db);
-        db.run(
-          `INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-           VALUES (?, ?, 1, ?, ?)
-           ON CONFLICT(user_id) DO UPDATE SET
-             username = excluded.username,
-             generations_total = generations_total + 1,
-             credits_total = credits_total + excluded.credits_total,
-             updated_at = excluded.updated_at`,
-          [entry.userId, entry.username, entry.creditsUsed, entry.createdAt],
-        );
-      });
-    } catch (statsError) {
-      console.warn('[generation-reconcile] failed to update stats:', statsError);
     }
   }
 
@@ -9733,11 +9684,6 @@ async function start() {
           createdAt,
           requestId,
         }));
-        try {
-          await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
-        } catch (statsError) {
-          console.warn('[generate] failed to update generation stats after history insert:', statsError);
-        }
       } else {
         let adopted: Record<string, unknown> | null = null;
         await withRecordingRetry(() => withWriteDb((db) => {
@@ -9793,27 +9739,6 @@ async function start() {
           }
         }));
         adoptedExistingGeneration = adopted;
-        if (!adopted) {
-          try {
-            await withWriteDb((db) => {
-              ensureSchema(db);
-              db.run(
-                `
-                  INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-                  VALUES (?, ?, 1, ?, ?)
-                  ON CONFLICT(user_id) DO UPDATE SET
-                    username = excluded.username,
-                    generations_total = generations_total + 1,
-                    credits_total = credits_total + excluded.credits_total,
-                    updated_at = excluded.updated_at
-                `,
-                [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
-              );
-            });
-          } catch (statsError) {
-            console.warn('[generate] failed to update generation stats after history insert:', statsError);
-          }
-        }
       }
 
       // 并发重复提交被幂等键拦截：本次扣款属于重复收费，退回并直接交付已存在的生成结果。
@@ -10451,11 +10376,6 @@ async function start() {
             createdAt,
             requestId,
           }));
-          try {
-            await db.incrementGenerationCount(req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt);
-          } catch (statsError) {
-            console.warn('[video] failed to update generation stats after history insert:', statsError);
-          }
         } else {
           await withRecordingRetry(() => withWriteDb((db) => {
             ensureSchema(db);
@@ -10483,25 +10403,6 @@ async function start() {
               ],
             );
           }));
-          try {
-            await withWriteDb((db) => {
-              ensureSchema(db);
-              db.run(
-                `
-                  INSERT INTO user_generation_stats (user_id, username, generations_total, credits_total, updated_at)
-                  VALUES (?, ?, 1, ?, ?)
-                  ON CONFLICT(user_id) DO UPDATE SET
-                    username = excluded.username,
-                    generations_total = generations_total + 1,
-                    credits_total = credits_total + excluded.credits_total,
-                    updated_at = excluded.updated_at
-                `,
-                [req.authUser!.userId, req.authUser!.username, creditsUsed, createdAt],
-              );
-            });
-          } catch (statsError) {
-            console.warn('[video] failed to update generation stats after history insert:', statsError);
-          }
         }
       } catch (recordingError) {
         console.error('[video] history recording failed after charge:', recordingError);
@@ -11775,7 +11676,7 @@ async function start() {
       if (USE_SUPABASE) {
         const db = await getSupabaseDb();
         const rankings = await db.getGenerationRankings();
-        res.json(rankings);
+        res.json({ today: rankings.today });
         return;
       }
 
@@ -11826,33 +11727,8 @@ async function start() {
           todayMap.set(userId, today);
         }
 
-        const totalRows = runQuery<Record<string, unknown>>(
-          db,
-          "SELECT user_id, username, generations_total, credits_total FROM user_generation_stats WHERE username != 'demo'",
-        );
-        const totalMap = new Map<string, { userId: string; username: string; generationCount: number; creditsUsed: number }>();
-        for (const row of totalRows) {
-          const rawUserId = String(row.user_id || '');
-          const rawUsername = String(row.username || '');
-          const owner = ownerByApiKeyUserId.get(rawUserId);
-          const userId = owner ? owner.userId : rawUserId;
-          const username = owner ? owner.username : rawUsername;
-          const generationCount = Number(row.generations_total || 0);
-          const credits = Number(row.credits_total || 0);
-          const existing = totalMap.get(userId);
-          if (existing) {
-            existing.generationCount += generationCount;
-            existing.creditsUsed += credits;
-          } else {
-            totalMap.set(userId, { userId, username, generationCount, creditsUsed: credits });
-          }
-        }
-
         return {
           today: [...todayMap.values()]
-            .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
-            .slice(0, 10),
-          total: [...totalMap.values()]
             .sort((a, b) => b.generationCount - a.generationCount || b.creditsUsed - a.creditsUsed)
             .slice(0, 10),
         };

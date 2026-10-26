@@ -235,7 +235,6 @@ export interface AdminGenerationRankingEntry {
 
 export interface AdminGenerationRanking {
   today: AdminGenerationRankingEntry[];
-  total: AdminGenerationRankingEntry[];
 }
 
 export interface ProviderMetricRow {
