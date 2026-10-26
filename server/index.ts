@@ -7039,7 +7039,7 @@ async function start() {
       sourceFile: DB_FILE,
       backupDir: path.join(DATA_DIR, 'sqlite-backups'),
       label: 'daily',
-      retentionCount: 14,
+      retentionCount: Math.floor(boundedEnvNumber('SQLITE_BACKUP_RETENTION_COUNT', 7, 1, 1_000)),
       onBackup: async () => {
         await uploadLatestBackupToR2({
           backupDir: path.join(DATA_DIR, 'sqlite-backups'),
