@@ -1727,6 +1727,7 @@ function HistoryView({
                 <th className="px-3 py-1.5 font-medium">提示词</th>
                 <th className="px-3 py-1.5 font-medium">模型</th>
                 <th className="px-3 py-1.5 font-medium">比例</th>
+                <th className="px-3 py-1.5 text-right font-medium">积分消耗</th>
                 <th className="px-3 py-1.5 font-medium">时间</th>
               </tr>
             </thead>
@@ -1750,6 +1751,7 @@ function HistoryView({
                     {item.dimensions}
                     {item.imageSize ? ` / ${item.imageSize}` : ''}
                   </td>
+                  <td className="px-3 py-1.5 text-right font-black text-amber-200">{item.creditsUsed}</td>
                   <td className="px-3 py-1.5">{formatTime(item.createdAt)}</td>
                 </tr>
               ))}
