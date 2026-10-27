@@ -335,8 +335,14 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
     ],
-    '2K': [{ id: 'junliai-firefly', enabled: true }],
-    '4K': [{ id: 'junliai-firefly', enabled: true }],
+    '2K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'uselg-flare', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'uselg-flare', enabled: true },
+    ],
   },
   sunburstRoutes: {
     '1K': [
@@ -344,8 +350,14 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
     ],
-    '2K': [{ id: 'junliai-firefly', enabled: true }],
-    '4K': [{ id: 'junliai-firefly', enabled: true }],
+    '2K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'uselg-sunburst', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: true },
+      { id: 'uselg-sunburst', enabled: true },
+    ],
   },
 };
 
@@ -378,6 +390,8 @@ function gpt25ChannelName(groupKey: 'flareRoutes' | 'sunburstRoutes', id: string
   if (id === 'junliai-economy') return `Junli · gpt-image-2.5-${variant}`;
   if (id === 'junliai-gpt-image-25') return 'Junli · gpt-image-2.5';
   if (id === 'junliai-firefly') return `Junli · gpt-image-2.5-${variant}-firefly`;
+  if (id === 'uselg-flare') return 'Uselg · gpt-image-2.5-flare';
+  if (id === 'uselg-sunburst') return 'Uselg · gpt-image-2.5-sunburst';
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
 }
 
@@ -5900,12 +5914,8 @@ export default function App() {
     }
   }, [batchCount]);
 
-  // GPT-image-2.5 不支持 high 质量档：如果切到 2.5 时 quality 残留为 high（例如从 GPT-image-2 切换/编辑回填），自动回退到 auto
-  useEffect(() => {
-    if (isGptImage2_5 && gptQuality === 'high') {
-      setGptQuality('auto');
-    }
-  }, [isGptImage2_5, gptQuality]);
+  // GPT-image-2.5 的 2K/4K 已恢复支持 high 质量档（计费走 twoKHigh/fourKHigh）；1K 不支持 quality，
+  // 切到 1K 时由清晰度切换逻辑统一回退 auto。
 
   function handleModelSelect(modelId: string) {
     setSelectedModel(modelId);
@@ -8509,9 +8519,8 @@ export default function App() {
                 {showGptQuality ? (
                   <section className="space-y-1.5">
                     <div className="text-[10px] font-bold text-zinc-400">{'\u8d28\u91cf'}</div>
-                    <div className={`grid gap-2 overflow-visible ${isGptImage2_5 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                    <div className="grid grid-cols-4 gap-2 overflow-visible">
                       {gptQualityOptions
-                        .filter((item) => !(isGptImage2_5 && item.value === 'high'))
                         .map((item) => {
                         const active = gptQuality === item.value;
                         const isHighQuality = item.value === 'high';

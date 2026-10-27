@@ -1084,9 +1084,8 @@ export default function BatchCreateView({
             {model?.id === 'gpt-image-2' || isGpt25 ? (
               <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 text-xs font-bold text-zinc-500">质量</div>
-                <div className={`grid gap-1.5 ${isGpt25 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                <div className="grid grid-cols-4 gap-1.5">
                   {qualityOptions
-                    .filter((item) => !(isGpt25 && item.value === 'high'))
                     .map((item) => {
                       const qualityDisabled = imageSize === 'STANDARD' || (isGpt25 && imageSize === '1K');
                       return (

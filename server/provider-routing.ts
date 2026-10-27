@@ -1,10 +1,11 @@
 export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'schat-gpt-image-2' | 'visionary' | 'uselg';
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type GrokImageProviderId = 'junliai-grok';
-// GPT-image-2.5 Flare / Sunburst 独立渠道组：只有 junliai 的三个真 2.5 上游
-// （经济版/通用渠道仅 1K，Firefly 支持 1K/2K/4K）。Uselg/Visionary 走的是
-// 自家模型（Flux、gpt-image-2），不是 2.5 上游，不进这两组。
-export type GptImage25ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly';
+// GPT-image-2.5 Flare / Sunburst 独立渠道组：junliai 的三个真 2.5 上游
+// （经济版/通用渠道仅 1K，Firefly 支持 1K/2K/4K）+ uselg 的 gpt-image-2.5-flare /
+// gpt-image-2.5-sunburst（仅 2K/4K，走 uselg.top 的 OpenAI 兼容 /v1/images 接口）。
+// Visionary 走的是自家模型（Flux、gpt-image-2），不是 2.5 上游，不进这两组。
+export type GptImage25ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'uselg-flare' | 'uselg-sunburst';
 export type ProviderResolution = '1K' | '2K' | '4K';
 
 export type ProviderChannel<T extends string = string> = {

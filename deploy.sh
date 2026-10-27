@@ -135,6 +135,22 @@ if [ -d "$SECRETS_DIR" ]; then
     chmod 600 .env.local
   fi
 
+  if [ -s "$SECRETS_DIR/uselg-flare-env" ]; then
+    touch .env.local
+    (grep -v -E '^USSELG_GPT_IMAGE_25_FLARE_MODEL=' .env.local 2>/dev/null || true) > .env.local.next
+    cat "$SECRETS_DIR/uselg-flare-env" >> .env.local.next
+    mv .env.local.next .env.local
+    chmod 600 .env.local
+  fi
+
+  if [ -s "$SECRETS_DIR/uselg-sunburst-env" ]; then
+    touch .env.local
+    (grep -v -E '^USSELG_GPT_IMAGE_25_SUNBURST_MODEL=' .env.local 2>/dev/null || true) > .env.local.next
+    cat "$SECRETS_DIR/uselg-sunburst-env" >> .env.local.next
+    mv .env.local.next .env.local
+    chmod 600 .env.local
+  fi
+
   if [ -s "$SECRETS_DIR/uselg-video-env" ]; then
     touch .env.local
     (grep -v '^USELG_VIDEO_API_KEY=' .env.local 2>/dev/null || true) > .env.local.next

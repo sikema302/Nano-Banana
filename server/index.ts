@@ -701,6 +701,15 @@ const USSELG_HD_KEY = normalizeEnvValue(process.env.USSELG_HD_KEY);
 const USSELG_MODEL = normalizeEnvValue(process.env.USSELG_MODEL || 'gpt-image-2');
 const USSELG_TIMEOUT_MS = Math.max(60_000, Number(process.env.USSELG_TIMEOUT_MS || 15 * 60_000));
 
+// Uselg(FluxPort) gpt-image-2.5-flare / -sunburst 渠道：与 gpt-image-2 渠道共用 STANDARD/HD key
+// （selectUselgApiKey），仅模型名不同，仅 2K/4K，走 /v1/images 的 OpenAI 兼容接口。
+const USSELG_GPT_IMAGE_25_FLARE_MODEL = normalizeEnvValue(
+  process.env.USSELG_GPT_IMAGE_25_FLARE_MODEL || 'gpt-image-2.5-flare',
+);
+const USSELG_GPT_IMAGE_25_SUNBURST_MODEL = normalizeEnvValue(
+  process.env.USSELG_GPT_IMAGE_25_SUNBURST_MODEL || 'gpt-image-2.5-sunburst',
+);
+
 // Uselg(FluxPort) 视频渠道（全参MinimaxH3，api.ai-media.vip/v1/videos）。
 // 视频生成慢、单任务耗时长，独立并发与超时参数避免挤占图片队列。
 const USELG_VIDEO_API_KEY = normalizeEnvValue(process.env.USELG_VIDEO_API_KEY);
@@ -824,16 +833,23 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
     '4K': [],
   },
   // GPT-image-2.5 Flare / Sunburst 独立渠道组（原先与 gpt-image-2 共用 image2Routes）。
-  // 1K：变体主渠道 → 通用 gpt-image-2.5 → Firefly（上游 1K 也支持）；
-  // 2K / 4K：只有 Firefly。Uselg/Visionary 走自家模型（Flux、gpt-image-2），不是 2.5 上游。
+  // 1K：变体主渠道 → 通用 gpt-image-2.5 → Firefly；
+  // 2K / 4K：Firefly → uselg 的 gpt-image-2.5-flare（uselg-flare 仅接 2K/4K，不接 1K）。
+  // Visionary 走自家模型（Flux、gpt-image-2），不是 2.5 上游。
   flareRoutes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
-    '2K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
-    '4K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '2K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'uselg-flare', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'uselg-flare', enabled: true },
+    ],
   },
   sunburstRoutes: {
     '1K': [
@@ -841,8 +857,14 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
-    '2K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
-    '4K': [{ id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED }],
+    '2K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'uselg-sunburst', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'uselg-sunburst', enabled: true },
+    ],
   },
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
@@ -5729,6 +5751,48 @@ async function callConfiguredImageChannel(
         }),
       );
     }
+    if (channelId === 'uselg-flare' && input.modelId === 'GPT-image-2.5-Flare') {
+      const apiKey = selectUselgApiKey(input.imageSize);
+      if (!apiKey) {
+        const error = new Error('Uselg gpt-image-2.5-flare key is not configured') as Error & { safeToFallback: boolean };
+        error.safeToFallback = true;
+        throw error;
+      }
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Uselg · gpt-image-2.5-flare',
+        USSELG_GPT_IMAGE_25_FLARE_MODEL,
+        () => generateSchatImage(input, {
+          baseUrl: USSELG_BASE_URL,
+          apiKey,
+          model: USSELG_GPT_IMAGE_25_FLARE_MODEL,
+          responseFormat: 'b64_json',
+          timeoutMs: USSELG_TIMEOUT_MS,
+        }),
+      );
+    }
+    if (channelId === 'uselg-sunburst' && input.modelId === 'GPT-image-2.5-Sunburst') {
+      const apiKey = selectUselgApiKey(input.imageSize);
+      if (!apiKey) {
+        const error = new Error('Uselg gpt-image-2.5-sunburst key is not configured') as Error & { safeToFallback: boolean };
+        error.safeToFallback = true;
+        throw error;
+      }
+      return callMeasuredImageChannel(
+        input,
+        traceId,
+        'Uselg · gpt-image-2.5-sunburst',
+        USSELG_GPT_IMAGE_25_SUNBURST_MODEL,
+        () => generateSchatImage(input, {
+          baseUrl: USSELG_BASE_URL,
+          apiKey,
+          model: USSELG_GPT_IMAGE_25_SUNBURST_MODEL,
+          responseFormat: 'b64_json',
+          timeoutMs: USSELG_TIMEOUT_MS,
+        }),
+      );
+    }
     const upstreamModel = resolveJunliaiUpstreamModel(channelId, input.modelId, input.imageSize);
     if (upstreamModel && imageProviderRouter) {
       return imageProviderRouter.generate({
@@ -9096,19 +9160,31 @@ async function start() {
         { baseUrl: VISIONARY_API_BASE_URL, apiKey, resumeTask: { taskId: resume.taskId } },
       );
     }
-    // schat：按渠道选择 baseUrl / apiKey / model（uselg 走独立 key 与 b64 输出）。
+    // schat：按渠道选择 baseUrl / apiKey / model（uselg / uselg-flare / uselg-sunburst 共用 STANDARD/HD key 与 b64 输出）。
     const isUselg = resume.channelId === 'uselg';
-    const baseUrl = isUselg ? USSELG_BASE_URL : SCHAT_BASE_URL;
-    const apiKey = isUselg ? selectUselgApiKey(input.imageSize) : SCHAT_API_KEY;
-    const model = resume.sourceModel || (isUselg ? USSELG_MODEL : SCHAT_GPT_IMAGE_2_MODEL);
+    const isUselgFlare = resume.channelId === 'uselg-flare';
+    const isUselgSunburst = resume.channelId === 'uselg-sunburst';
+    const isUselgChannel = isUselg || isUselgFlare || isUselgSunburst;
+    const baseUrl = isUselgChannel ? USSELG_BASE_URL : SCHAT_BASE_URL;
+    const apiKey = isUselgChannel
+      ? selectUselgApiKey(input.imageSize)
+      : SCHAT_API_KEY;
+    const model = resume.sourceModel
+      || (isUselgFlare
+        ? USSELG_GPT_IMAGE_25_FLARE_MODEL
+        : isUselgSunburst
+          ? USSELG_GPT_IMAGE_25_SUNBURST_MODEL
+          : isUselg
+            ? USSELG_MODEL
+            : SCHAT_GPT_IMAGE_2_MODEL);
     return generateSchatImage(
       { prompt: input.prompt, ratio: input.ratio, imageSize: input.imageSize, images: input.images },
       {
         baseUrl,
         apiKey,
         model,
-        ...(isUselg ? { responseFormat: 'b64_json' as const } : {}),
-        timeoutMs: isUselg ? USSELG_TIMEOUT_MS : SCHAT_TIMEOUT_MS,
+        ...(isUselgChannel ? { responseFormat: 'b64_json' as const } : {}),
+        timeoutMs: isUselgChannel ? USSELG_TIMEOUT_MS : SCHAT_TIMEOUT_MS,
         resumeTask: {
           taskId: resume.taskId,
           pollUrl: resume.pollUrl
