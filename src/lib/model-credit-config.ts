@@ -31,8 +31,8 @@ export type GrokImageCreditPricing = {
 /** 视频模型标识（内部规范化 ID）。 */
 export type VideoModelId = 'minimax-h3' | 'grok-imagine-video-1.5' | 'minimax-h3-768p';
 
-/** 视频清晰度档：minimax 用 768p/2K，grok 用 480p/720p。 */
-export type VideoResolution = '768p' | '2K' | '480p' | '720p';
+/** 视频清晰度档：minimax 用 720p/1080p，grok 用 480p/720p。 */
+export type VideoResolution = '768p' | '2K' | '480p' | '720p' | '1080p';
 
 /** 视频画面比例：minimax 3 种，grok 5 种。 */
 export type VideoAspect = '16:9' | '9:16' | '1:1' | '4:3' | '3:4';
@@ -61,13 +61,17 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
   'minimax-h3': {
     id: 'minimax-h3',
     label: 'MiniMax H3',
-    historyModelId: '全参MinimaxH3',
-    resolutions: ['768p', '2K'],
-    aspects: ['16:9', '9:16', '1:1'],
+    historyModelId: 'minimax-h3',
+    resolutions: ['720p', '1080p'],
+    aspects: ['16:9', '9:16'],
     maxReferenceImages: () => 9,
-    maxReferenceVideos: 3,
-    maxReferenceAudios: 3,
-    upstreamModelFor: () => '全参MinimaxH3',
+    maxReferenceVideos: 0,
+    maxReferenceAudios: 0,
+    // 2026-10-28 起按 uselg 新文档（group 105 / offer media_9efd2d1e）对接：
+    // 平台模型名 minimax-h3，按秒计费 720p $0.075/s、1080p $0.138/s；
+    // 仅文生/图生视频，不支持参考视频与参考音频；比例仅 16:9 / 9:16。
+    // 旧上游 `全参MinimaxH3` 与 `minimax_h3-768p` 均已不可用。
+    upstreamModelFor: () => 'minimax-h3',
   },
   'grok-imagine-video-1.5': {
     id: 'grok-imagine-video-1.5',
@@ -90,6 +94,8 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     maxReferenceImages: () => 9,
     maxReferenceVideos: 3,
     maxReferenceAudios: 0,
+    // 旧 768p 特供上游（minimax_h3-768p）已于 2026-10-28 下线，模型转入前端隐藏，
+    // 规格与计费保留用于历史记录兼容。
     upstreamModelFor: () => 'minimax_h3-768p',
   },
 };
@@ -100,8 +106,9 @@ export const VIDEO_DEFAULT_MODEL_ID: VideoModelId = 'minimax-h3';
 /**
  * 暂时在前端隐藏的模型（模型有问题先下架展示）。
  * 只从创建页选择列表里隐藏，配置与生成链路代码全部保留，恢复时清空数组即可。
+ * minimax-h3-768p：上游已下线（2026-10-28），由改造后的 minimax-h3（720p/1080p）替代。
  */
-export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3'];
+export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3-768p'];
 
 /** 把前端/历史传入的模型名归一化为内部 VideoModelId，非法值回退 minimax-h3。 */
 export function normalizeVideoModelId(value: unknown): VideoModelId {
@@ -136,11 +143,10 @@ export function resolveGenerationRecordModelFilter(value: string): { label: stri
   return GENERATION_RECORD_MODEL_FILTERS.find((item) => item.label === normalized) || null;
 }
 
-/** 全参 MinimaxH3 两档定价。 */
+/** MiniMax H3（720p/1080p）按秒两档定价：总价 = 秒数 × 对应档每秒单价。 */
 export type MinimaxVideoCreditPricing = {
-  p768Base: number;
-  twoKBase: number;
-  excessPerSecond: number;
+  p720PerSecond: number;
+  p1080PerSecond: number;
 };
 
 /** grok-imagine-video-1.5 两档定价。 */
@@ -202,7 +208,7 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     twoK: 22,
   },
   video: {
-    minimax: { p768Base: 480, twoKBase: 520, excessPerSecond: 20 },
+    minimax: { p720PerSecond: 30, p1080PerSecond: 60 },
     grok: { p480Base: 180, p720Base: 320, excessPerSecond: 10 },
     minimaxH3_768p: { perSecond: 48 },
   },
@@ -230,13 +236,11 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     source.grokImage && typeof source.grokImage === 'object'
       ? source.grokImage as Partial<GrokImageCreditPricing>
       : {};
-  // 视频定价可能是新嵌套结构（{ minimax, grok }）或旧扁平结构（{ p768Base, twoKBase, excessPerSecond }）。
-  const videoRaw = (source.video && typeof source.video === 'object' ? source.video : {}) as
-    Partial<VideoCreditPricing> & Partial<MinimaxVideoCreditPricing>;
-  const hasLegacyFlatVideo = 'p768Base' in videoRaw && !('minimax' in videoRaw);
-  const minimaxVideo: Partial<MinimaxVideoCreditPricing> = hasLegacyFlatVideo
-    ? videoRaw
-    : (videoRaw.minimax as Partial<MinimaxVideoCreditPricing> | undefined) || {};
+  // 视频定价为嵌套结构（{ minimax, grok, minimaxH3_768p }）。
+  // 旧 minimax 扁平结构（{ p768Base, twoKBase, excessPerSecond }）对应的全参模型已下线，
+  // 存量旧结构直接回退新默认值。
+  const videoRaw = (source.video && typeof source.video === 'object' ? source.video : {}) as Partial<VideoCreditPricing>;
+  const minimaxVideo: Partial<MinimaxVideoCreditPricing> = videoRaw.minimax || {};
   const grokVideo: Partial<GrokVideoCreditPricing> = videoRaw.grok || {};
   const minimaxH3_768pVideo: Partial<MinimaxH3_768pVideoCreditPricing> = videoRaw.minimaxH3_768p || {};
 
@@ -264,9 +268,8 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     },
     video: {
       minimax: {
-        p768Base: positiveCredit(minimaxVideo.p768Base, DEFAULT_MODEL_CREDIT_PRICING.video.minimax.p768Base),
-        twoKBase: positiveCredit(minimaxVideo.twoKBase, DEFAULT_MODEL_CREDIT_PRICING.video.minimax.twoKBase),
-        excessPerSecond: positiveCredit(minimaxVideo.excessPerSecond, DEFAULT_MODEL_CREDIT_PRICING.video.minimax.excessPerSecond),
+        p720PerSecond: positiveCredit(minimaxVideo.p720PerSecond, DEFAULT_MODEL_CREDIT_PRICING.video.minimax.p720PerSecond),
+        p1080PerSecond: positiveCredit(minimaxVideo.p1080PerSecond, DEFAULT_MODEL_CREDIT_PRICING.video.minimax.p1080PerSecond),
       },
       grok: {
         p480Base: positiveCredit(grokVideo.p480Base, DEFAULT_MODEL_CREDIT_PRICING.video.grok.p480Base),
@@ -340,8 +343,14 @@ export function getConfiguredVideoCredits(
     const base = resolution === '720p' ? pricing.video.grok.p720Base : pricing.video.grok.p480Base;
     return base + excess * pricing.video.grok.excessPerSecond;
   }
-  const base = resolution === '2K' ? pricing.video.minimax.twoKBase : pricing.video.minimax.p768Base;
-  return base + excess * pricing.video.minimax.excessPerSecond;
+  // MiniMax H3（720p/1080p）：按秒计费，总价 = 秒数 × 对应档每秒单价。
+  if (normalizedModel === 'minimax-h3') {
+    const perSecond = resolution === '1080p'
+      ? pricing.video.minimax.p1080PerSecond
+      : pricing.video.minimax.p720PerSecond;
+    return safeSeconds * perSecond;
+  }
+  return 0;
 }
 
 /** 视频参考图阶梯加价：前 5 张免费。 */

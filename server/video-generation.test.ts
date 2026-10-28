@@ -15,22 +15,23 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 test('normalizes resolution, aspect and seconds per model', () => {
-  // minimax-h3：仅 768p/2K，比例 16:9/9:16/1:1
-  assert.equal(normalizeVideoResolution('minimax-h3', '768p'), '768p');
-  assert.equal(normalizeVideoResolution('minimax-h3', '1080p'), '768p');
-  assert.equal(normalizeVideoResolution('minimax-h3', '2K'), '2K');
-  assert.equal(normalizeVideoResolution('minimax-h3', '4K'), '768p');
+  // minimax-h3：720p/1080p（2026-10-28 新文档），比例 16:9/9:16
+  assert.equal(normalizeVideoResolution('minimax-h3', '720p'), '720p');
+  assert.equal(normalizeVideoResolution('minimax-h3', '1080p'), '1080p');
+  assert.equal(normalizeVideoResolution('minimax-h3', '2K'), '720p');
+  assert.equal(normalizeVideoResolution('minimax-h3', '768p'), '720p');
+  assert.equal(normalizeVideoResolution('minimax-h3', '4K'), '720p');
   // grok-imagine-video-1.5：480p/720p，比例 5 种
   assert.equal(normalizeVideoResolution('grok-imagine-video-1.5', '720p'), '720p');
   assert.equal(normalizeVideoResolution('grok-imagine-video-1.5', '480p'), '480p');
   assert.equal(normalizeVideoResolution('grok-imagine-video-1.5', '2K'), '480p');
   assert.equal(normalizeVideoSeconds(5), 5);
-  assert.equal(normalizeVideoSeconds(1), 4);
+  assert.equal(normalizeVideoSeconds(1), 3);
   assert.equal(normalizeVideoSeconds(99), VIDEO_MAX_SECONDS);
   assert.equal(normalizeVideoSeconds('x'), VIDEO_DEFAULT_SECONDS);
   assert.equal(normalizeVideoAspect('minimax-h3', '16:9'), '16:9');
   assert.equal(normalizeVideoAspect('minimax-h3', '9:16'), '9:16');
-  assert.equal(normalizeVideoAspect('minimax-h3', '1:1'), '1:1');
+  assert.equal(normalizeVideoAspect('minimax-h3', '1:1'), '16:9');
   assert.equal(normalizeVideoAspect('minimax-h3', '21:9'), '16:9');
   assert.equal(normalizeVideoAspect('minimax-h3', '4:3'), '16:9');
   assert.equal(normalizeVideoAspect('grok-imagine-video-1.5', '4:3'), '4:3');
@@ -43,13 +44,13 @@ test('normalizes resolution, aspect and seconds per model', () => {
   assert.equal(normalizeVideoAspect('minimax-h3-768p', '21:9'), '16:9');
 });
 
-test('submits 全参MinimaxH3 with resolution and aspect_ratio', async () => {
+test('submits MiniMax H3 with resolution and aspect_ratio', async () => {
   let submitUrl = '';
   let submitInit: RequestInit | undefined;
   let polls = 0;
 
   const result = await generateUselgVideo(
-    { modelId: 'minimax-h3', prompt: '一只白鹭沿海骑车', resolution: '768p', aspect: '16:9', seconds: 6, referenceImages: ['https://example.com/ref.jpg'] },
+    { modelId: 'minimax-h3', prompt: '一只白鹭沿海骑车', resolution: '720p', aspect: '16:9', seconds: 6, referenceImages: ['https://example.com/ref.jpg'] },
     {
       baseUrl: 'https://api.ai-media.vip',
       apiKey: 'secret',
@@ -76,28 +77,28 @@ test('submits 全参MinimaxH3 with resolution and aspect_ratio', async () => {
   assert.match(headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
   const body = JSON.parse(String(submitInit?.body));
   assert.deepEqual(body, {
-    model: '全参MinimaxH3',
+    model: 'minimax-h3',
     prompt: '一只白鹭沿海骑车',
     seconds: 6,
-    resolution: '768p',
+    resolution: '720p',
     aspect_ratio: '16:9',
     reference_images: [{ url: 'https://example.com/ref.jpg' }],
   });
   assert.equal(polls, 1);
-  assert.equal(result.model, '全参MinimaxH3');
+  assert.equal(result.model, 'minimax-h3');
   assert.equal(result.taskId, 'vidtask_123');
   assert.equal(result.contentType, 'video/mp4');
   assert.equal(result.buffer.toString(), 'mp4-bytes');
 });
 
-test('submits reference videos and audios as url arrays with caps applied', async () => {
+test('omits reference_videos and reference_audios for minimax-h3', async () => {
   let submitInit: RequestInit | undefined;
 
   await generateUselgVideo(
     {
       modelId: 'minimax-h3',
       prompt: '带素材的短片',
-      resolution: '2K',
+      resolution: '1080p',
       aspect: '9:16',
       seconds: 5,
       referenceImages: [],
@@ -119,18 +120,10 @@ test('submits reference videos and audios as url arrays with caps applied', asyn
   );
 
   const body = JSON.parse(String(submitInit?.body));
-  assert.equal(body.model, '全参MinimaxH3');
-  // 参考视频最多 3 段：只保留前 3 个合法 HTTP(S) URL
-  assert.deepEqual(body.reference_videos, [
-    { url: 'https://example.com/v1.mp4' },
-    { url: 'https://example.com/v2.mp4' },
-    { url: 'https://example.com/v3.mp4' },
-  ]);
-  // data: URL 不是公网地址，会被过滤掉
-  assert.deepEqual(body.reference_audios, [
-    { url: 'https://example.com/a1.mp3' },
-    { url: 'https://example.com/a2.wav' },
-  ]);
+  assert.equal(body.model, 'minimax-h3');
+  // 2026-10-28 新文档：minimax-h3 不支持参考视频/音频，即使传入也不下发
+  assert.equal('reference_videos' in body, false);
+  assert.equal('reference_audios' in body, false);
 });
 
 test('polls until completed then downloads', async () => {
@@ -139,7 +132,7 @@ test('polls until completed then downloads', async () => {
   let downloadCalls = 0;
 
   await generateUselgVideo(
-    { modelId: 'minimax-h3', prompt: '短片', resolution: '2K', aspect: '16:9', seconds: 4, referenceImages: [] },
+    { modelId: 'minimax-h3', prompt: '短片', resolution: '1080p', aspect: '16:9', seconds: 4, referenceImages: [] },
     {
       baseUrl: 'https://api.ai-media.vip/',
       apiKey: 'Bearer sk-test',
@@ -167,7 +160,7 @@ test('polls until completed then downloads', async () => {
 test('throws when the task enters a failed state', async () => {
   await assert.rejects(
     generateUselgVideo(
-      { modelId: 'minimax-h3', prompt: '短片', resolution: '768p', aspect: '16:9', seconds: 5, referenceImages: [] },
+      { modelId: 'minimax-h3', prompt: '短片', resolution: '720p', aspect: '16:9', seconds: 5, referenceImages: [] },
       {
         baseUrl: 'https://api.ai-media.vip',
         apiKey: 'secret',
@@ -187,7 +180,7 @@ test('throws when the task enters a failed state', async () => {
 test('omits reference_images when empty and always sends resolution + aspect_ratio', async () => {
   let body: Record<string, unknown> = {};
   await generateUselgVideo(
-    { modelId: 'minimax-h3', prompt: '文生视频', resolution: '2K', aspect: '1:1', seconds: 5, referenceImages: [] },
+    { modelId: 'minimax-h3', prompt: '文生视频', resolution: '1080p', aspect: '9:16', seconds: 5, referenceImages: [] },
     {
       baseUrl: 'https://api.ai-media.vip',
       apiKey: 'secret',
@@ -201,15 +194,15 @@ test('omits reference_images when empty and always sends resolution + aspect_rat
     },
   );
   assert.equal('reference_images' in body, false);
-  assert.equal(body.resolution, '2K');
-  assert.equal(body.aspect_ratio, '1:1');
+  assert.equal(body.resolution, '1080p');
+  assert.equal(body.aspect_ratio, '9:16');
   // 新契约不再下发 size / quality
   assert.equal('size' in body, false);
   assert.equal('quality' in body, false);
 });
 
 test('passes through supported aspect ratios in the submit body', async () => {
-  async function submitBody(resolution: '768p' | '2K', aspect: '16:9' | '9:16' | '1:1') {
+  async function submitBody(resolution: '720p' | '1080p', aspect: '16:9' | '9:16') {
     let body: Record<string, unknown> = {};
     await generateUselgVideo(
       { modelId: 'minimax-h3', prompt: 'p', resolution, aspect, seconds: 5, referenceImages: [] },
@@ -228,16 +221,16 @@ test('passes through supported aspect ratios in the submit body', async () => {
     return body;
   }
 
-  const body2k = await submitBody('2K', '1:1');
-  assert.equal(body2k.resolution, '2K');
-  assert.equal(body2k.aspect_ratio, '1:1');
+  const body1080 = await submitBody('1080p', '16:9');
+  assert.equal(body1080.resolution, '1080p');
+  assert.equal(body1080.aspect_ratio, '16:9');
   // 任何情况下都只下发 model/resolution/aspect_ratio，不带 size / quality
-  assert.equal('size' in body2k, false);
-  assert.equal('quality' in body2k, false);
+  assert.equal('size' in body1080, false);
+  assert.equal('quality' in body1080, false);
 
-  const body768 = await submitBody('768p', '9:16');
-  assert.equal(body768.resolution, '768p');
-  assert.equal(body768.aspect_ratio, '9:16');
+  const body720 = await submitBody('720p', '9:16');
+  assert.equal(body720.resolution, '720p');
+  assert.equal(body720.aspect_ratio, '9:16');
 });
 
 test('grok maps 480p→lite and 720p→按次 with image caps and no media references', async () => {

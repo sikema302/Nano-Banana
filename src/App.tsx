@@ -21,7 +21,6 @@ import {
   LoaderCircle,
   LogIn,
   Maximize2,
-  Music,
   LogOut,
   MessageCircle,
   Minus,
@@ -834,7 +833,7 @@ function getVideoModelTheme(modelId: VideoModelId) {
 }
 
 function getVideoModelDescription(modelId: VideoModelId) {
-  if (modelId === 'minimax-h3') return '全参 MinimaxH3 视频模型';
+  if (modelId === 'minimax-h3') return '文生 / 图生视频，参考图最多 9 张';
   if (modelId === 'grok-imagine-video-1.5') return 'grok 视频生成模型';
   if (modelId === 'minimax-h3-768p') return '可传参考视频';
   return '';
@@ -1671,6 +1670,7 @@ function HistoryView({
   const isVideoRecord = (item: GenerationRecord) =>
     item.modelId?.startsWith('minimax_h3') ||
     item.modelId === '全参MinimaxH3' ||
+    item.modelId === 'minimax-h3' ||
     item.modelId?.startsWith('grok-imagine-video-1.5') ||
     isVideoAssetUrl(item.imageUrl);
   const imageRecords = records.filter((item) => !isVideoRecord(item));
@@ -3507,12 +3507,11 @@ function AdminModelCreditPanel({
         </section>
 
         <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-          <h3 className="font-black text-emerald-100">视频生成 · 全参 MinimaxH3</h3>
-          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；10 秒内固定底价，超出 10 秒每秒加价。</p>
+          <h3 className="font-black text-emerald-100">视频生成 · MiniMax H3</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；纯按秒计费，总价 = 秒数 × 对应档每秒单价。</p>
           <div className="mt-3">
-            {row('768p 底价', '10 秒内固定扣分', creditInput(draft.video.minimax.p768Base, (value) => setMinimaxVideo('p768Base', value)))}
-            {row('2K 底价', '10 秒内固定扣分', creditInput(draft.video.minimax.twoKBase, (value) => setMinimaxVideo('twoKBase', value)))}
-            {row('超出每秒加价', '第 11 秒起每秒加价', creditInput(draft.video.minimax.excessPerSecond, (value) => setMinimaxVideo('excessPerSecond', value)))}
+            {row('720p 每秒单价', '总价 = 秒数 × 单价', creditInput(draft.video.minimax.p720PerSecond, (value) => setMinimaxVideo('p720PerSecond', value)))}
+            {row('1080p 每秒单价', '总价 = 秒数 × 单价', creditInput(draft.video.minimax.p1080PerSecond, (value) => setMinimaxVideo('p1080PerSecond', value)))}
           </div>
         </section>
 
@@ -5491,12 +5490,8 @@ export default function App() {
   const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
-  const [videoRefVideos, setVideoRefVideos] = useState<UploadPreview[]>([]);
-  const [videoRefAudios, setVideoRefAudios] = useState<UploadPreview[]>([]);
   const [videoPromptExpandOpen, setVideoPromptExpandOpen] = useState(false);
   const [videoPromptExpandDraft, setVideoPromptExpandDraft] = useState('');
-  const videoRefVideoInputRef = useRef<HTMLInputElement>(null);
-  const videoRefAudioInputRef = useRef<HTMLInputElement>(null);
   const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
   const [videoDragging, setVideoDragging] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([...defaultModels].sort((left, right) => getModelSortOrder(left.id) - getModelSortOrder(right.id)));
@@ -5978,42 +5973,6 @@ export default function App() {
     setVideoReferences((current) => [...current, ...next].slice(0, maxRef));
   }
 
-  // 上游全参 MinimaxH3 支持参考音频（最多 3 段，单文件 ≤50MB，需公网可读 URL，由服务端转存临时文件）。
-  async function appendVideoRefAudioFiles(files: File[]) {
-    const filtered = files.filter((file) => file.type.startsWith('audio/'));
-    if (filtered.length === 0) {
-      setNotice('请选择音频文件');
-      return;
-    }
-    const maxCount = 3;
-    const remaining = Math.max(0, maxCount - videoRefAudios.length);
-    if (remaining === 0) {
-      setNotice('参考音频最多上传 3 段');
-      return;
-    }
-    const accepted = filtered.slice(0, remaining);
-    const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
-    setVideoRefAudios((current) => [...current, ...next].slice(0, maxCount));
-  }
-
-  // minimax_h3-768p 支持参考视频（最多 3 段，单文件 ≤50MB，由服务端转存临时文件）。
-  async function appendVideoRefVideoFiles(files: File[]) {
-    const filtered = files.filter((file) => file.type.startsWith('video/'));
-    if (filtered.length === 0) {
-      setNotice('请选择视频文件');
-      return;
-    }
-    const maxCount = 3;
-    const remaining = Math.max(0, maxCount - videoRefVideos.length);
-    if (remaining === 0) {
-      setNotice('参考视频最多上传 3 段');
-      return;
-    }
-    const accepted = filtered.slice(0, remaining);
-    const next = await Promise.all(accepted.map((file) => fileToBase64(file, 50 * 1024 * 1024, 50)));
-    setVideoRefVideos((current) => [...current, ...next].slice(0, maxCount));
-  }
-
   function selectVideoModel(next: VideoModelId) {
     if (next === videoModel) return;
     setVideoModel(next);
@@ -6022,12 +5981,6 @@ export default function App() {
     setVideoResolution(nextResolution);
     setVideoAspect(spec.aspects[0]);
     setVideoReferences((current) => current.slice(0, spec.maxReferenceImages(nextResolution)));
-    if (next !== 'minimax-h3') {
-      setVideoRefAudios([]);
-    }
-    if (next !== 'minimax-h3-768p') {
-      setVideoRefVideos([]);
-    }
   }
 
   function selectVideoResolution(next: VideoResolution) {
@@ -6094,8 +6047,6 @@ export default function App() {
         aspect: videoAspect,
         seconds: videoSeconds,
         reference_images: videoReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-        reference_videos: videoRefVideos.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-        reference_audios: videoRefAudios.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
       });
       updateVideoSlot(slotId, { jobId: job.id });
       await runVideoSlotJob(slotId, job.id);
@@ -7968,107 +7919,6 @@ export default function App() {
                     </div>
                   </section>
 
-                  {videoModel === 'minimax-h3-768p' ? (
-                  <section className="space-y-1.5">
-                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
-                      <span>
-                        参考视频
-                        <span className="ml-1 text-zinc-500">（可选）</span>
-                      </span>
-                      <span>{videoRefVideos.length} / 3</span>
-                    </div>
-                    <input
-                      ref={videoRefVideoInputRef}
-                      accept="video/*"
-                      className="hidden"
-                      multiple
-                      type="file"
-                      onChange={(event) => {
-                        void appendVideoRefVideoFiles(Array.from(event.target.files || []));
-                        event.target.value = '';
-                      }}
-                    />
-                    <button
-                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
-                      type="button"
-                      onClick={() => videoRefVideoInputRef.current?.click()}
-                    >
-                      <Film size={13} />
-                      添加视频
-                    </button>
-                    {videoRefVideos.length > 0 ? (
-                      <div className="space-y-1">
-                        {videoRefVideos.map((item, index) => (
-                          <div
-                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
-                            key={`${item.id}-${index}`}
-                          >
-                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
-                            <button
-                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
-                              title="移除"
-                              type="button"
-                              onClick={() => setVideoRefVideos((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                            >
-                              <X size={11} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </section>
-                  ) : null}
-
-                  {videoModel === 'minimax-h3' ? (
-                  <section className="space-y-1.5">
-                    <div className="flex items-center justify-between px-0.5 text-[10px] font-bold text-zinc-400">
-                      <span>
-                        参考音频
-                        <span className="ml-1 text-zinc-500">（可选）</span>
-                      </span>
-                      <span>{videoRefAudios.length} / 3</span>
-                    </div>
-                    <input
-                      ref={videoRefAudioInputRef}
-                      accept="audio/*"
-                      className="hidden"
-                      multiple
-                      type="file"
-                      onChange={(event) => {
-                        void appendVideoRefAudioFiles(Array.from(event.target.files || []));
-                        event.target.value = '';
-                      }}
-                    />
-                    <button
-                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2.5 text-[11px] text-zinc-400 transition hover:border-white/30 hover:text-zinc-200"
-                      type="button"
-                      onClick={() => videoRefAudioInputRef.current?.click()}
-                    >
-                      <Music size={13} />
-                      添加音频
-                    </button>
-                    {videoRefAudios.length > 0 ? (
-                      <div className="space-y-1">
-                        {videoRefAudios.map((item, index) => (
-                          <div
-                            className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
-                            key={`${item.id}-${index}`}
-                          >
-                            <span className="truncate text-[10px] text-zinc-300">{item.name}</span>
-                            <button
-                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-rose-300"
-                              title="移除"
-                              type="button"
-                              onClick={() => setVideoRefAudios((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                            >
-                              <X size={11} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </section>
-                  ) : null}
 
                   <section className="space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-1 px-0.5 text-[10px] font-bold text-zinc-400">
@@ -8148,7 +7998,7 @@ export default function App() {
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">视频时长</div>
                     <div className="grid grid-cols-6 gap-1.5">
-                      {Array.from({ length: 12 }, (_, index) => index + 4).map((seconds) => (
+                      {Array.from({ length: 13 }, (_, index) => index + 3).map((seconds) => (
                         <button
                           key={seconds}
                           type="button"

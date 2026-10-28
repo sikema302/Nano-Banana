@@ -1,4 +1,4 @@
-// Uselg(FluxPort) 视频生成渠道：全参 MinimaxH3 与其后的 grok-imagine-video-1.5 文生/图生视频。
+// Uselg(FluxPort) 视频生成渠道：MiniMax H3 与 grok-imagine-video-1.5 文生/图生视频。
 //
 // 契约（与 uselg.top 文档一致，base URL 为 api.ai-media.vip）：
 //   提交  POST /v1/videos             （Authorization: Bearer + Idempotency-Key）
@@ -6,7 +6,10 @@
 //   下载  GET  /v1/videos/{id}/content（video_available=true 且 asset_state=ready 后可下载）
 //
 // 模型与清晰度/比例由共享规格表 VIDEO_MODELS 控制，上游模型名按分辨率映射：
-//   minimax-h3: 768p/2K，比例 16:9/9:16/1:1，参考图 9、视频/音频各 3；上游模型 `全参MinimaxH3`
+//   minimax-h3: 720p/1080p，比例 16:9/9:16，参考图最多 9、无参考视频/音频；按秒计费
+//     （720p $0.075/s、1080p $0.138/s）；上游模型 `minimax-h3`
+//     （2026-10-28 新文档 group 105 / offer media_9efd2d1e；旧 `全参MinimaxH3`、
+//     `minimax_h3-768p` 上游均已下线）。
 //   grok-imagine-video-1.5: 480p/720p，比例 5 种，480p 参考图 1、720p 参考图 7，无视频/音频；
 //     上游模型 480p→`grok-imagine-video-1.5-lite`、720p→`grok-imagine-video-1.5（按次）`
 
@@ -33,9 +36,9 @@ export type UselgVideoInput = {
   seconds: number;
   /** 参考图（图生视频），最多由模型规格决定。 */
   referenceImages: string[];
-  /** 参考视频，最多由模型规格决定（minimax 3 段 / grok 0 段）。 */
+  /** 参考视频，最多由模型规格决定（minimax-h3/grok 均 0 段，不下发）。 */
   referenceVideos?: string[];
-  /** 参考音频，最多由模型规格决定（minimax 3 段 / grok 0 段）。 */
+  /** 参考音频，最多由模型规格决定（minimax-h3/grok 均 0 段，不下发）。 */
   referenceAudios?: string[];
 };
 
@@ -57,7 +60,7 @@ export type UselgVideoResult = {
 
 /** 视频参考图上限（minimax 单模型兜底，供上层切片使用；grok 按分辨率 1/7）。 */
 export const VIDEO_MAX_REFERENCE_IMAGES = 9;
-export const VIDEO_MIN_SECONDS = 4;
+export const VIDEO_MIN_SECONDS = 3;
 export const VIDEO_MAX_SECONDS = 15;
 export const VIDEO_DEFAULT_SECONDS = 5;
 
