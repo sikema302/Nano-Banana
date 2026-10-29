@@ -2324,9 +2324,20 @@ type VideoGenerationInput = {
 };
 
 async function callVideoGeneration(input: VideoGenerationInput) {
-  if (!USELG_VIDEO_API_KEY) {
-    throw new Error('视频渠道尚未配置 API Key（USELG_VIDEO_API_KEY）');
+  // MiniMax H3 优化版走君临渠道，复用君临图像同一把 Key；其余视频模型仍走 uselg。
+  const useJunliai = input.modelId === 'minimax-h3-optimized';
+  const apiKey = useJunliai ? JUNLIAI_API_KEY : USELG_VIDEO_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      useJunliai
+        ? '视频渠道尚未配置 API Key（JUNLIAI_API_KEY）'
+        : '视频渠道尚未配置 API Key（USELG_VIDEO_API_KEY）',
+    );
   }
+  // 君临 base 环境变量带 /v1 后缀（用于图像接口），视频接口自行拼 /v1/videos，这里去掉后缀。
+  const baseUrl = useJunliai
+    ? JUNLIAI_BASE_URL.replace(/\/+$/, '').replace(/\/v1$/i, '')
+    : USELG_VIDEO_BASE_URL;
   return generateUselgVideo(
     {
       modelId: input.modelId,
@@ -2339,8 +2350,8 @@ async function callVideoGeneration(input: VideoGenerationInput) {
       referenceAudios: input.referenceAudios,
     },
     {
-      baseUrl: USELG_VIDEO_BASE_URL,
-      apiKey: USELG_VIDEO_API_KEY,
+      baseUrl,
+      apiKey,
       timeoutMs: USELG_VIDEO_TIMEOUT_MS,
       maxConcurrent: USELG_VIDEO_MAX_CONCURRENCY,
     },
