@@ -5499,10 +5499,10 @@ export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [creationMode, setCreationMode] = useState<'image' | 'video'>('image');
   const [videoPrompt, setVideoPrompt] = useState('');
-  // minimax-h3 暂时前端隐藏（HIDDEN_VIDEO_MODEL_IDS），默认选中第一个可见模型。
-  const [videoModel, setVideoModel] = useState<VideoModelId>('grok-imagine-video-1.5');
+  // minimax-h3 等已下架模型前端隐藏（HIDDEN_VIDEO_MODEL_IDS），默认选中优化版。
+  const [videoModel, setVideoModel] = useState<VideoModelId>('minimax-h3-optimized');
   const [videoModelMenuOpen, setVideoModelMenuOpen] = useState(false);
-  const [videoResolution, setVideoResolution] = useState<VideoResolution>('480p');
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>('768p');
   const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);

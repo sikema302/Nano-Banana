@@ -119,8 +119,9 @@ export const VIDEO_DEFAULT_MODEL_ID: VideoModelId = 'minimax-h3';
  * 暂时在前端隐藏的模型（模型有问题先下架展示）。
  * 只从创建页选择列表里隐藏，配置与生成链路代码全部保留，恢复时清空数组即可。
  * minimax-h3-768p：上游已下线（2026-10-28），由改造后的 minimax-h3（720p/1080p）替代。
+ * minimax-h3：前端隐藏，改由默认展示的 minimax-h3-optimized（优化版）承接。
  */
-export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3-768p'];
+export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3-768p', 'minimax-h3'];
 
 /** 把前端/历史传入的模型名归一化为内部 VideoModelId，非法值回退 minimax-h3。 */
 export function normalizeVideoModelId(value: unknown): VideoModelId {
