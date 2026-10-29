@@ -70,6 +70,7 @@ import {
   getConfiguredImageCredits,
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
+  supportsVideoReferenceImageSurcharge,
   normalizeModelCreditPricing,
   normalizeVideoModelId,
   resolveGenerationRecordModelFilter,
@@ -2291,7 +2292,7 @@ function getModelCredits(modelId: string, imageSize = '', quality = '') {
   return getConfiguredImageCredits(activeModelCreditPricing, modelId, imageSize, quality);
 }
 
-/** 视频总积分 = 底价（按模型/清晰度）+ 超出 10 秒每秒加价 + 参考图阶梯加价（第 6 张起每张 +30）。 */
+/** 视频总积分 = 底价（按模型/清晰度）+ 超出 10 秒每秒加价 + 参考图阶梯加价（第 6 张起每张 +30，优化版不加价）。 */
 function getVideoCredits(modelId: VideoModelId, resolution: VideoResolution, seconds: number, referenceImageCount = 0) {
   const credits = getConfiguredVideoCredits(
     activeModelCreditPricing,
@@ -2306,6 +2307,7 @@ function getVideoCredits(modelId: VideoModelId, resolution: VideoResolution, sec
     Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0,
     maxImages,
   );
+  if (!supportsVideoReferenceImageSurcharge(modelId)) return credits;
   return credits + getVideoReferenceImageSurcharge(billableReferenceImages);
 }
 

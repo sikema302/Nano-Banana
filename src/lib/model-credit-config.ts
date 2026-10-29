@@ -29,7 +29,7 @@ export type GrokImageCreditPricing = {
 };
 
 /** 视频模型标识（内部规范化 ID）。 */
-export type VideoModelId = 'minimax-h3' | 'grok-imagine-video-1.5' | 'minimax-h3-768p';
+export type VideoModelId = 'minimax-h3' | 'grok-imagine-video-1.5' | 'minimax-h3-768p' | 'minimax-h3-optimized';
 
 /** 视频清晰度档：minimax 用 720p/1080p，grok 用 480p/720p。 */
 export type VideoResolution = '768p' | '2K' | '480p' | '720p' | '1080p';
@@ -98,6 +98,18 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     // 规格与计费保留用于历史记录兼容。
     upstreamModelFor: () => 'minimax_h3-768p',
   },
+  'minimax-h3-optimized': {
+    id: 'minimax-h3-optimized',
+    label: 'MiniMax H3 优化版',
+    historyModelId: 'minimax-h3-optimized',
+    // 上游自部署优化版：仅 768p（720p 按兼容规则也归到 768p）、4–15 秒、参考图最多 9。
+    resolutions: ['768p'],
+    aspects: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    maxReferenceImages: () => 9,
+    maxReferenceVideos: 3,
+    maxReferenceAudios: 3,
+    upstreamModelFor: () => 'minimax-h3-optimized',
+  },
 };
 
 export const VIDEO_MODEL_IDS = Object.keys(VIDEO_MODELS) as VideoModelId[];
@@ -115,6 +127,7 @@ export function normalizeVideoModelId(value: unknown): VideoModelId {
   if (value === 'minimax-h3' || value === 'minimax_h3' || value === '全参MinimaxH3') return 'minimax-h3';
   if (value === 'grok-imagine-video-1.5') return 'grok-imagine-video-1.5';
   if (value === 'minimax-h3-768p' || value === 'minimax_h3-768p' || value === 'minimax_h3_768p') return 'minimax-h3-768p';
+  if (value === 'minimax-h3-optimized' || value === 'minimax_h3-optimized' || value === 'minimax_h3_optimized') return 'minimax-h3-optimized';
   return VIDEO_DEFAULT_MODEL_ID;
 }
 
@@ -133,6 +146,7 @@ export const GENERATION_RECORD_MODEL_FILTERS: Array<{ label: string; modelIds: s
   { label: 'Grok Image', modelIds: ['Grok_Image', 'grok-image', 'grok_image'] },
   { label: 'MiniMax H3', modelIds: ['全参MinimaxH3', 'minimax_h3', 'minimax-h3'] },
   { label: 'MiniMax H3 768p', modelIds: ['minimax_h3-768p', 'minimax-h3-768p'] },
+  { label: 'MiniMax H3 优化版', modelIds: ['minimax-h3-optimized', 'minimax_h3-optimized'] },
   { label: 'grok-imagine-video-1.5', modelIds: ['grok-imagine-video-1.5'] },
 ];
 
@@ -161,10 +175,16 @@ export type MinimaxH3_768pVideoCreditPricing = {
   perSecond: number;
 };
 
+/** minimax-h3-optimized（MiniMax H3 优化版）：纯按秒计费（总价 = 秒数 × 每秒单价）。 */
+export type MinimaxH3OptimizedVideoCreditPricing = {
+  perSecond: number;
+};
+
 export type VideoCreditPricing = {
   minimax: MinimaxVideoCreditPricing;
   grok: GrokVideoCreditPricing;
   minimaxH3_768p: MinimaxH3_768pVideoCreditPricing;
+  minimaxOptimized: MinimaxH3OptimizedVideoCreditPricing;
 };
 
 export type ModelCreditPricing = {
@@ -211,6 +231,7 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
     minimax: { p720PerSecond: 30, p1080PerSecond: 60 },
     grok: { p480Base: 180, p720Base: 320, excessPerSecond: 10 },
     minimaxH3_768p: { perSecond: 48 },
+    minimaxOptimized: { perSecond: 48 },
   },
   updatedAt: '',
 };
@@ -243,6 +264,7 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const minimaxVideo: Partial<MinimaxVideoCreditPricing> = videoRaw.minimax || {};
   const grokVideo: Partial<GrokVideoCreditPricing> = videoRaw.grok || {};
   const minimaxH3_768pVideo: Partial<MinimaxH3_768pVideoCreditPricing> = videoRaw.minimaxH3_768p || {};
+  const minimaxOptimizedVideo: Partial<MinimaxH3OptimizedVideoCreditPricing> = videoRaw.minimaxOptimized || {};
 
   return {
     gptImage2: normalizeGptImagePricing(source.gptImage2),
@@ -278,6 +300,9 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
       },
       minimaxH3_768p: {
         perSecond: positiveCredit(minimaxH3_768pVideo.perSecond, DEFAULT_MODEL_CREDIT_PRICING.video.minimaxH3_768p.perSecond),
+      },
+      minimaxOptimized: {
+        perSecond: positiveCredit(minimaxOptimizedVideo.perSecond, DEFAULT_MODEL_CREDIT_PRICING.video.minimaxOptimized.perSecond),
       },
     },
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : '',
@@ -338,6 +363,10 @@ export function getConfiguredVideoCredits(
   if (normalizedModel === 'minimax-h3-768p') {
     return safeSeconds * pricing.video.minimaxH3_768p.perSecond;
   }
+  // MiniMax H3 优化版（768p）：纯按秒计费，总价 = 秒数 × 每秒单价。
+  if (normalizedModel === 'minimax-h3-optimized') {
+    return safeSeconds * pricing.video.minimaxOptimized.perSecond;
+  }
   const excess = Math.max(0, safeSeconds - VIDEO_BASE_SECONDS);
   if (normalizedModel === 'grok-imagine-video-1.5') {
     const base = resolution === '720p' ? pricing.video.grok.p720Base : pricing.video.grok.p480Base;
@@ -366,4 +395,9 @@ export const VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS = 30;
 export function getVideoReferenceImageSurcharge(referenceImageCount: number) {
   const count = Number.isSafeInteger(referenceImageCount) && referenceImageCount > 0 ? referenceImageCount : 0;
   return Math.max(0, count - VIDEO_REFERENCE_IMAGE_FREE_COUNT) * VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS;
+}
+
+/** MiniMax H3 优化版按秒计价、已含参考图成本，不再叠加参考图阶梯加价。 */
+export function supportsVideoReferenceImageSurcharge(modelId: unknown) {
+  return normalizeVideoModelId(modelId) !== 'minimax-h3-optimized';
 }

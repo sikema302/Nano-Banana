@@ -25,6 +25,7 @@ import {
   MessageCircle,
   Minus,
   Moon,
+  Music,
   Plus,
   RotateCw,
   ShieldCheck,
@@ -139,6 +140,7 @@ import {
   getConfiguredImageCredits,
   getConfiguredVideoCredits,
   getVideoReferenceImageSurcharge,
+  supportsVideoReferenceImageSurcharge,
   GENERATION_RECORD_MODEL_FILTERS,
   HIDDEN_VIDEO_MODEL_IDS,
   VIDEO_MODELS,
@@ -151,6 +153,7 @@ import {
   type MinimaxVideoCreditPricing,
   type GrokVideoCreditPricing,
   type MinimaxH3_768pVideoCreditPricing,
+  type MinimaxH3OptimizedVideoCreditPricing,
 } from './lib/model-credit-config';
 import { findCreationActivityStageIndex } from './lib/creation-activity';
 import { getAiEnhancementRequestFlags } from './lib/image-generation-flags';
@@ -537,7 +540,7 @@ const imageSizeOptions: Array<{ value: ImageSizeOption; label: string; hint: str
   { value: '4K', label: '4K', hint: '\u8d85\u6e05\u8f93\u51fa\uff0c\u7ec6\u8282\u66f4\u5f3a' },
 ];
 
-function fileToBase64(file: File, maxBytes = 25 * 1024 * 1024, maxMB = 25) {
+function fileToBase64(file: File, maxBytes = 25 * 1024 * 1024, maxMB = 25, fallbackMimeType = 'image/png') {
 
   if (file.size > maxBytes) {
     throw new Error(`"${file.name}"超过 ${maxMB}MB，请压缩后再上传`);
@@ -555,7 +558,7 @@ function fileToBase64(file: File, maxBytes = 25 * 1024 * 1024, maxMB = 25) {
       resolve({
         id: `${file.name}-${file.lastModified}`,
         name: file.name,
-        mimeType: file.type || 'image/png',
+        mimeType: file.type || fallbackMimeType,
         data: reader.result,
         previewUrl: reader.result,
       });
@@ -826,6 +829,7 @@ const VIDEO_MODEL_THEME: Record<VideoModelId, { glow: string }> = {
   'minimax-h3': { glow: 'rgba(251,146,60,0.45)' },
   'grok-imagine-video-1.5': { glow: 'rgba(56,189,248,0.45)' },
   'minimax-h3-768p': { glow: 'rgba(250,204,21,0.45)' },
+  'minimax-h3-optimized': { glow: 'rgba(52,211,153,0.45)' },
 };
 
 function getVideoModelTheme(modelId: VideoModelId) {
@@ -836,6 +840,7 @@ function getVideoModelDescription(modelId: VideoModelId) {
   if (modelId === 'minimax-h3') return '文生 / 图生视频，参考图最多 9 张';
   if (modelId === 'grok-imagine-video-1.5') return 'grok 视频生成模型';
   if (modelId === 'minimax-h3-768p') return '可传参考视频';
+  if (modelId === 'minimax-h3-optimized') return '自部署优化版，参考图最多 9 张';
   return '';
 }
 
@@ -3401,6 +3406,9 @@ function AdminModelCreditPanel({
   const setMinimaxH3_768pVideo = (key: keyof MinimaxH3_768pVideoCreditPricing, value: number) => {
     setDraft((current) => ({ ...current, video: { ...current.video, minimaxH3_768p: { ...current.video.minimaxH3_768p, [key]: value } } }));
   };
+  const setMinimaxOptimizedVideo = (key: keyof MinimaxH3OptimizedVideoCreditPricing, value: number) => {
+    setDraft((current) => ({ ...current, video: { ...current.video, minimaxOptimized: { ...current.video.minimaxOptimized, [key]: value } } }));
+  };
   const creditInput = (value: number, onChange: (value: number) => void) => (
     <input
       className="input w-28 text-right font-black"
@@ -3530,6 +3538,14 @@ function AdminModelCreditPanel({
           <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；纯按秒计费，总价 = 秒数 × 每秒单价。</p>
           <div className="mt-3">
             {row('每秒单价', '总价 = 秒数 × 单价', creditInput(draft.video.minimaxH3_768p.perSecond, (value) => setMinimaxH3_768pVideo('perSecond', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-emerald-100">视频生成 · MiniMax H3 优化版</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣通用积分；纯按秒计费，总价 = 秒数 × 每秒单价。</p>
+          <div className="mt-3">
+            {row('每秒单价', '总价 = 秒数 × 单价', creditInput(draft.video.minimaxOptimized.perSecond, (value) => setMinimaxOptimizedVideo('perSecond', value)))}
           </div>
         </section>
       </div>
@@ -5490,6 +5506,8 @@ export default function App() {
   const [videoAspect, setVideoAspect] = useState<VideoAspect>('16:9');
   const [videoSeconds, setVideoSeconds] = useState(5);
   const [videoReferences, setVideoReferences] = useState<UploadPreview[]>([]);
+  const [videoReferenceVideos, setVideoReferenceVideos] = useState<UploadPreview[]>([]);
+  const [videoReferenceAudios, setVideoReferenceAudios] = useState<UploadPreview[]>([]);
   const [videoPromptExpandOpen, setVideoPromptExpandOpen] = useState(false);
   const [videoPromptExpandDraft, setVideoPromptExpandDraft] = useState('');
   const [videoSlots, setVideoSlots] = useState<VideoSlot[]>(createEmptyVideoSlots);
@@ -5500,8 +5518,10 @@ export default function App() {
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoModel, videoResolution, videoSeconds);
-  // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关。
-  const videoReferenceSurcharge = getVideoReferenceImageSurcharge(videoReferences.length);
+  // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关（优化版不加价）。
+  const videoReferenceSurcharge = supportsVideoReferenceImageSurcharge(videoModel)
+    ? getVideoReferenceImageSurcharge(videoReferences.length)
+    : 0;
   const videoTotalCreditCost = videoCreditCost + videoReferenceSurcharge;
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -5973,6 +5993,30 @@ export default function App() {
     setVideoReferences((current) => [...current, ...next].slice(0, maxRef));
   }
 
+  async function appendVideoReferenceVideos(files: File[]) {
+    if (files.length === 0) return;
+    const maxRef = VIDEO_MODELS[videoModel].maxReferenceVideos;
+    const remaining = Math.max(0, maxRef - videoReferenceVideos.length);
+    if (remaining === 0) {
+      setNotice(`最多上传 ${maxRef} 段参考视频`);
+      return;
+    }
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 50 * 1024 * 1024, 50, 'video/mp4')));
+    setVideoReferenceVideos((current) => [...current, ...next].slice(0, maxRef));
+  }
+
+  async function appendVideoReferenceAudios(files: File[]) {
+    if (files.length === 0) return;
+    const maxRef = VIDEO_MODELS[videoModel].maxReferenceAudios;
+    const remaining = Math.max(0, maxRef - videoReferenceAudios.length);
+    if (remaining === 0) {
+      setNotice(`最多上传 ${maxRef} 段参考音频`);
+      return;
+    }
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 20 * 1024 * 1024, 20, 'audio/mpeg')));
+    setVideoReferenceAudios((current) => [...current, ...next].slice(0, maxRef));
+  }
+
   function selectVideoModel(next: VideoModelId) {
     if (next === videoModel) return;
     setVideoModel(next);
@@ -5981,6 +6025,8 @@ export default function App() {
     setVideoResolution(nextResolution);
     setVideoAspect(spec.aspects[0]);
     setVideoReferences((current) => current.slice(0, spec.maxReferenceImages(nextResolution)));
+    setVideoReferenceVideos((current) => current.slice(0, spec.maxReferenceVideos));
+    setVideoReferenceAudios((current) => current.slice(0, spec.maxReferenceAudios));
   }
 
   function selectVideoResolution(next: VideoResolution) {
@@ -6047,6 +6093,8 @@ export default function App() {
         aspect: videoAspect,
         seconds: videoSeconds,
         reference_images: videoReferences.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        reference_videos: videoReferenceVideos.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        reference_audios: videoReferenceAudios.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
       });
       updateVideoSlot(slotId, { jobId: job.id });
       await runVideoSlotJob(slotId, job.id);
@@ -7919,6 +7967,102 @@ export default function App() {
                     </div>
                   </section>
 
+                  {VIDEO_MODELS[videoModel].maxReferenceVideos > 0 ? (
+                    <section className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
+                        <span>上传参考视频（可选）</span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceVideos.length} / {VIDEO_MODELS[videoModel].maxReferenceVideos} · 单个 ≤50MB</span>
+                      </div>
+                      <div className="card bg-transparent! p-1.5">
+                        <div className="flex flex-wrap gap-2">
+                          <label className="btn-secondary flex h-[48px] w-[48px] cursor-pointer flex-col items-center justify-center rounded-xl border-dashed p-0 text-zinc-500 hover:text-white">
+                            <input
+                              className="hidden"
+                              type="file"
+                              accept="video/*"
+                              multiple
+                              onChange={(event) => {
+                                void appendVideoReferenceVideos(Array.from(event.target.files || []));
+                                event.target.value = '';
+                              }}
+                            />
+                            <Film size={15} />
+                            <span className="mt-0.5 text-[9px] font-bold">添加</span>
+                          </label>
+
+                          {videoReferenceVideos.map((item) => (
+                            <div
+                              key={item.id}
+                              className="group relative h-[48px] w-[48px] overflow-hidden rounded-xl border border-white/10 bg-[#101010]"
+                            >
+                              <video
+                                className="h-full w-full object-cover"
+                                src={item.previewUrl}
+                                muted
+                                playsInline
+                                preload="metadata"
+                              />
+                              <button
+                                className="absolute right-0.5 top-0.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-white shadow-[0_2px_8px_rgba(244,63,94,0.45)] transition hover:bg-rose-400"
+                                type="button"
+                                title="删除这段参考视频"
+                                aria-label="删除这段参考视频"
+                                onClick={() => setVideoReferenceVideos((current) => current.filter((ref) => ref.id !== item.id))}
+                              >
+                                <X size={10} strokeWidth={3.2} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {VIDEO_MODELS[videoModel].maxReferenceAudios > 0 ? (
+                    <section className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
+                        <span>上传参考音频（可选）</span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceAudios.length} / {VIDEO_MODELS[videoModel].maxReferenceAudios} · 单个 ≤20MB</span>
+                      </div>
+                      <div className="card bg-transparent! p-1.5">
+                        <div className="flex flex-wrap gap-2">
+                          <label className="btn-secondary flex h-[48px] w-[48px] cursor-pointer flex-col items-center justify-center rounded-xl border-dashed p-0 text-zinc-500 hover:text-white">
+                            <input
+                              className="hidden"
+                              type="file"
+                              accept="audio/*"
+                              multiple
+                              onChange={(event) => {
+                                void appendVideoReferenceAudios(Array.from(event.target.files || []));
+                                event.target.value = '';
+                              }}
+                            />
+                            <Music size={15} />
+                            <span className="mt-0.5 text-[9px] font-bold">添加</span>
+                          </label>
+
+                          {videoReferenceAudios.map((item) => (
+                            <div
+                              key={item.id}
+                              className="group relative flex h-[48px] max-w-[160px] items-center gap-1.5 rounded-xl border border-white/10 bg-[#101010] px-2"
+                            >
+                              <Music size={13} className="shrink-0 text-zinc-400" />
+                              <span className="min-w-0 flex-1 truncate text-[10px] text-zinc-300">{item.name}</span>
+                              <button
+                                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-rose-500 text-white transition hover:bg-rose-400"
+                                type="button"
+                                title="删除这段参考音频"
+                                aria-label="删除这段参考音频"
+                                onClick={() => setVideoReferenceAudios((current) => current.filter((ref) => ref.id !== item.id))}
+                              >
+                                <X size={10} strokeWidth={3.2} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
 
                   <section className="space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-1 px-0.5 text-[10px] font-bold text-zinc-400">
