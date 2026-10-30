@@ -53,6 +53,10 @@ export type VideoModelSpec = {
   maxReferenceVideos: number;
   /** 参考音频上限。 */
   maxReferenceAudios: number;
+  /** 该模型支持的最短时长（整数秒）。 */
+  minSeconds: number;
+  /** 该模型支持的最长时长（整数秒）。 */
+  maxSeconds: number;
   /** 下发到上游的模型名（按清晰度）。 */
   upstreamModelFor: (resolution: VideoResolution) => string;
 };
@@ -67,6 +71,8 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     maxReferenceImages: () => 9,
     maxReferenceVideos: 0,
     maxReferenceAudios: 0,
+    minSeconds: 3,
+    maxSeconds: 15,
     // 2026-10-28 起按 uselg 新文档（group 105 / offer media_9efd2d1e）对接：
     // 平台模型名 minimax-h3，按秒计费 720p $0.075/s、1080p $0.138/s；
     // 仅文生/图生视频，不支持参考视频与参考音频；比例仅 16:9 / 9:16。
@@ -82,6 +88,8 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     maxReferenceImages: (resolution) => (resolution === '720p' ? 7 : 1),
     maxReferenceVideos: 0,
     maxReferenceAudios: 0,
+    minSeconds: 3,
+    maxSeconds: 15,
     upstreamModelFor: (resolution) =>
       resolution === '720p' ? 'grok-imagine-video-1.5（按次）' : 'grok-imagine-video-1.5-lite',
   },
@@ -94,6 +102,8 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     maxReferenceImages: () => 9,
     maxReferenceVideos: 3,
     maxReferenceAudios: 0,
+    minSeconds: 3,
+    maxSeconds: 15,
     // 旧 768p 特供上游（minimax_h3-768p）已于 2026-10-28 下线，模型转入前端隐藏，
     // 规格与计费保留用于历史记录兼容。
     upstreamModelFor: () => 'minimax_h3-768p',
@@ -102,12 +112,16 @@ export const VIDEO_MODELS: Record<VideoModelId, VideoModelSpec> = {
     id: 'minimax-h3-optimized',
     label: 'MiniMax H3 优化版',
     historyModelId: 'minimax-h3-optimized',
-    // 上游自部署优化版：仅 768p（720p 按兼容规则也归到 768p）、4–15 秒、参考图最多 9。
+    // 上游自部署优化版（君临 img.junliai.org 通道）：仅 768p（720p 按兼容规则也归到 768p）、
+    // 参考图最多 9、参考视频/音频各 3。君临文档明确「H3 优化版支持 4–15 整数秒」，
+    // 3 秒及以下会被上游以 400 invalid request body 拒绝。
     resolutions: ['768p'],
     aspects: ['16:9', '9:16', '1:1', '4:3', '3:4'],
     maxReferenceImages: () => 9,
     maxReferenceVideos: 3,
     maxReferenceAudios: 3,
+    minSeconds: 4,
+    maxSeconds: 15,
     upstreamModelFor: () => 'minimax-h3-optimized',
   },
 };
@@ -130,6 +144,12 @@ export function normalizeVideoModelId(value: unknown): VideoModelId {
   if (value === 'minimax-h3-768p' || value === 'minimax_h3-768p' || value === 'minimax_h3_768p') return 'minimax-h3-768p';
   if (value === 'minimax-h3-optimized' || value === 'minimax_h3-optimized' || value === 'minimax_h3_optimized') return 'minimax-h3-optimized';
   return VIDEO_DEFAULT_MODEL_ID;
+}
+
+/** 取模型支持的时长范围（整数秒）——各上游要求不同，如优化版仅支持 4–15 秒。 */
+export function getVideoSecondsRange(modelId: VideoModelId | string): { min: number; max: number } {
+  const spec = VIDEO_MODELS[normalizeVideoModelId(modelId)];
+  return { min: spec.minSeconds, max: spec.maxSeconds };
 }
 
 /**

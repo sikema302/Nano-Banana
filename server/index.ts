@@ -2298,7 +2298,7 @@ function getVideoCredits(modelId: VideoModelId, resolution: VideoResolution, sec
     activeModelCreditPricing,
     modelId,
     normalizeVideoResolution(modelId, resolution),
-    normalizeVideoSeconds(seconds),
+    normalizeVideoSeconds(seconds, modelId),
   );
   const maxImages = VIDEO_MODELS[modelId].maxReferenceImages(
     normalizeVideoResolution(modelId, resolution),
@@ -2352,6 +2352,7 @@ async function callVideoGeneration(input: VideoGenerationInput) {
     {
       baseUrl,
       apiKey,
+      provider: useJunliai ? 'junliai' : 'uselg',
       timeoutMs: USELG_VIDEO_TIMEOUT_MS,
       maxConcurrent: USELG_VIDEO_MAX_CONCURRENCY,
     },
@@ -10172,7 +10173,7 @@ async function start() {
       const modelId = normalizeVideoModelId(normalizeString(req.body?.model_id));
       const resolution = normalizeVideoResolution(modelId, normalizeString(req.body?.resolution));
       const referenceImageCount = Array.isArray(req.body?.reference_images) ? req.body.reference_images.length : 0;
-      const creditsUsed = getVideoCredits(modelId, resolution, normalizeVideoSeconds(req.body?.seconds), referenceImageCount);
+      const creditsUsed = getVideoCredits(modelId, resolution, normalizeVideoSeconds(req.body?.seconds, modelId), referenceImageCount);
       const bucket: CreditBucket = 'general';
 
       if (USE_SUPABASE) {
@@ -10272,7 +10273,7 @@ async function start() {
     const spec = VIDEO_MODELS[modelId];
     const resolution = normalizeVideoResolution(modelId, normalizeString(req.body?.resolution));
     const aspect = normalizeVideoAspect(modelId, normalizeString(req.body?.aspect));
-    const seconds = normalizeVideoSeconds(req.body?.seconds);
+    const seconds = normalizeVideoSeconds(req.body?.seconds, modelId);
     let referenceImagesInput = Array.isArray(req.body?.reference_images)
       ? (req.body.reference_images as ReferenceUploadInput[])
       : [];

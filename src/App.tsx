@@ -139,6 +139,7 @@ import {
   DEFAULT_MODEL_CREDIT_PRICING,
   getConfiguredImageCredits,
   getConfiguredVideoCredits,
+  getVideoSecondsRange,
   getVideoReferenceImageSurcharge,
   supportsVideoReferenceImageSurcharge,
   GENERATION_RECORD_MODEL_FILTERS,
@@ -5518,6 +5519,8 @@ export default function App() {
   const [providerRouting, setProviderRouting] = useState<ProviderRoutingConfig>(defaultProviderRouting);
   const [selectedModel, setSelectedModel] = useState('gpt-image-2');
   const videoCreditCost = getConfiguredVideoCredits(modelCreditPricing, videoModel, videoResolution, videoSeconds);
+  // 各上游支持的时长范围不同（优化版仅 4–15 秒，其余 3–15），秒数选项按当前模型渲染。
+  const videoSecondsRange = getVideoSecondsRange(videoModel);
   // 参考图阶梯加价：前 5 张免费，第 6 张起每张 +30，与时长/分辨率无关（优化版不加价）。
   const videoReferenceSurcharge = supportsVideoReferenceImageSurcharge(videoModel)
     ? getVideoReferenceImageSurcharge(videoReferences.length)
@@ -6024,6 +6027,8 @@ export default function App() {
     const nextResolution = spec.resolutions[0];
     setVideoResolution(nextResolution);
     setVideoAspect(spec.aspects[0]);
+    // 时长范围随模型变化（优化版 4–15 秒），越界时钳制到新范围，避免直接把非法秒数发给上游。
+    setVideoSeconds((current) => Math.min(spec.maxSeconds, Math.max(spec.minSeconds, current)));
     setVideoReferences((current) => current.slice(0, spec.maxReferenceImages(nextResolution)));
     setVideoReferenceVideos((current) => current.slice(0, spec.maxReferenceVideos));
     setVideoReferenceAudios((current) => current.slice(0, spec.maxReferenceAudios));
@@ -8142,7 +8147,7 @@ export default function App() {
                   <section className="space-y-1.5">
                     <div className="px-0.5 text-[10px] font-bold text-zinc-400">视频时长</div>
                     <div className="grid grid-cols-6 gap-1.5">
-                      {Array.from({ length: 13 }, (_, index) => index + 3).map((seconds) => (
+                      {Array.from({ length: videoSecondsRange.max - videoSecondsRange.min + 1 }, (_, index) => videoSecondsRange.min + index).map((seconds) => (
                         <button
                           key={seconds}
                           type="button"

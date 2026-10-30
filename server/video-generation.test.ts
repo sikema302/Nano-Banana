@@ -29,6 +29,14 @@ test('normalizes resolution, aspect and seconds per model', () => {
   assert.equal(normalizeVideoSeconds(1), 3);
   assert.equal(normalizeVideoSeconds(99), VIDEO_MAX_SECONDS);
   assert.equal(normalizeVideoSeconds('x'), VIDEO_DEFAULT_SECONDS);
+  // 优化版（君临通道）只支持 4–15 整数秒：3 秒会被钳到 4，避免上游 400 invalid request body
+  assert.equal(normalizeVideoSeconds(3, 'minimax-h3-optimized'), 4);
+  assert.equal(normalizeVideoSeconds(4, 'minimax-h3-optimized'), 4);
+  assert.equal(normalizeVideoSeconds(15, 'minimax-h3-optimized'), 15);
+  assert.equal(normalizeVideoSeconds(20, 'minimax-h3-optimized'), 15);
+  assert.equal(normalizeVideoSeconds('x', 'minimax-h3-optimized'), VIDEO_DEFAULT_SECONDS);
+  // 其余模型下限仍为 3
+  assert.equal(normalizeVideoSeconds(3, 'minimax-h3'), 3);
   assert.equal(normalizeVideoAspect('minimax-h3', '16:9'), '16:9');
   assert.equal(normalizeVideoAspect('minimax-h3', '9:16'), '9:16');
   assert.equal(normalizeVideoAspect('minimax-h3', '1:1'), '16:9');
@@ -292,4 +300,84 @@ test('grok maps 480p→lite and 720p→按次 with image caps and no media refer
   assert.equal(full.resolution, '720p');
   // 720p 参考图最多 7 张
   assert.equal((full.reference_images as unknown[]).length, 7);
+});
+test('junliai channel: string media arrays + reference_mode=asset + upper-case resolution', async () => {
+  let body: Record<string, unknown> = {};
+  const result = await generateUselgVideo(
+    {
+      modelId: 'minimax-h3-optimized',
+      prompt: '保持 <Picture 1> 的外貌，参考 <Video 1> 的动作',
+      resolution: '768p',
+      aspect: '16:9',
+      // 优化版下限是 4 秒，传 3 应被钳制
+      seconds: 3,
+      referenceImages: ['https://example.com/p1.jpg'],
+      referenceVideos: ['https://example.com/v1.mp4'],
+      referenceAudios: ['https://example.com/a1.mp3'],
+    },
+    {
+      baseUrl: 'https://img.junliai.org',
+      apiKey: 'secret',
+      provider: 'junliai',
+      sleepImpl: async () => {},
+      fetchImpl: async (url, init) => {
+        const u = String(url);
+        if (init?.method === 'POST') {
+          assert.equal(u, 'https://img.junliai.org/v1/videos');
+          body = JSON.parse(String(init?.body));
+          return jsonResponse({ id: 'task_1', status: 'queued' });
+        }
+        // 完成态直接给带临时凭证的 url，应优先下载该地址而不是 /content
+        if (u === 'https://cdn.example.com/out.mp4') {
+          return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'content-type': 'video/mp4' } });
+        }
+        return jsonResponse({ id: 'task_1', status: 'completed', url: 'https://cdn.example.com/out.mp4' });
+      },
+    },
+  );
+
+  assert.equal(body.model, 'minimax-h3-optimized');
+  assert.equal(body.seconds, 4);
+  assert.equal(body.resolution, '768P');
+  assert.equal(body.aspect_ratio, '16:9');
+  // 君临要求 URL 字符串数组，不是 uselg 的 [{ url }] 对象数组
+  assert.deepEqual(body.reference_images, ['https://example.com/p1.jpg']);
+  assert.deepEqual(body.reference_videos, ['https://example.com/v1.mp4']);
+  assert.deepEqual(body.reference_audios, ['https://example.com/a1.mp3']);
+  assert.equal(body.reference_mode, 'asset');
+  assert.equal(result.contentType, 'video/mp4');
+  assert.equal(result.model, 'minimax-h3-optimized');
+});
+
+test('junliai channel omits reference_mode when no media is provided', async () => {
+  let body: Record<string, unknown> = {};
+  await generateUselgVideo(
+    {
+      modelId: 'minimax-h3-optimized',
+      prompt: '海边的日落，镜头缓慢推进',
+      resolution: '768p',
+      aspect: '9:16',
+      seconds: 5,
+      referenceImages: [],
+    },
+    {
+      baseUrl: 'https://img.junliai.org',
+      apiKey: 'secret',
+      provider: 'junliai',
+      sleepImpl: async () => {},
+      fetchImpl: async (_url, init) => {
+        if (init?.method === 'POST') {
+          body = JSON.parse(String(init?.body));
+          return jsonResponse({ id: 'task_2', status: 'completed', url: 'https://cdn.example.com/out.mp4' });
+        }
+        return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'content-type': 'video/mp4' } });
+      },
+    },
+  );
+
+  assert.equal('reference_images' in body, false);
+  assert.equal('reference_mode' in body, false);
+  assert.equal(body.seconds, 5);
+  assert.equal(body.resolution, '768P');
+  assert.equal(body.aspect_ratio, '9:16');
 });

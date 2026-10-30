@@ -12,11 +12,15 @@
 //     `minimax_h3-768p` 上游均已下线）。
 //   grok-imagine-video-1.5: 480p/720p，比例 5 种，480p 参考图 1、720p 参考图 7，无视频/音频；
 //     上游模型 480p→`grok-imagine-video-1.5-lite`、720p→`grok-imagine-video-1.5（按次）`
+//   minimax-h3-optimized: 768p，比例 5 种，参考图 9、参考视频/音频各 3，时长 4–15 秒；
+//     走君临（img.junliai.org）的通用 /v1/videos：媒体字段是 URL 字符串数组、
+//     素材参考需 reference_mode=asset、resolution 用大写档位（768P）。
 
 import { randomUUID } from 'node:crypto';
 import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
 import {
   VIDEO_MODELS,
+  getVideoSecondsRange,
   normalizeVideoModelId,
   type VideoModelId,
   type VideoResolution,
@@ -32,7 +36,7 @@ export type UselgVideoInput = {
   resolution: VideoResolution;
   /** 画面比例，按 aspect_ratio 下发。 */
   aspect: VideoAspect;
-  /** 4–15 的整数秒，默认 5。 */
+  /** 整数秒，范围随模型规格（优化版 4–15，其余 3–15），默认 5。 */
   seconds: number;
   /** 参考图（图生视频），最多由模型规格决定。 */
   referenceImages: string[];
@@ -45,6 +49,13 @@ export type UselgVideoInput = {
 export type UselgVideoOptions = {
   baseUrl: string;
   apiKey: string;
+  /**
+   * 上游协议差异：
+   * - 'uselg'（默认）：媒体字段为 `[{ url }]` 对象数组，resolution 原样小写下发。
+   * - 'junliai'：媒体字段为 URL 字符串数组，含素材时需带 `reference_mode=asset`，
+   *   resolution 用大写档位（如 768P）。
+   */
+  provider?: 'uselg' | 'junliai';
   maxConcurrent?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -83,6 +94,9 @@ type VideoTaskPayload = {
   asset_state?: string;
   status_url?: string;
   poll_after_ms?: number;
+  /** 君临等通道在完成态直接返回带临时凭证的成片地址。 */
+  url?: string;
+  video_url?: string;
 };
 
 function videoError(message: string, status?: number) {
@@ -119,10 +133,15 @@ async function parseJson<T>(response: Response): Promise<{ payload: T; raw: stri
   return { payload, raw };
 }
 
-export function normalizeVideoSeconds(value: unknown) {
+export function normalizeVideoSeconds(value: unknown, modelId?: VideoModelId | string) {
+  const range = modelId
+    ? getVideoSecondsRange(modelId)
+    : { min: VIDEO_MIN_SECONDS, max: VIDEO_MAX_SECONDS };
   const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return VIDEO_DEFAULT_SECONDS;
-  return Math.min(VIDEO_MAX_SECONDS, Math.max(VIDEO_MIN_SECONDS, parsed));
+  if (!Number.isInteger(parsed)) {
+    return Math.min(range.max, Math.max(range.min, VIDEO_DEFAULT_SECONDS));
+  }
+  return Math.min(range.max, Math.max(range.min, parsed));
 }
 
 function resolveSpec(modelId: VideoModelId | string) {
@@ -152,7 +171,7 @@ export async function generateUselgVideo(
   const spec = resolveSpec(modelId);
   const resolution = normalizeVideoResolution(modelId, input.resolution);
   const aspect = normalizeVideoAspect(modelId, input.aspect);
-  const seconds = normalizeVideoSeconds(input.seconds);
+  const seconds = normalizeVideoSeconds(input.seconds, modelId);
   const referenceImages = input.referenceImages
     .filter((url) => /^https?:\/\//i.test(url))
     .slice(0, spec.maxReferenceImages(resolution));
@@ -179,21 +198,33 @@ export async function generateUselgVideo(
 
   try {
     // 1) 提交任务：model 按模型+清晰度映射，清晰度用 resolution、比例用 aspect_ratio 下发。
+    //    两家上游的媒体字段格式不同：uselg 要 [{ url }]，君临要 URL 字符串数组 + reference_mode。
+    const isJunliai = options.provider === 'junliai';
     const submitBody: Record<string, unknown> = {
       model: spec.upstreamModelFor(resolution),
       prompt: input.prompt,
       seconds,
-      resolution,
+      resolution: isJunliai ? resolution.toUpperCase() : resolution,
       aspect_ratio: aspect,
     };
-    if (referenceImages.length > 0) {
-      submitBody.reference_images = referenceImages.map((url) => ({ url }));
-    }
-    if (referenceVideos.length > 0) {
-      submitBody.reference_videos = referenceVideos.map((url) => ({ url }));
-    }
-    if (referenceAudios.length > 0) {
-      submitBody.reference_audios = referenceAudios.map((url) => ({ url }));
+    if (isJunliai) {
+      if (referenceImages.length > 0) submitBody.reference_images = referenceImages;
+      if (referenceVideos.length > 0) submitBody.reference_videos = referenceVideos;
+      if (referenceAudios.length > 0) submitBody.reference_audios = referenceAudios;
+      // 素材参考必须显式声明 asset 模式（首尾帧模式与素材互斥）。
+      if (referenceImages.length + referenceVideos.length + referenceAudios.length > 0) {
+        submitBody.reference_mode = 'asset';
+      }
+    } else {
+      if (referenceImages.length > 0) {
+        submitBody.reference_images = referenceImages.map((url) => ({ url }));
+      }
+      if (referenceVideos.length > 0) {
+        submitBody.reference_videos = referenceVideos.map((url) => ({ url }));
+      }
+      if (referenceAudios.length > 0) {
+        submitBody.reference_audios = referenceAudios.map((url) => ({ url }));
+      }
     }
 
     const submitResponse = await fetchImpl(`${baseUrl}/v1/videos`, {
@@ -236,9 +267,13 @@ export async function generateUselgVideo(
       }
 
       if (isVideoReady(payload)) {
-        // 3) 下载成片
-        const download = await fetchImpl(downloadUrl, {
-          headers: authHeader(options.apiKey),
+        // 3) 下载成片：君临完成态直接给带临时凭证的 url，优先用它（该地址自带鉴权，不附 Authorization）；
+        //    没有 url 时回退到 /v1/videos/{id}/content（uselg 走这条）。
+        const readyUrl = (payload.url || payload.video_url || '').trim();
+        const useDirectUrl = /^https?:\/\//i.test(readyUrl);
+        const downloadTarget = useDirectUrl ? readyUrl : downloadUrl;
+        const download = await fetchImpl(downloadTarget, {
+          ...(useDirectUrl ? {} : { headers: authHeader(options.apiKey) }),
           signal: controller.signal,
         });
         if (download.ok) {
@@ -331,7 +366,7 @@ export function normalizeUselgVideoInput(input: UselgVideoInput) {
     prompt: input.prompt,
     resolution,
     aspect: normalizeVideoAspect(modelId, input.aspect),
-    seconds: normalizeVideoSeconds(input.seconds),
+    seconds: normalizeVideoSeconds(input.seconds, modelId),
     referenceImages: input.referenceImages
       .filter((url) => /^https?:\/\//i.test(url))
       .slice(0, spec.maxReferenceImages(resolution)),
