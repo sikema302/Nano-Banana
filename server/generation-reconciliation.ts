@@ -5,7 +5,7 @@
 // 终局失败并退款，会出现「公司垫付上游成本、用户却被退款」的成本泄漏。
 // 因此必须区分「确定性失败」（可立即终局）与「不确定超时」（进入后台幂等续查）。
 
-export type GenerationResumeKind = 'schat' | 'flux-banana' | 'visionary-lite';
+export type GenerationResumeKind = 'schat' | 'flux-banana' | 'visionary-lite' | 'uselg-video';
 
 /**
  * 后台幂等续查所需的全部信息。绝不包含 apiKey 等密钥——续查时由

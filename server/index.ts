@@ -97,6 +97,7 @@ import {
   normalizeVideoAspect,
   normalizeVideoSeconds,
   VIDEO_MAX_REFERENCE_IMAGES,
+  type UselgVideoInput,
 } from './video-generation.js';
 import { requestSourceLabel } from './request-source-label.js';
 import {
@@ -715,10 +716,10 @@ const USSELG_GPT_IMAGE_25_SUNBURST_MODEL = normalizeEnvValue(
 // 视频生成慢、单任务耗时长，独立并发与超时参数避免挤占图片队列。
 const USELG_VIDEO_API_KEY = normalizeEnvValue(process.env.USELG_VIDEO_API_KEY);
 const USELG_VIDEO_BASE_URL = normalizeEnvValue(process.env.USELG_VIDEO_BASE_URL || 'https://api.ai-media.vip');
-const USELG_VIDEO_TIMEOUT_MS = Math.max(60_000, Number(process.env.USELG_VIDEO_TIMEOUT_MS || 20 * 60_000));
+const USELG_VIDEO_TIMEOUT_MS = Math.max(60_000, Number(process.env.USELG_VIDEO_TIMEOUT_MS || 35 * 60_000));
 const USELG_VIDEO_MAX_CONCURRENCY = Math.max(1, Math.floor(boundedEnvNumber('USELG_VIDEO_MAX_CONCURRENCY', 5, 1, 30)));
 
-// 视频生成独立队列：视频任务耗时长（最长 20 分钟），与图片队列分离，
+// 视频生成独立队列：视频任务耗时长（最长 35 分钟），与图片队列分离，
 // 避免慢视频任务占满图片并发位。共享同一个资源监控，系统压力高时同样排队。
 const videoWorkQueue = new ResourceAwareWorkQueue(
   generationResourceMonitor,
@@ -10082,7 +10083,8 @@ async function start() {
           'X-Pixory-Video-Job': job.id,
         },
         body: JSON.stringify(job.requestBody),
-        signal: AbortSignal.timeout(21 * 60_000),
+        // 内网超时必须 > 视频生成超时（35 分钟），否则上游还在跑时内网先掐断，无法进入续查。
+        signal: AbortSignal.timeout(40 * 60_000),
       });
       job.requestBody = null;
       job.authHeader = '';
@@ -10090,7 +10092,7 @@ async function start() {
       const response = await responsePromise;
 
       const responseText = await response.text().catch(() => '');
-      let payload: { video?: GeneratedVideoPayload; error?: unknown } | null = null;
+      let payload: { video?: GeneratedVideoPayload; error?: unknown; indeterminate?: boolean } | null = null;
       if (responseText) {
         try {
           payload = JSON.parse(responseText);
@@ -10101,6 +10103,11 @@ async function start() {
 
       if (!response.ok) {
         throw new Error(payload?.error ? String(payload.error) : `Video generation failed (${response.status})`);
+      }
+      // 视频任务「不确定」：/api/video 已登记后台对账，这里保持 processing，
+      // 终态（迟到成功/终局失败）由视频对账器写入，绝不能在此误判为失败。
+      if (payload?.indeterminate) {
+        return;
       }
       if (!payload?.video) {
         throw new Error('Video generation failed: missing video result');
@@ -10123,6 +10130,156 @@ async function start() {
       }
     }
   }
+
+  // ── 视频「不确定」异步任务的后台对账 ───────────────────────────────────────
+  // 视频整体超时（任务已提交但没等到成片）不得立即判失败退款：上游可能仍在生成并计费。
+  // 复用 taskId 幂等续查，迟到成功补扣 + 补交付，终局失败才释放预留。
+  // 单次续查探测窗口：只给「查询+下载成片」一个短窗口，避免慢视频长时间阻塞对账器 tick；
+  // 仍不确定则抛 indeterminate 交给下个 tick 重试，直至超过对账总窗口（20 分钟）才终局失败。
+  const VIDEO_RECONCILE_PROBE_TIMEOUT_MS = 5 * 60_000;
+  type VideoPendingReconciliation = ReconciliationEntry & {
+    resume: GenerationResume;
+    userId: string;
+    username: string;
+    creditsUsed: number;
+    reserved: { bucket: CreditBucket; amount: number };
+    input: UselgVideoInput;
+    historyModelId: string;
+    modelName: string;
+    referenceImages: string[];
+    createdAt: string;
+    apiRequestStartedAt: number;
+    submissionRequestId: string;
+  };
+
+  async function resumeIndeterminateVideo(entry: VideoPendingReconciliation): Promise<string> {
+    const { resume, input } = entry;
+    const useJunliai = resume.channelId === 'junliai';
+    const apiKey = useJunliai ? JUNLIAI_API_KEY : USELG_VIDEO_API_KEY;
+    if (!apiKey) {
+      throw Object.assign(new Error('Video channel api key is not configured'), { safeToFallback: true });
+    }
+    const baseUrl = useJunliai
+      ? JUNLIAI_BASE_URL.replace(/\/+$/, '').replace(/\/v1$/i, '')
+      : USELG_VIDEO_BASE_URL;
+    const result = await generateUselgVideo(input, {
+      baseUrl,
+      apiKey,
+      provider: useJunliai ? 'junliai' : 'uselg',
+      timeoutMs: VIDEO_RECONCILE_PROBE_TIMEOUT_MS,
+      maxConcurrent: USELG_VIDEO_MAX_CONCURRENCY,
+      resumeTask: { taskId: resume.taskId },
+    });
+    // 续查拿到成片：立即落盘，返回 videoPath（落盘失败则抛错 → 保持 pending 等窗口到期）。
+    return persistGeneratedVideo(result.buffer, result.contentType);
+  }
+
+  async function recordReconciledVideoHistory(entry: VideoPendingReconciliation, videoPath: string) {
+    const apiRequestMs = Math.max(0, Date.now() - entry.apiRequestStartedAt);
+    if (USE_SUPABASE) {
+      const db = await getSupabaseDb();
+      await withRecordingRetry(() => db.insertGeneration({
+        userId: entry.userId,
+        username: entry.username,
+        prompt: entry.input.prompt,
+        modelId: entry.historyModelId,
+        modelName: entry.modelName,
+        dimensions: 'video',
+        imageSize: entry.input.resolution,
+        imagePath: videoPath,
+        creditsUsed: entry.creditsUsed,
+        apiRequestMs,
+        referenceImages: entry.referenceImages,
+        createdAt: entry.createdAt,
+        requestId: entry.submissionRequestId,
+      }));
+      return;
+    }
+    try {
+      await withRecordingRetry(() => withWriteDb((db) => {
+        ensureSchema(db);
+        db.run(
+          `INSERT INTO generations (
+            user_id, username, prompt, model_id, model_name, dimensions,
+            image_size, image_path, credits_used, api_request_ms, reference_images, created_at, request_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            entry.userId, entry.username, entry.input.prompt, entry.historyModelId, entry.modelName,
+            'video', entry.input.resolution, videoPath, entry.creditsUsed, apiRequestMs,
+            serializeReferenceImages(entry.referenceImages), entry.createdAt, entry.submissionRequestId,
+          ],
+        );
+      }));
+    } catch (insertError) {
+      const insertMessage = insertError instanceof Error ? insertError.message : String(insertError);
+      if (!entry.submissionRequestId || !/UNIQUE constraint failed:.*request_id/i.test(insertMessage)) {
+        throw insertError;
+      }
+      return; // 幂等键已写过历史，不重复累加统计
+    }
+  }
+
+  async function failPendingVideoReconciliation(entry: VideoPendingReconciliation, detail: string) {
+    releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+    const message = GENERATION_FAILURE_MESSAGES.indeterminate;
+    try {
+      await markGenerationRequestFailed(entry.requestId, message, {
+        preserveCredits: false,
+        detail: generationFailureDetail('indeterminate', detail),
+      });
+    } catch (markError) {
+      console.warn('[video-reconcile] failed to mark request as failed:', markError);
+    }
+    const current = videoJobs.get(entry.jobId);
+    if (current && current.status !== 'succeeded' && current.status !== 'failed') {
+      setVideoJobTerminal(entry.jobId, { status: 'failed', error: message, creditsCharged: false, creditsUsed: 0 });
+    }
+  }
+
+  const videoReconciler = createGenerationReconciler<VideoPendingReconciliation>({
+    resume: (entry) => resumeIndeterminateVideo(entry),
+    onSuccess: async (entry, videoPath) => {
+      const current = videoJobs.get(entry.jobId);
+      // 幂等：若 job 已终态（并发/重放），只释放预留，绝不重复扣款。
+      if (!current || current.status === 'succeeded' || current.status === 'failed') {
+        releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+        return;
+      }
+      const charged = await debitUserCredits(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+      releaseCreditReservation(entry.userId, entry.reserved.bucket, entry.reserved.amount);
+      creditAudit('debit', entry.userId, entry.username, entry.reserved.bucket, entry.reserved.amount,
+        { modelId: entry.historyModelId, reconciled: true }, entry.submissionRequestId);
+      try {
+        await recordReconciledVideoHistory(entry, videoPath);
+      } catch (historyError) {
+        console.error('[video-reconcile] history recording failed after charge:', historyError);
+      }
+      try {
+        await markGenerationRequestSucceeded(entry.requestId, { imagePath: videoPath, creditsUsed: entry.creditsUsed });
+      } catch (markError) {
+        console.warn('[video-reconcile] failed to mark request as succeeded:', markError);
+      }
+      const payload: GeneratedVideoPayload = {
+        prompt: entry.input.prompt,
+        modelName: entry.modelName,
+        resolution: entry.input.resolution,
+        seconds: entry.input.seconds,
+        videoPath,
+        referenceImages: entry.referenceImages,
+        createdAt: entry.createdAt,
+      };
+      setVideoJobTerminal(entry.jobId, {
+        status: 'succeeded',
+        video: payload,
+        creditsCharged: true,
+        creditsUsed: entry.creditsUsed,
+        creditsRemaining: charged.remainingCredits,
+      });
+      console.log(`[video-reconcile] late success jobId=${entry.jobId} taskId=${entry.resume.taskId}`);
+    },
+    onConfirmedFailure: (entry, reason) => failPendingVideoReconciliation(entry, reason),
+    onExpired: (entry) => failPendingVideoReconciliation(entry, `reconciliation window exceeded for task ${entry.resume.taskId}`),
+  });
 
   app.post('/api/video/jobs', requireAuth, async (req, res) => {
     const prompt = normalizeString(req.body?.prompt);
@@ -10303,6 +10460,9 @@ async function start() {
     let chargedCreditsRemaining: number | undefined;
     let apiRequestStartedAt = 0;
     let requestContext: { userId: string; username: string; creditsUsed: number; successfulRequestId?: string; referenceImageTypes?: string[] } | null = null;
+    // 续查对账（超时进入 indeterminate）需要复用这两者写历史，故提到 handler 顶层。
+    let persistedReferenceImages: string[] = [];
+    let createdAt = nowIso();
 
     try {
       const historyModelId = spec.historyModelId;
@@ -10340,7 +10500,7 @@ async function start() {
       reservedVideoCredit = { bucket: creditBucket, amount: creditsUsed };
       creditAudit('reserve', req.authUser!.userId, req.authUser!.username, creditBucket, creditsUsed, { modelId: historyModelId, resolution }, requestId);
 
-      const persistedReferenceImages = await persistReferenceImages(referenceImagesInput, historyModelId);
+      persistedReferenceImages = await persistReferenceImages(referenceImagesInput, historyModelId);
       const temporaryReferenceImages = persistedReferenceImages.length > 0 ? [] : await persistTemporaryReferenceImages(referenceImagesInput, historyModelId);
       const temporaryReferenceVideos = await persistTemporaryReferenceMedia(referenceVideosInput, 'video');
       const temporaryReferenceAudios = await persistTemporaryReferenceMedia(referenceAudiosInput, 'audio');
@@ -10373,7 +10533,7 @@ async function start() {
           .filter((item) => item.startsWith('http://') || item.startsWith('https://')),
       ]));
 
-      const createdAt = nowIso();
+      createdAt = nowIso();
       let videoPath = '';
       let apiRequestMs = 0;
       requestContext = {
@@ -10523,6 +10683,62 @@ async function start() {
       });
       res.json({ video: payload });
     } catch (error) {
+      // 视频任务「不确定」（整体超时但任务已提交）：绝不立即判失败释放预留——
+      // 上游可能仍在生成并计费。登记后台对账，复用 taskId 幂等续查，迟到成功补扣 + 补交付。
+      const indeterminateResume = resumeFromError(error);
+      if (indeterminateResume && indeterminateResume.kind === 'uselg-video' && queuedJobId) {
+        const creditsUsed = requestContext?.creditsUsed
+          ?? getVideoCredits(modelId, resolution, seconds, referenceImagesInput.length);
+        const entryReserved: { bucket: CreditBucket; amount: number } = reservedVideoCredit
+          ? { ...reservedVideoCredit }
+          : { bucket: 'general', amount: creditsUsed };
+        const reconRequestId = await tryRecordGenerationRequest({
+          modelId: spec.historyModelId,
+          provider: 'Uselg',
+          configuration: `${resolution}/${seconds}s/video`,
+          durationMs: apiRequestStartedAt > 0 ? Math.max(0, Date.now() - apiRequestStartedAt) : 0,
+          success: false,
+          errorMessage: generationFailureDetail('indeterminate', imageErrorDetail(error)),
+          sourceModel: spec.historyModelId,
+          prompt,
+          requestContext: requestContext ?? {
+            userId: req.authUser!.userId,
+            username: req.authUser!.username,
+            creditsUsed,
+          },
+        });
+        videoReconciler.register({
+          key: `${indeterminateResume.kind}:${indeterminateResume.channelId || ''}:${indeterminateResume.taskId}`,
+          jobId: queuedJobId,
+          requestId: reconRequestId || undefined,
+          startedAtMs: Date.now(),
+          resume: indeterminateResume,
+          userId: req.authUser!.userId,
+          username: req.authUser!.username,
+          creditsUsed,
+          reserved: entryReserved,
+          input: {
+            modelId,
+            prompt,
+            resolution,
+            aspect,
+            seconds,
+            referenceImages: [],
+            referenceVideos: [],
+            referenceAudios: [],
+          },
+          historyModelId: spec.historyModelId,
+          modelName: videoModelName(modelId, resolution),
+          referenceImages: persistedReferenceImages,
+          createdAt,
+          apiRequestStartedAt,
+          submissionRequestId: requestId,
+        });
+        reservedVideoCredit = null; // 预留转交对账器，避免后续重复释放
+        console.warn(`[video] indeterminate upstream task; deferring to reconciliation jobId=${queuedJobId} taskId=${indeterminateResume.taskId}`);
+        res.status(202).json({ status: 'processing', indeterminate: true, message: GENERATION_FAILURE_MESSAGES.indeterminate });
+        return;
+      }
       // 失败：只释放预留，从未扣过款，无需退款。
       if (!upstreamVideoSucceeded && apiRequestStartedAt > 0) {
         void recordVideoProviderMetric({
@@ -13907,6 +14123,7 @@ async function start() {
       // 避免上游迟到出图并计费、而本地已退款造成的成本泄漏。
       setInterval(() => {
         void generationReconciler.tick();
+        void videoReconciler.tick();
       }, GENERATION_RECONCILIATION_INTERVAL_MS);
     }
     if (!R2_STORAGE) setTimeout(() => void backfillGeneratedThumbnails(), 10_000);

@@ -381,3 +381,69 @@ test('junliai channel omits reference_mode when no media is provided', async () 
   assert.equal(body.resolution, '768P');
   assert.equal(body.aspect_ratio, '9:16');
 });
+
+test('resumeTask skips submit and polls the existing task id', async () => {
+  let submitCalled = false;
+  let polledUrl = '';
+
+  const result = await generateUselgVideo(
+    { modelId: 'minimax-h3', prompt: '短片', resolution: '720p', aspect: '16:9', seconds: 5, referenceImages: [] },
+    {
+      baseUrl: 'https://api.ai-media.vip',
+      apiKey: 'secret',
+      sleepImpl: async () => {},
+      fetchImpl: async (url, init) => {
+        const u = String(url);
+        if (init?.method === 'POST') {
+          submitCalled = true;
+          return jsonResponse({ id: 'should-not-submit', status: 'queued' });
+        }
+        if (u.endsWith('/content')) {
+          return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'content-type': 'video/mp4' } });
+        }
+        polledUrl = u;
+        return jsonResponse({ id: 'vidtask_resume', status: 'completed' });
+      },
+      resumeTask: { taskId: 'vidtask_resume' },
+    },
+  );
+
+  assert.equal(submitCalled, false);
+  assert.equal(polledUrl, 'https://api.ai-media.vip/v1/videos/vidtask_resume');
+  assert.equal(result.taskId, 'vidtask_resume');
+  assert.equal(result.buffer.toString(), 'mp4-bytes');
+});
+
+test('timeout after submit throws an indeterminate resumable error', async () => {
+  let submitted = false;
+  await assert.rejects(
+    generateUselgVideo(
+      { modelId: 'minimax-h3', prompt: '短片', resolution: '720p', aspect: '16:9', seconds: 5, referenceImages: [] },
+      {
+        baseUrl: 'https://api.ai-media.vip',
+        apiKey: 'secret',
+        timeoutMs: 5,
+        sleepImpl: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        fetchImpl: async (url, init) => {
+          if (init?.method === 'POST') {
+            submitted = true;
+            return jsonResponse({ id: 'vidtask_timeout', status: 'queued', poll_after_ms: 1 });
+          }
+          if (init?.signal?.aborted) {
+            const error = new Error('This operation was aborted') as Error & { name: string };
+            error.name = 'AbortError';
+            throw error;
+          }
+          return jsonResponse({ id: 'vidtask_timeout', status: 'queued', poll_after_ms: 1 });
+        },
+      },
+    ),
+    (error: Error & { indeterminate?: boolean; resume?: { kind?: string; taskId?: string } }) => {
+      assert.equal(error.indeterminate, true);
+      assert.equal(error.resume?.kind, 'uselg-video');
+      assert.equal(error.resume?.taskId, 'vidtask_timeout');
+      return true;
+    },
+  );
+  assert.equal(submitted, true);
+});

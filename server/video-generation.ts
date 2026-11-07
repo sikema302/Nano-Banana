@@ -18,6 +18,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
+import { indeterminateTaskError } from './generation-reconciliation.js';
 import {
   VIDEO_MODELS,
   getVideoSecondsRange,
@@ -60,6 +61,11 @@ export type UselgVideoOptions = {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (milliseconds: number) => Promise<void>;
+  /**
+   * 幂等续查：提供已提交任务的 taskId 后，跳过「提交」直接轮询并下载成片，
+   * 绝不重复提交上游任务（否则上游会二次计费）。
+   */
+  resumeTask?: { taskId: string };
 };
 
 export type UselgVideoResult = {
@@ -197,65 +203,72 @@ export async function generateUselgVideo(
   let submittedTaskId = '';
 
   try {
+    const isJunliai = options.provider === 'junliai';
+    let payload: VideoTaskPayload = {};
+
     // 1) 提交任务：model 按模型+清晰度映射，清晰度用 resolution、比例用 aspect_ratio 下发。
     //    两家上游的媒体字段格式不同：uselg 要 [{ url }]，君临要 URL 字符串数组 + reference_mode。
-    const isJunliai = options.provider === 'junliai';
-    const submitBody: Record<string, unknown> = {
-      model: spec.upstreamModelFor(resolution),
-      prompt: input.prompt,
-      seconds,
-      resolution: isJunliai ? resolution.toUpperCase() : resolution,
-      aspect_ratio: aspect,
-    };
-    if (isJunliai) {
-      if (referenceImages.length > 0) submitBody.reference_images = referenceImages;
-      if (referenceVideos.length > 0) submitBody.reference_videos = referenceVideos;
-      if (referenceAudios.length > 0) submitBody.reference_audios = referenceAudios;
-      // 素材参考必须显式声明 asset 模式（首尾帧模式与素材互斥）。
-      if (referenceImages.length + referenceVideos.length + referenceAudios.length > 0) {
-        submitBody.reference_mode = 'asset';
-      }
+    //    resume 模式跳过提交，直接用既有 taskId 轮询（绝不重复提交，避免上游二次计费）。
+    if (options.resumeTask) {
+      submittedTaskId = options.resumeTask.taskId;
     } else {
-      if (referenceImages.length > 0) {
-        submitBody.reference_images = referenceImages.map((url) => ({ url }));
+      const submitBody: Record<string, unknown> = {
+        model: spec.upstreamModelFor(resolution),
+        prompt: input.prompt,
+        seconds,
+        resolution: isJunliai ? resolution.toUpperCase() : resolution,
+        aspect_ratio: aspect,
+      };
+      if (isJunliai) {
+        if (referenceImages.length > 0) submitBody.reference_images = referenceImages;
+        if (referenceVideos.length > 0) submitBody.reference_videos = referenceVideos;
+        if (referenceAudios.length > 0) submitBody.reference_audios = referenceAudios;
+        // 素材参考必须显式声明 asset 模式（首尾帧模式与素材互斥）。
+        if (referenceImages.length + referenceVideos.length + referenceAudios.length > 0) {
+          submitBody.reference_mode = 'asset';
+        }
+      } else {
+        if (referenceImages.length > 0) {
+          submitBody.reference_images = referenceImages.map((url) => ({ url }));
+        }
+        if (referenceVideos.length > 0) {
+          submitBody.reference_videos = referenceVideos.map((url) => ({ url }));
+        }
+        if (referenceAudios.length > 0) {
+          submitBody.reference_audios = referenceAudios.map((url) => ({ url }));
+        }
       }
-      if (referenceVideos.length > 0) {
-        submitBody.reference_videos = referenceVideos.map((url) => ({ url }));
-      }
-      if (referenceAudios.length > 0) {
-        submitBody.reference_audios = referenceAudios.map((url) => ({ url }));
-      }
-    }
 
-    const submitResponse = await fetchImpl(`${baseUrl}/v1/videos`, {
-      method: 'POST',
-      headers: {
-        ...authHeader(options.apiKey),
-        'Content-Type': 'application/json',
-        'Idempotency-Key': idempotencyKey,
-      },
-      body: JSON.stringify(submitBody),
-      signal: controller.signal,
-    });
+      const submitResponse = await fetchImpl(`${baseUrl}/v1/videos`, {
+        method: 'POST',
+        headers: {
+          ...authHeader(options.apiKey),
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify(submitBody),
+        signal: controller.signal,
+      });
 
-    const { payload: submitPayload, raw: submitRaw } = await parseJson<VideoTaskPayload>(submitResponse);
-    if (!submitResponse.ok) {
-      throw videoError(
-        payloadMessage(submitPayload) || `Video provider returned HTTP ${submitResponse.status}: ${submitRaw.slice(0, 240)}`,
-        submitResponse.status,
-      );
-    }
-    submittedTaskId = taskId(submitPayload);
-    if (!submittedTaskId) {
-      throw videoError(`Video provider returned no task id: ${submitRaw.slice(0, 240)}`);
+      const { payload: submitPayload, raw: submitRaw } = await parseJson<VideoTaskPayload>(submitResponse);
+      if (!submitResponse.ok) {
+        throw videoError(
+          payloadMessage(submitPayload) || `Video provider returned HTTP ${submitResponse.status}: ${submitRaw.slice(0, 240)}`,
+          submitResponse.status,
+        );
+      }
+      submittedTaskId = taskId(submitPayload);
+      if (!submittedTaskId) {
+        throw videoError(`Video provider returned no task id: ${submitRaw.slice(0, 240)}`);
+      }
+      payload = submitPayload;
     }
 
     // 2) 轮询状态
-    const statusUrl = submitPayload.status_url
-      ? new URL(submitPayload.status_url, `${baseUrl}/`).toString()
+    const statusUrl = payload.status_url
+      ? new URL(payload.status_url, `${baseUrl}/`).toString()
       : `${baseUrl}/v1/videos/${submittedTaskId}`;
 
-    let payload: VideoTaskPayload = submitPayload;
     let polls = 0;
     let downloadUrl = `${baseUrl}/v1/videos/${submittedTaskId}/content`;
 
@@ -334,12 +347,18 @@ export async function generateUselgVideo(
       payloadMessage(payload) || `Video task result is uncertain (${taskStatus(payload) || 'unknown'})`,
     );
   } catch (error) {
+    // 整体超时但任务已提交：结果「不确定」——任务大概率仍在上游队列里跑、之后可能出片并计费。
+    // 抛带 taskId 的可续查错误，供上层登记后台对账（迟到成功补扣+补交付），而非误判成确定性失败。
+    if (controller.signal.aborted && submittedTaskId) {
+      throw indeterminateTaskError(`Video task ${submittedTaskId} timed out`, {
+        kind: 'uselg-video',
+        taskId: submittedTaskId,
+        channelId: options.provider || 'uselg',
+        sourceModel: spec.upstreamModelFor(resolution),
+      });
+    }
     if (error && typeof error === 'object' && !('status' in error)) {
       (error as Error & { status?: number }).status = undefined;
-    }
-    // 整体超时但任务已提交：附上 taskId 信息，供上层判定为「不确定结果」而非确定性失败。
-    if (controller.signal.aborted && submittedTaskId && error instanceof Error) {
-      (error as Error & { taskId?: string }).taskId = submittedTaskId;
     }
     throw error;
   } finally {
