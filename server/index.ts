@@ -868,6 +868,31 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'uselg-sunburst', enabled: true },
     ],
   },
+  // GPT-image-2.6 Flare / Sunburst 独立渠道组（junli 上游）。
+  // 1K：经济版 gpt-image-2.6-{flare|sunburst}（junli 1 积分/张，无通用 2.6 兜底模型）；
+  // 2K / 4K：Firefly gpt-image-2.6-{flare|sunburst}-firefly（junli 7 积分/张）。uselg 未提供 2.6。
+  flare26Routes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '2K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+  },
+  sunburst26Routes: {
+    '1K': [
+      { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '2K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+    '4K': [
+      { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
+    ],
+  },
 };
 const API_CREDIT_POOL_SETTING_KEY = 'api_credit_pools_v1';
 const USER_API_CREDIT_SETTING_PREFIX = 'user_api_credits_v1:';
@@ -1029,6 +1054,18 @@ const models = [
   {
     id: 'GPT-image-2.5-Sunburst',
     name: 'GPT-image-2.5 Sunburst',
+    description: 'OpenAI最新生图模型 · 思考更久',
+    creditsCost: 20,
+  },
+  {
+    id: 'GPT-image-2.6-Flare',
+    name: 'GPT-image-2.6 Flare',
+    description: 'OpenAI最新生图模型 · 更快迭代',
+    creditsCost: 20,
+  },
+  {
+    id: 'GPT-image-2.6-Sunburst',
+    name: 'GPT-image-2.6 Sunburst',
     description: 'OpenAI最新生图模型 · 思考更久',
     creditsCost: 20,
   },
@@ -2373,8 +2410,9 @@ function shouldEnhanceNanoBanana(modelId: string, imageSize: string, requested: 
 }
 
 function normalizeImageSize(value: string, modelId: string) {
-  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
-    // GPT-image-2.5 不支持 STANDARD，上游仅 1K / 2K / 4K；统一把 STANDARD/1K 视作 1K
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
+    // GPT-image-2.5 / 2.6 不支持 STANDARD，上游仅 1K / 2K / 4K；统一把 STANDARD/1K 视作 1K
     if (value === '2K' || value === '4K') return value;
     return '1K';
   }
@@ -5570,6 +5608,8 @@ function isGptImage2Family(modelId: string) {
   return modelId === 'gpt-image-2'
     || modelId === 'GPT-image-2.5-Flare'
     || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'GPT-image-2.6-Flare'
+    || modelId === 'GPT-image-2.6-Sunburst'
     || modelId === 'gpt-image-2-adobe';
 }
 
@@ -5577,7 +5617,19 @@ function isGptImage2Family(modelId: string) {
 // GPT-image-2：junliai-economy → gpt-image-2（1K 标准），junliai-firefly → firefly-gpt-image-2（2K/4K）。
 // GPT-image-2.5-*：junliai-economy → gpt-image-2.5-{flare|sunburst}（仅 1K），
 //                 junliai-firefly → gpt-image-2.5-{flare|sunburst}-firefly（仅 2K/4K）。
+// GPT-image-2.6-*：junliai-economy → gpt-image-2.6-{flare|sunburst}（仅 1K），
+//                 junliai-firefly → gpt-image-2.6-{flare|sunburst}-firefly（仅 2K/4K）。
 function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSize: string) {
+  if (modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
+    const variant = modelId === 'GPT-image-2.6-Flare' ? 'flare' : 'sunburst';
+    if (channelId === 'junliai-economy') {
+      return imageSize === '1K' ? `gpt-image-2.6-${variant}` : '';
+    }
+    if (channelId === 'junliai-firefly') {
+      return imageSize === '2K' || imageSize === '4K' ? `gpt-image-2.6-${variant}-firefly` : '';
+    }
+    return '';
+  }
   if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
     const variant = modelId === 'GPT-image-2.5-Flare' ? 'flare' : 'sunburst';
     if (channelId === 'junliai-economy') {
@@ -5861,14 +5913,18 @@ async function callImageGeneration(input: ImageGenerationInput) {
     ? enabledProviderIds(routing.bananaRoutes[resolution])
     : effectiveInput.modelId === 'Grok_Image'
       ? enabledProviderIds(routing.grokImageRoutes[resolution])
-      : effectiveInput.modelId === 'GPT-image-2.5-Flare'
-        ? enabledProviderIds(routing.flareRoutes[resolution])
-        : effectiveInput.modelId === 'GPT-image-2.5-Sunburst'
-          ? enabledProviderIds(routing.sunburstRoutes[resolution])
-          : effectiveInput.modelId === 'gpt-image-2-adobe'
-            ? enabledProviderIds(routing.image2Routes[resolution])
-              .filter((channelId) => channelId === 'junliai-firefly')
-            : enabledProviderIds(routing.image2Routes[resolution]);
+      : effectiveInput.modelId === 'GPT-image-2.6-Flare'
+        ? enabledProviderIds(routing.flare26Routes[resolution])
+        : effectiveInput.modelId === 'GPT-image-2.6-Sunburst'
+          ? enabledProviderIds(routing.sunburst26Routes[resolution])
+          : effectiveInput.modelId === 'GPT-image-2.5-Flare'
+            ? enabledProviderIds(routing.flareRoutes[resolution])
+            : effectiveInput.modelId === 'GPT-image-2.5-Sunburst'
+              ? enabledProviderIds(routing.sunburstRoutes[resolution])
+              : effectiveInput.modelId === 'gpt-image-2-adobe'
+                ? enabledProviderIds(routing.image2Routes[resolution])
+                  .filter((channelId) => channelId === 'junliai-firefly')
+                : enabledProviderIds(routing.image2Routes[resolution]);
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -6535,7 +6591,9 @@ function isVideoModelHistoryId(modelId?: string) {
 }
 
 function maxReferenceImageCountForModel(modelId?: string) {
-  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
+    // 2.6 与 2.5 同口径（junli 文档虽标 15 张，但站点统一限 9 张，与 2.5 保持一致）。
     return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
   }
   // Grok Image 上游最多接受 3 张参考图。
@@ -6949,12 +7007,17 @@ async function start() {
       Nano_Banana_Pro: 'nano-banana-pro',
       'GPT-image-2.5-Flare': 'gpt-image-2.5-flare',
       'GPT-image-2.5-Sunburst': 'gpt-image-2.5-sunburst',
+      'GPT-image-2.6-Flare': 'gpt-image-2.6-flare',
+      'GPT-image-2.6-Sunburst': 'gpt-image-2.6-sunburst',
     },
     primaryModelChains: {
       'gpt-image-2': [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL, JUNLIAI_MODEL],
       Nano_Banana_Pro: ['nano-banana-pro', 'nano-banana-2'],
       'GPT-image-2.5-Flare': ['gpt-image-2.5-flare', 'gpt-image-2.5'],
       'GPT-image-2.5-Sunburst': ['gpt-image-2.5-sunburst', 'gpt-image-2.5'],
+      // junli 无通用 gpt-image-2.6 模型，2.6 无渠道内兜底链。
+      'GPT-image-2.6-Flare': ['gpt-image-2.6-flare'],
+      'GPT-image-2.6-Sunburst': ['gpt-image-2.6-sunburst'],
     },
     primaryModelCapabilities: {
       [JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL]: {
@@ -6992,6 +7055,28 @@ async function start() {
         ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
         maxImages: 10,
       },
+      // junli 2.6 模型能力（源自 img.junliai.org 模型目录）：
+      // 经济版仅 1K，firefly 支持 1K/2K/4K；参考图张数按站点口径收到 9。
+      'gpt-image-2.6-flare': {
+        imageSizes: ['1K'],
+        ratios: ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
+        maxImages: 9,
+      },
+      'gpt-image-2.6-sunburst': {
+        imageSizes: ['1K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
+        maxImages: 9,
+      },
+      'gpt-image-2.6-flare-firefly': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '5:4', '21:9', '4:5', '3:4', '2:3'],
+        maxImages: 9,
+      },
+      'gpt-image-2.6-sunburst-firefly': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
+        maxImages: 9,
+      },
       'grok-image': {
         imageSizes: ['1K', '2K'],
         ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
@@ -7001,6 +7086,13 @@ async function start() {
     isPrimaryEnabled: async (input) => {
       const routing = await providerRouting!.get();
       const resolution = routingResolution(input.imageSize);
+      if (input.modelId === 'GPT-image-2.6-Flare' || input.modelId === 'GPT-image-2.6-Sunburst') {
+        const routes = input.modelId === 'GPT-image-2.6-Flare'
+          ? routing.flare26Routes[resolution]
+          : routing.sunburst26Routes[resolution];
+        return isProviderEnabled(routes, 'junliai-economy')
+          || isProviderEnabled(routes, 'junliai-firefly');
+      }
       if (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst') {
         const routes = input.modelId === 'GPT-image-2.5-Flare'
           ? routing.flareRoutes[resolution]
@@ -7031,6 +7123,15 @@ async function start() {
       }
       // GPT-image-2.5 Flare / Sunburst 有独立渠道组：变体主渠道 → junliai-economy，
       // 通用 gpt-image-2.5 → junliai-gpt-image-25，*firefly → junliai-firefly。
+      if (input.modelId === 'GPT-image-2.6-Flare' || input.modelId === 'GPT-image-2.6-Sunburst') {
+        const routes = input.modelId === 'GPT-image-2.6-Flare'
+          ? routing.flare26Routes[resolution]
+          : routing.sunburst26Routes[resolution];
+        if (upstreamModel.endsWith('-firefly')) {
+          return isProviderEnabled(routes, 'junliai-firefly');
+        }
+        return isProviderEnabled(routes, 'junliai-economy');
+      }
       if (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst') {
         const routes = input.modelId === 'GPT-image-2.5-Flare'
           ? routing.flareRoutes[resolution]

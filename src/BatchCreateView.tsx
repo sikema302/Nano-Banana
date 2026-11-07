@@ -124,6 +124,20 @@ const GPT_IMAGE_2_5_RATIO_OPTIONS: Record<string, Record<string, string[]>> = {
     '4K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
   },
 };
+
+// GPT-image-2.6 各档位支持的比例（源自 junliai 文档模型目录，与 App.tsx 中的定义保持同步）
+const GPT_IMAGE_2_6_RATIO_OPTIONS: Record<string, Record<string, string[]>> = {
+  'GPT-image-2.6-Flare': {
+    '1K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
+    '2K': ['1:1', '16:9', '9:16', '4:3', '3:2', '5:4', '21:9', '4:5', '3:4', '2:3'],
+    '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '5:4', '21:9', '4:5', '3:4', '2:3'],
+  },
+  'GPT-image-2.6-Sunburst': {
+    '1K': ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
+    '2K': ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
+    '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
+  },
+};
 const qualityOptions: Array<{ value: ImageQuality; label: string }> = [
   { value: 'auto', label: 'auto' },
   { value: 'low', label: '低' },
@@ -195,7 +209,9 @@ function getCredits(
   if (!model) return 0;
   if (model.id === 'gpt-image-2'
     || model.id === 'GPT-image-2.5-Flare'
-    || model.id === 'GPT-image-2.5-Sunburst') {
+    || model.id === 'GPT-image-2.5-Sunburst'
+    || model.id === 'GPT-image-2.6-Flare'
+    || model.id === 'GPT-image-2.6-Sunburst') {
     return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
   }
   if (model.id === 'Nano_Banana_Pro') {
@@ -216,6 +232,15 @@ function getCredits(
 
 function isGpt25Model(modelId: string) {
   return modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst';
+}
+
+// GPT-image-2.6 与 2.5 同结构：1K/2K/4K 档、9 张参考图、独立的档位比例表。
+function isGpt26Model(modelId: string) {
+  return modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst';
+}
+
+function isGpt25FamilyModel(modelId: string) {
+  return isGpt25Model(modelId) || isGpt26Model(modelId);
 }
 
 function UploadGrid({
@@ -418,6 +443,8 @@ export default function BatchCreateView({
     () => models.filter((item) => item.id === 'gpt-image-2'
       || item.id === 'GPT-image-2.5-Flare'
       || item.id === 'GPT-image-2.5-Sunburst'
+      || item.id === 'GPT-image-2.6-Flare'
+      || item.id === 'GPT-image-2.6-Sunburst'
       || item.id === 'Nano_Banana_Pro'
       || item.id === 'Nano_Banana_2_1'),
     [models],
@@ -451,10 +478,12 @@ export default function BatchCreateView({
   // Banana 2.1 只有一条固定上游，尺寸档不受后台渠道开关影响；AI 增强仍只有 Pro 支持。
   const isNano21 = model?.id === 'Nano_Banana_2_1';
   const isGpt25 = model ? isGpt25Model(model.id) : false;
+  const isGpt26 = model ? isGpt26Model(model.id) : false;
+  const isGpt25Family = isGpt25 || isGpt26;
   const canEnhanceNano = model?.id === 'Nano_Banana_Pro';
   const effectiveOptimizeChineseText = canEnhanceNano && optimizeChineseText;
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
-  const refsLimit = model && isGpt25Model(model.id) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
+  const refsLimit = model && isGpt25FamilyModel(model.id) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
   const activeCards = taskCards.filter((item) => item.prompt.trim());
   const taskCount = mode === 'unified'
@@ -467,6 +496,8 @@ export default function BatchCreateView({
   const creditBucket = model?.id === 'gpt-image-2'
     || model?.id === 'GPT-image-2.5-Flare'
     || model?.id === 'GPT-image-2.5-Sunburst'
+    || model?.id === 'GPT-image-2.6-Flare'
+    || model?.id === 'GPT-image-2.6-Sunburst'
     ? 'gpt'
     : model?.id === 'Nano_Banana_Pro'
       ? 'banana'
@@ -492,21 +523,27 @@ export default function BatchCreateView({
     ? taskCards.flatMap((item) => item.results)
     : succeededTasks.map((task) => task.image!).filter(Boolean);
   const sourceUploadLabel = mode === 'unified' ? '原图（每张生成一张）' : '原图组（所有提示词共同引用）';
-  const dimensionChoices: readonly string[] = isGpt25 && model
-    ? (GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[imageSize as string] || [])
+  const dimensionChoices: readonly string[] = (isGpt25 || isGpt26) && model
+    ? (isGpt25
+        ? GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[imageSize as string] || []
+        : GPT_IMAGE_2_6_RATIO_OPTIONS[model.id]?.[imageSize as string] || [])
     : aspectOptions;
   const resolutionOptions: ImageSize[] = isNano21
     ? (['1K', '2K', '4K'] as ImageSize[])
     : isNano
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
           providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
-      : isGpt25
+      : isGpt25 || isGpt26
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) => {
           const routes = model?.id === 'GPT-image-2.5-Flare'
             ? providerRouting.flareRoutes
             : model?.id === 'GPT-image-2.5-Sunburst'
               ? providerRouting.sunburstRoutes
-              : providerRouting.image2Routes;
+              : model?.id === 'GPT-image-2.6-Flare'
+                ? providerRouting.flare26Routes
+                : model?.id === 'GPT-image-2.6-Sunburst'
+                  ? providerRouting.sunburst26Routes
+                  : providerRouting.image2Routes;
           return routes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled);
         })
       : (['STANDARD', '2K', '4K'] as ImageSize[]).filter((resolution) => {
@@ -581,18 +618,20 @@ export default function BatchCreateView({
 
   function changeModel(modelId: string) {
     setSelectedModel(modelId);
-    const nextRefsLimit = isGpt25Model(modelId) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
+    const nextRefsLimit = isGpt25FamilyModel(modelId) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
     setTaskCards((current) => current.map((item) => ({ ...item, references: item.references.slice(0, nextRefsLimit) })));
     if (modelId === 'gpt-image-2') {
       setImageSize('STANDARD');
       setQuality('auto');
       setOptimizeChineseText(false);
-    } else if (isGpt25Model(modelId)) {
-      // 与创作页一致：GPT-image-2.5 默认 1K（标准档）+ auto 质量，比例按档位白名单回退
+    } else if (isGpt25Model(modelId) || isGpt26Model(modelId)) {
+      // 与创作页一致：GPT-image-2.5 / 2.6 默认 1K（标准档）+ auto 质量，比例按档位白名单回退
       setImageSize('1K');
       setQuality('auto');
       setOptimizeChineseText(false);
-      const allowed = GPT_IMAGE_2_5_RATIO_OPTIONS[modelId]?.['1K'] || [];
+      const allowed = (isGpt25Model(modelId)
+        ? GPT_IMAGE_2_5_RATIO_OPTIONS[modelId]?.['1K']
+        : GPT_IMAGE_2_6_RATIO_OPTIONS[modelId]?.['1K']) || [];
       setDimensions((current) => (allowed.includes(current) ? current : '1:1'));
       setTaskCards((current) => current.map((item) => ({
         ...item,
@@ -682,7 +721,7 @@ export default function BatchCreateView({
           model: model.id,
           dimensions: card.priorityAspect || dimensions,
           imageSize,
-          quality: model.id === 'gpt-image-2' || isGpt25 ? quality : undefined,
+          quality: model.id === 'gpt-image-2' || isGpt25Family ? quality : undefined,
           ...getAiEnhancementRequestFlags(effectiveOptimizeChineseText),
           reference_images: card.references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         });
@@ -851,7 +890,7 @@ export default function BatchCreateView({
           model: model.id,
           dimensions,
           imageSize,
-          quality: model.id === 'gpt-image-2' || isGpt25 ? quality : undefined,
+          quality: model.id === 'gpt-image-2' || isGpt25Family ? quality : undefined,
           ...getAiEnhancementRequestFlags(effectiveOptimizeChineseText),
           reference_images: spec.references.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
         });
@@ -1063,9 +1102,11 @@ export default function BatchCreateView({
                     onClick={() => {
                       setImageSize(item);
                       if (item === 'STANDARD') setQuality('auto');
-                      if (isGpt25 && model) {
-                        // 与创作页一致：2.5 切档位后比例不在新档位白名单内则回退 1:1，1K 档质量重置 auto
-                        const allowed = GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[item] || [];
+                      if (isGpt25Family && model) {
+                        // 与创作页一致：2.5 / 2.6 切档位后比例不在新档位白名单内则回退 1:1，1K 档质量重置 auto
+                        const allowed = (isGpt25
+                          ? GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[item]
+                          : GPT_IMAGE_2_6_RATIO_OPTIONS[model.id]?.[item]) || [];
                         setDimensions((current) => (allowed.includes(current) ? current : '1:1'));
                         if (item === '1K') setQuality('auto');
                         setTaskCards((current) => current.map((card) => ({
@@ -1081,13 +1122,13 @@ export default function BatchCreateView({
               </div>
             </section>
 
-            {model?.id === 'gpt-image-2' || isGpt25 ? (
+            {model?.id === 'gpt-image-2' || isGpt25Family ? (
               <section className="rounded-2xl border border-white/8 bg-black/20 p-2.5">
                 <div className="mb-2 text-xs font-bold text-zinc-500">质量</div>
                 <div className="grid grid-cols-4 gap-1.5">
                   {qualityOptions
                     .map((item) => {
-                      const qualityDisabled = imageSize === 'STANDARD' || (isGpt25 && imageSize === '1K');
+                      const qualityDisabled = imageSize === 'STANDARD' || (isGpt25Family && imageSize === '1K');
                       return (
                         <button
                           className={`min-h-0 rounded-lg border px-1 py-2 text-xs font-black transition ${quality === item.value ? 'border-white bg-white text-black' : 'border-white/10 bg-white/[0.04] text-zinc-400'} ${qualityDisabled ? 'cursor-not-allowed opacity-45' : ''}`}

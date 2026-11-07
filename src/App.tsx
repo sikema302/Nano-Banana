@@ -207,13 +207,15 @@ const defaultModels: ModelInfo[] = [
   { id: 'gpt-image-2', name: 'GPT-image-2', description: 'OpenAI\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u66f4\u5feb\u8fed\u4ee3' },
   { id: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
+  { id: 'GPT-image-2.6-Flare', name: 'GPT-image-2.6 Flare', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u66f4\u5feb\u8fed\u4ee3' },
+  { id: 'GPT-image-2.6-Sunburst', name: 'GPT-image-2.6 Sunburst', description: 'OpenAI\u6700\u65b0\u751f\u56fe\u6a21\u578b \u00b7 \u601d\u8003\u66f4\u4e45' },
   { id: 'Nano_Banana_Pro', name: 'Nano Banana Pro', description: '\u8c37\u6b4c\u6700\u5f3a\u751f\u56fe\u6a21\u578b\uff01' },
   { id: 'Nano_Banana_2_1', name: 'Nano Banana 2.1', description: '\u8c37\u6b4c\u6700\u65b0\u9999\u8549\u6a21\u578b \u00b7 \u7ec6\u8282\u4e0e\u4e2d\u6587\u6587\u5b57\u66f4\u51c6' },
   { id: 'Grok_Image', name: 'Grok Image', description: 'xAI Grok \u56fe\u50cf\u751f\u6210' },
   { id: 'gpt-image-2-adobe', name: 'gpt-image-2 Adobe', description: 'Adobe Firefly 生图模型' },
 ];
 
-type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9' | '5:4' | '4:5' | '3:1' | '1:4';
+type DimensionOption = '1:1' | '3:2' | '16:9' | '4:3' | '9:16' | '3:4' | '2:3' | '21:9' | '5:4' | '4:5' | '3:1' | '1:4' | '4:1';
 type ImageSizeOption = 'STANDARD' | '1K' | '2K' | '4K';
 type GptQualityOption = 'auto' | 'low' | 'medium' | 'high';
 type AppTab = 'home' | 'create' | 'batchCreate' | 'canvas' | 'chat' | 'history' | 'apiDocs' | 'admin';
@@ -362,6 +364,17 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'uselg-sunburst', enabled: true },
     ],
   },
+  // GPT-image-2.6 独立渠道组：junli 经济版（1K）与 Firefly（2K/4K），无 uselg 兜底。
+  flare26Routes: {
+    '1K': [{ id: 'junliai-economy', enabled: true }],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
+  sunburst26Routes: {
+    '1K': [{ id: 'junliai-economy', enabled: true }],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
@@ -386,13 +399,15 @@ function providerChannelName(id: string, resolution?: string) {
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
 }
 
-// GPT-image-2.5 渠道显示名：同一 channel id 在 image2 和 2.5 组里对应不同上游，
+// GPT-image-2.5 / 2.6 渠道显示名：同一 channel id 在 image2 和 2.5/2.6 组里对应不同上游，
 // 这里按真实上游模型命名，与 image2 的「经济版 / Firefly」区分开。
-function gpt25ChannelName(groupKey: 'flareRoutes' | 'sunburstRoutes', id: string) {
-  const variant = groupKey === 'flareRoutes' ? 'flare' : 'sunburst';
-  if (id === 'junliai-economy') return `Junli · gpt-image-2.5-${variant}`;
+function gpt25ChannelName(groupKey: 'flareRoutes' | 'sunburstRoutes' | 'flare26Routes' | 'sunburst26Routes', id: string) {
+  const is26 = groupKey === 'flare26Routes' || groupKey === 'sunburst26Routes';
+  const version = is26 ? '2.6' : '2.5';
+  const variant = groupKey === 'flareRoutes' || groupKey === 'flare26Routes' ? 'flare' : 'sunburst';
+  if (id === 'junliai-economy') return `Junli · gpt-image-${version}-${variant}`;
   if (id === 'junliai-gpt-image-25') return 'Junli · gpt-image-2.5';
-  if (id === 'junliai-firefly') return `Junli · gpt-image-2.5-${variant}-firefly`;
+  if (id === 'junliai-firefly') return `Junli · gpt-image-${version}-${variant}-firefly`;
   if (id === 'uselg-flare') return 'Uselg · gpt-image-2.5-flare';
   if (id === 'uselg-sunburst') return 'Uselg · gpt-image-2.5-sunburst';
   return PROVIDER_CHANNEL_NAMES[id] ?? id;
@@ -406,7 +421,10 @@ function displayModelName(modelName: string) {
   const probe = value.toLowerCase();
   // Grok 的名字里也带 image，必须先于 gpt-image 规则判断。
   if (probe.includes('grok')) return 'Grok Image';
-  // 必须先判 2.5（gpt-image-2.5 也包含 gpt-image 子串，否则会被下面的规则误判成 2）
+  // 必须先判 2.5 / 2.6（gpt-image-2.5 / 2.6 也包含 gpt-image 子串，否则会被下面的规则误判成 2）
+  if (probe.includes('gpt-image-2.6')) {
+    return probe.includes('sunburst') ? 'GPT-image-2.6 Sunburst' : 'GPT-image-2.6 Flare';
+  }
   if (probe.includes('gpt-image-2.5')) {
     return probe.includes('sunburst') ? 'GPT-image-2.5 Sunburst' : 'GPT-image-2.5 Flare';
   }
@@ -437,11 +455,15 @@ function isImageResolutionEnabled(
     ? routing.bananaRoutes[resolution]
     : modelId === 'Grok_Image'
       ? routing.grokImageRoutes[resolution]
-      : modelId === 'GPT-image-2.5-Flare'
-        ? routing.flareRoutes[resolution]
-        : modelId === 'GPT-image-2.5-Sunburst'
-          ? routing.sunburstRoutes[resolution]
-          : routing.image2Routes[resolution];
+      : modelId === 'GPT-image-2.6-Flare'
+        ? routing.flare26Routes[resolution]
+        : modelId === 'GPT-image-2.6-Sunburst'
+          ? routing.sunburst26Routes[resolution]
+          : modelId === 'GPT-image-2.5-Flare'
+            ? routing.flareRoutes[resolution]
+            : modelId === 'GPT-image-2.5-Sunburst'
+              ? routing.sunburstRoutes[resolution]
+              : routing.image2Routes[resolution];
   return channels.some((channel) => channel.enabled);
 }
 
@@ -454,7 +476,8 @@ const emptyRecordsStats: AdminRecordsStats = {
 };
 
 function getMaxReferences(modelId: string) {
-  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+  if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
     return MAX_GPT_IMAGE_25_REFERENCE_IMAGES;
   }
   // Grok Image 上游最多 3 张参考图。
@@ -513,6 +536,22 @@ const GPT_IMAGE_2_5_RATIO_OPTIONS: Record<string, Record<string, DimensionOption
     '1K': ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
     '2K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
     '4K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '3:1', '3:4'],
+  },
+};
+
+// GPT-image-2.6 各档位支持的比例如下（源自 junliai 文档模型目录，与后端 primaryModelCapabilities 保持同步）
+// Flare：1K 走 junli 经济版，2K/4K 走 firefly
+// Sunburst：1K 走 junli 经济版，2K/4K 走 firefly
+const GPT_IMAGE_2_6_RATIO_OPTIONS: Record<string, Record<string, DimensionOption[]>> = {
+  'GPT-image-2.6-Flare': {
+    '1K': ['1:1', '16:9', '9:16', '5:4', '4:3', '3:2', '4:5', '3:4'],
+    '2K': ['1:1', '16:9', '9:16', '4:3', '3:2', '5:4', '21:9', '4:5', '3:4', '2:3'],
+    '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '5:4', '21:9', '4:5', '3:4', '2:3'],
+  },
+  'GPT-image-2.6-Sunburst': {
+    '1K': ['1:1', '16:9', '9:16', '4:3', '21:9', '3:1', '4:5', '3:4', '1:4'],
+    '2K': ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
+    '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
   },
 };
 
@@ -783,7 +822,8 @@ function getModelCredits(
   if (model.id === 'gpt-image-2') {
     return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || 'STANDARD', options?.quality || 'auto');
   }
-  if (model.id === 'GPT-image-2.5-Flare' || model.id === 'GPT-image-2.5-Sunburst') {
+  if (model.id === 'GPT-image-2.5-Flare' || model.id === 'GPT-image-2.5-Sunburst'
+    || model.id === 'GPT-image-2.6-Flare' || model.id === 'GPT-image-2.6-Sunburst') {
     return getConfiguredImageCredits(configuredPricing, model.id, options?.imageSize || '1K', options?.quality || 'auto');
   }
   if (model.id === 'gpt-image-2-adobe') {
@@ -812,9 +852,11 @@ function getModelSortOrder(modelId: string) {
   if (modelId === 'gpt-image-2') return 0;
   if (modelId === 'GPT-image-2.5-Flare') return 1;
   if (modelId === 'GPT-image-2.5-Sunburst') return 2;
-  if (modelId === 'Nano_Banana_Pro') return 3;
-  if (modelId === 'Nano_Banana_2_1') return 4;
-  if (modelId === 'Grok_Image') return 5;
+  if (modelId === 'GPT-image-2.6-Flare') return 3;
+  if (modelId === 'GPT-image-2.6-Sunburst') return 4;
+  if (modelId === 'Nano_Banana_Pro') return 5;
+  if (modelId === 'Nano_Banana_2_1') return 6;
+  if (modelId === 'Grok_Image') return 7;
   return 99;
 }
 
@@ -1875,6 +1917,10 @@ function ApiDocsView({
     flare: effectivePricing.gptImage25Flare,
     sunburst: effectivePricing.gptImage25Sunburst,
   };
+  const gptImage26Pricing = {
+    flare: effectivePricing.gptImage26Flare,
+    sunburst: effectivePricing.gptImage26Sunburst,
+  };
   const nano21Pricing = effectivePricing.nanoBanana21;
   const nanoProPricing = effectivePricing.nanoBanana;
   const grokImagePricing = effectivePricing.grokImage;
@@ -1933,18 +1979,20 @@ function ApiDocsView({
   "error": "API Key 额度不足，需要 32，剩余 12"
 }`;
   const requestRows = [
-    ['model', 'string', '是', '支持 gpt-image-2、GPT-image-2.5-Flare、GPT-image-2.5-Sunburst、nano-banana-pro、nano-banana-2.1、grok-image（不区分大小写）。'],
+    ['model', 'string', '是', '支持 gpt-image-2、GPT-image-2.5-Flare、GPT-image-2.5-Sunburst、GPT-image-2.6-Flare、GPT-image-2.6-Sunburst、nano-banana-pro、nano-banana-2.1、grok-image（不区分大小写）。'],
     ['prompt', 'string', '是', '图像提示词。建议写清主体、画面、风格、尺寸用途和需要避免的内容。'],
-    ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张（GPT-image-2.5 支持 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张）。`],
+    ['images', 'string[]', '否', `HTTPS 参考图 URL 数组，最多 ${MAX_REFERENCE_IMAGES} 张（GPT-image-2.5 / 2.6 支持 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张）。`],
     ['aspectRatio', 'string', '否', '比例或常见像素值，例如 1:1、16:9、2048x2048。'],
-    ['imageSize', 'string', '否', `Nano Banana Pro 支持 1K、2K、4K（默认 2K；1K ${nanoProPricing.oneK} 积分，2K ${nanoProPricing.twoK} 积分，4K ${nanoProPricing.fourK} 积分）；Nano Banana 2.1 支持 1K、2K、4K（默认 1K；1K ${nano21Pricing.oneK} 积分，2K ${nano21Pricing.twoK} 积分，4K ${nano21Pricing.fourK} 积分）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 支持 1K、2K、4K（其他值按 1K 处理）；Grok Image 支持 1K、2K（默认 2K）。`],
-    ['quality', 'string', '否', 'GPT-image-2 与 GPT-image-2.5 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
+    ['imageSize', 'string', '否', `Nano Banana Pro 支持 1K、2K、4K（默认 2K；1K ${nanoProPricing.oneK} 积分，2K ${nanoProPricing.twoK} 积分，4K ${nanoProPricing.fourK} 积分）；Nano Banana 2.1 支持 1K、2K、4K（默认 1K；1K ${nano21Pricing.oneK} 积分，2K ${nano21Pricing.twoK} 积分，4K ${nano21Pricing.fourK} 积分）；GPT-image-2 支持 STANDARD、2K、4K；GPT-image-2.5 / 2.6 支持 1K、2K、4K（其他值按 1K 处理）；Grok Image 支持 1K、2K（默认 2K）。`],
+    ['quality', 'string', '否', 'GPT-image-2 与 GPT-image-2.5 / 2.6 可传 auto、low、medium、high；高质量按高质量档计费，不传按 auto。'],
     ['optimizeChineseText', 'boolean', '否', `Nano Banana Pro 的 AI 增强选项：开启后每张额外增加 ${nanoProPricing.enhancement} 积分，画面细节与中文文字表现更好。Nano Banana 2.1 不支持该参数，传入不额外计费。`],
   ];
   const modelRows = [
     { model: 'gpt-image-2', name: 'GPT-image-2', cost: `STANDARD ${gptImagePricing.standard} / 2K ${gptImagePricing.twoK}（高 ${gptImagePricing.twoKHigh}）/ 4K ${gptImagePricing.fourK}（高 ${gptImagePricing.fourKHigh}）`, note: '适合高质量通用生图，支持 quality 参数。' },
     { model: 'GPT-image-2.5-Flare', name: 'GPT-image-2.5 Flare', cost: `1K ${gptImage25Pricing.flare.standard} / 2K ${gptImage25Pricing.flare.twoK}（高 ${gptImage25Pricing.flare.twoKHigh}）/ 4K ${gptImage25Pricing.flare.fourK}（高 ${gptImage25Pricing.flare.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 更快迭代；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
     { model: 'GPT-image-2.5-Sunburst', name: 'GPT-image-2.5 Sunburst', cost: `1K ${gptImage25Pricing.sunburst.standard} / 2K ${gptImage25Pricing.sunburst.twoK}（高 ${gptImage25Pricing.sunburst.twoKHigh}）/ 4K ${gptImage25Pricing.sunburst.fourK}（高 ${gptImage25Pricing.sunburst.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 思考更久；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
+    { model: 'GPT-image-2.6-Flare', name: 'GPT-image-2.6 Flare', cost: `1K ${gptImage26Pricing.flare.standard} / 2K ${gptImage26Pricing.flare.twoK}（高 ${gptImage26Pricing.flare.twoKHigh}）/ 4K ${gptImage26Pricing.flare.fourK}（高 ${gptImage26Pricing.flare.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 更快迭代；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
+    { model: 'GPT-image-2.6-Sunburst', name: 'GPT-image-2.6 Sunburst', cost: `1K ${gptImage26Pricing.sunburst.standard} / 2K ${gptImage26Pricing.sunburst.twoK}（高 ${gptImage26Pricing.sunburst.twoKHigh}）/ 4K ${gptImage26Pricing.sunburst.fourK}（高 ${gptImage26Pricing.sunburst.fourKHigh}）`, note: 'OpenAI 最新一代生图模型 · 思考更久；imageSize 传 1K / 2K / 4K，支持 quality 参数。' },
     { model: 'nano-banana-pro', name: 'Nano Banana Pro', cost: `1K ${nanoProPricing.oneK} / 2K ${nanoProPricing.twoK} / 4K ${nanoProPricing.fourK}；AI 增强 +${nanoProPricing.enhancement}`, note: '开启 AI 增强后画面细节与中文文字表现更好；API Key 与网站使用相同的生成配置。' },
     { model: 'nano-banana-2.1', name: 'Nano Banana 2.1', cost: `1K ${nano21Pricing.oneK} / 2K ${nano21Pricing.twoK} / 4K ${nano21Pricing.fourK}`, note: '按尺寸分档计价，不支持 AI 增强；任务失败会直接返回错误并自动退回积分。' },
     { model: 'grok-image', name: 'Grok Image', cost: `1K ${grokImagePricing.oneK} / 2K ${grokImagePricing.twoK}`, note: 'xAI Grok 图像生成；imageSize 仅支持 1K / 2K，最多 3 张参考图。' },
@@ -2025,6 +2073,28 @@ function ApiDocsView({
         ['2K 高质量', `${gptImage25Pricing.sunburst.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
         ['4K 非高质量', `${gptImage25Pricing.sunburst.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
         ['4K 高质量', `${gptImage25Pricing.sunburst.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
+      ],
+      note: 'OpenAI 最新一代生图模型 · 思考更久。',
+    },
+    {
+      model: 'GPT-image-2.6-Flare',
+      rows: [
+        ['标准 / 1K', `${gptImage26Pricing.flare.standard} 点 / 张`, 'imageSize=1K（或不传，按 1K 处理）；quality 任意'],
+        ['2K 非高质量', `${gptImage26Pricing.flare.twoK} 点 / 张`, 'imageSize=2K；quality=auto / low / medium 或不传'],
+        ['2K 高质量', `${gptImage26Pricing.flare.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
+        ['4K 非高质量', `${gptImage26Pricing.flare.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
+        ['4K 高质量', `${gptImage26Pricing.flare.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
+      ],
+      note: 'OpenAI 最新一代生图模型 · 更快迭代。',
+    },
+    {
+      model: 'GPT-image-2.6-Sunburst',
+      rows: [
+        ['标准 / 1K', `${gptImage26Pricing.sunburst.standard} 点 / 张`, 'imageSize=1K（或不传，按 1K 处理）；quality 任意'],
+        ['2K 非高质量', `${gptImage26Pricing.sunburst.twoK} 点 / 张`, 'imageSize=2K；quality=auto / low / medium 或不传'],
+        ['2K 高质量', `${gptImage26Pricing.sunburst.twoKHigh} 点 / 张`, 'imageSize=2K；quality=high'],
+        ['4K 非高质量', `${gptImage26Pricing.sunburst.fourK} 点 / 张`, 'imageSize=4K；quality=auto / low / medium 或不传'],
+        ['4K 高质量', `${gptImage26Pricing.sunburst.fourKHigh} 点 / 张`, 'imageSize=4K；quality=high'],
       ],
       note: 'OpenAI 最新一代生图模型 · 思考更久。',
     },
@@ -2122,6 +2192,27 @@ function ApiDocsView({
       request: JSON.stringify(
         {
           model: 'GPT-image-2.5-Flare',
+          prompt: '生成一张高级感黑金香水产品图，摄影棚布光，超清细节',
+          images: [],
+          aspectRatio: '1:1',
+          imageSize: '2K',
+          quality: 'high',
+        },
+        null,
+        2,
+      ),
+      bullets: ['imageSize 仅支持 1K / 2K / 4K，不支持 STANDARD；其他值会按 1K 处理。', 'quality 可传 auto / low / medium / high，2K 与 4K 的高质量按高质量档计费。', `参考图最多 ${MAX_GPT_IMAGE_25_REFERENCE_IMAGES} 张，HTTPS URL 或 Base64（单张不超过 ${MAX_REFERENCE_IMAGE_MB}MB）。`, '不同档位支持的画面比例不同，见下方比例说明。'],
+    },
+    {
+      id: 'gpt-image-2-6',
+      label: 'GPT-Image-2.6 接口',
+      title: 'GPT-Image-2.6 图像生成',
+      subtitle: 'OpenAI 最新一代生图模型，适合高质量通用生图与参考图重绘。model 可传 GPT-image-2.6-Flare（更快迭代）或 GPT-image-2.6-Sunburst（思考更久），不区分大小写。',
+      model: 'GPT-image-2.6-Flare',
+      endpointPath: '/v1/async/images/generations',
+      request: JSON.stringify(
+        {
+          model: 'GPT-image-2.6-Flare',
           prompt: '生成一张高级感黑金香水产品图，摄影棚布光，超清细节',
           images: [],
           aspectRatio: '1:1',
@@ -2503,6 +2594,7 @@ console.log(task.results[0].url);`;
               const sectionModels = modelRows.filter((item) => {
                 if (section.id === 'gpt-image-2') return item.model === 'gpt-image-2';
                 if (section.id === 'gpt-image-2-5') return item.model === 'GPT-image-2.5-Flare' || item.model === 'GPT-image-2.5-Sunburst';
+                if (section.id === 'gpt-image-2-6') return item.model === 'GPT-image-2.6-Flare' || item.model === 'GPT-image-2.6-Sunburst';
                 if (section.id === 'nano-banana-2-1') return item.model === 'nano-banana-2.1';
                 if (section.id === 'grok-image') return item.model === 'grok-image';
                 return item.model === 'nano-banana-pro';
@@ -2662,6 +2754,30 @@ Content-Type: application/json`)}</pre>
                                 <div key={modelId} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
                                   <div className="font-mono text-xs font-black text-sky-200">{modelId}</div>
                                   <div className="mt-1 text-xs leading-5 text-zinc-400">{GPT_IMAGE_2_5_RATIO_OPTIONS[modelId][size].join(' / ')}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {section.id === 'gpt-image-2-6' ? (
+                    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#11131a]">
+                      <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-200"><ImagePlus size={17} /></div>
+                        <h2 className="text-base font-black text-white">{'GPT-image-2.6 \u652f\u6301\u6bd4\u4f8b\u8bf4\u660e'}</h2>
+                      </div>
+                      <div className="grid gap-4 p-5">
+                        {(['1K', '2K', '4K'] as const).map((size) => (
+                          <article key={size} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                            <h3 className="mb-3 text-base font-black text-white">{size} 档</h3>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {(['GPT-image-2.6-Flare', 'GPT-image-2.6-Sunburst'] as const).map((modelId) => (
+                                <div key={modelId} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                  <div className="font-mono text-xs font-black text-sky-200">{modelId}</div>
+                                  <div className="mt-1 text-xs leading-5 text-zinc-400">{GPT_IMAGE_2_6_RATIO_OPTIONS[modelId][size].join(' / ')}</div>
                                 </div>
                               ))}
                             </div>
@@ -3395,6 +3511,12 @@ function AdminModelCreditPanel({
   const setGpt25Sunburst = (key: keyof ModelCreditPricing['gptImage25Sunburst'], value: number) => {
     setDraft((current) => ({ ...current, gptImage25Sunburst: { ...current.gptImage25Sunburst, [key]: value } }));
   };
+  const setGpt26Flare = (key: keyof ModelCreditPricing['gptImage26Flare'], value: number) => {
+    setDraft((current) => ({ ...current, gptImage26Flare: { ...current.gptImage26Flare, [key]: value } }));
+  };
+  const setGpt26Sunburst = (key: keyof ModelCreditPricing['gptImage26Sunburst'], value: number) => {
+    setDraft((current) => ({ ...current, gptImage26Sunburst: { ...current.gptImage26Sunburst, [key]: value } }));
+  };
   const setGrokImage = (key: keyof ModelCreditPricing['grokImage'], value: number) => {
     setDraft((current) => ({ ...current, grokImage: { ...current.grokImage, [key]: value } }));
   };
@@ -3482,6 +3604,30 @@ function AdminModelCreditPanel({
             {row('2K 高质量', 'quality=high', creditInput(draft.gptImage25Sunburst.twoKHigh, (value) => setGpt25Sunburst('twoKHigh', value)))}
             {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage25Sunburst.fourK, (value) => setGpt25Sunburst('fourK', value)))}
             {row('4K 高质量', 'quality=high', creditInput(draft.gptImage25Sunburst.fourKHigh, (value) => setGpt25Sunburst('fourKHigh', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-orange-100">GPT-image-2.6 Flare</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 GPT 专用积分；1K 走 junliai 经济版，2K/4K 走 firefly。</p>
+          <div className="mt-3">
+            {row('1K', '标准档位（junliai）', creditInput(draft.gptImage26Flare.standard, (value) => setGpt26Flare('standard', value)))}
+            {row('2K 普通', 'auto / low / medium', creditInput(draft.gptImage26Flare.twoK, (value) => setGpt26Flare('twoK', value)))}
+            {row('2K 高质量', 'quality=high', creditInput(draft.gptImage26Flare.twoKHigh, (value) => setGpt26Flare('twoKHigh', value)))}
+            {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage26Flare.fourK, (value) => setGpt26Flare('fourK', value)))}
+            {row('4K 高质量', 'quality=high', creditInput(draft.gptImage26Flare.fourKHigh, (value) => setGpt26Flare('fourKHigh', value)))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+          <h3 className="font-black text-fuchsia-100">GPT-image-2.6 Sunburst</h3>
+          <p className="mt-1 text-[11px] text-zinc-500">扣 GPT 专用积分；1K 走 junliai 经济版，2K/4K 走 firefly。</p>
+          <div className="mt-3">
+            {row('1K', '标准档位（junliai）', creditInput(draft.gptImage26Sunburst.standard, (value) => setGpt26Sunburst('standard', value)))}
+            {row('2K 普通', 'auto / low / medium', creditInput(draft.gptImage26Sunburst.twoK, (value) => setGpt26Sunburst('twoK', value)))}
+            {row('2K 高质量', 'quality=high', creditInput(draft.gptImage26Sunburst.twoKHigh, (value) => setGpt26Sunburst('twoKHigh', value)))}
+            {row('4K 普通', 'auto / low / medium', creditInput(draft.gptImage26Sunburst.fourK, (value) => setGpt26Sunburst('fourK', value)))}
+            {row('4K 高质量', 'quality=high', creditInput(draft.gptImage26Sunburst.fourKHigh, (value) => setGpt26Sunburst('fourKHigh', value)))}
           </div>
         </section>
 
@@ -4311,6 +4457,8 @@ function AdminView({
                   { key: 'grokImageRoutes', title: 'Grok Image', subtitle: '只有 1K / 2K 两档', resolutions: ['1K', '2K'] },
                   { key: 'flareRoutes', title: 'GPT-image-2.5 Flare', subtitle: '1K / 2K / 4K 独立路由', resolutions: ['1K', '2K', '4K'] },
                   { key: 'sunburstRoutes', title: 'GPT-image-2.5 Sunburst', subtitle: '1K / 2K / 4K 独立路由', resolutions: ['1K', '2K', '4K'] },
+                  { key: 'flare26Routes', title: 'GPT-image-2.6 Flare', subtitle: '1K 经济版 / 2K、4K firefly', resolutions: ['1K', '2K', '4K'] },
+                  { key: 'sunburst26Routes', title: 'GPT-image-2.6 Sunburst', subtitle: '1K 经济版 / 2K、4K firefly', resolutions: ['1K', '2K', '4K'] },
                 ] as const).map((group) => (
                   <section key={group.key} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -4330,6 +4478,7 @@ function AdminView({
                             <div className="space-y-2">
                               {channels.map((channel, index) => {
                                 const routeLabel = group.key === 'flareRoutes' || group.key === 'sunburstRoutes'
+                                  || group.key === 'flare26Routes' || group.key === 'sunburst26Routes'
                                   ? gpt25ChannelName(group.key, channel.id)
                                   : providerChannelName(channel.id, resolution);
                                 const routeKey = `${group.key}:${resolution}:${channel.id}`;
@@ -5640,10 +5789,12 @@ export default function App() {
   // 香蕉族（Pro / 2.1）：共享 1K/2K/4K 尺寸档与 Banana 专用积分池；AI 增强仍只有 Pro 支持。
   const isNanoBanana = isNanoBananaModel(selectedModel);
   const isGptImage2_5 = selectedModel === 'GPT-image-2.5-Flare' || selectedModel === 'GPT-image-2.5-Sunburst';
+  const isGptImage2_6 = selectedModel === 'GPT-image-2.6-Flare' || selectedModel === 'GPT-image-2.6-Sunburst';
+  const isGptImage25Family = isGptImage2_5 || isGptImage2_6;
   const effectiveOptimizeChineseText = isNanoBananaPro && optimizeChineseText;
-  const showGptQuality = selectedModel === 'gpt-image-2' || isGptImage2_5;
-  // GPT-image-2 的 STANDARD、GPT-image-2.5 的 1K 都是上游"标准"档，不支持 quality
-  const disableGptQuality = showGptQuality && (imageSize === 'STANDARD' || (isGptImage2_5 && imageSize === '1K'));
+  const showGptQuality = selectedModel === 'gpt-image-2' || isGptImage25Family;
+  // GPT-image-2 的 STANDARD、GPT-image-2.5 / 2.6 的 1K 都是上游"标准"档，不支持 quality
+  const disableGptQuality = showGptQuality && (imageSize === 'STANDARD' || (isGptImage25Family && imageSize === '1K'));
   // gpt-image-2 Adobe 仅对指定账号开放，其余用户在选择器中隐藏
   const visibleModels = (user?.username || '').toLowerCase() === 'lh1173444'
     ? models
@@ -5656,7 +5807,7 @@ export default function App() {
     pricing: gptImagePricing,
     modelCreditPricing,
   });
-  const selectedResolutionOptions = isNanoBanana || isGptImage2_5 ? imageSizeOptions : gptImageSizeOptions;
+  const selectedResolutionOptions = isNanoBanana || isGptImage25Family ? imageSizeOptions : gptImageSizeOptions;
   const visibleResolutionOptions = selectedModel === 'Grok_Image'
     ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
     : selectedModel === 'gpt-image-2-adobe'
@@ -5664,12 +5815,16 @@ export default function App() {
       : selectedResolutionOptions;
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
-    : selectedModel === 'Grok_Image'
-      ? dimensionOptions.filter((item) => item.value !== '21:9')
-      : dimensionOptions;
+    : isGptImage2_6
+      ? (GPT_IMAGE_2_6_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
+      : selectedModel === 'Grok_Image'
+        ? dimensionOptions.filter((item) => item.value !== '21:9')
+        : dimensionOptions;
   const selectedCreditBucket = selectedModel === 'gpt-image-2'
     || selectedModel === 'GPT-image-2.5-Flare'
     || selectedModel === 'GPT-image-2.5-Sunburst'
+    || selectedModel === 'GPT-image-2.6-Flare'
+    || selectedModel === 'GPT-image-2.6-Sunburst'
     ? 'gpt'
     : isNanoBanana
       ? 'banana'
@@ -5888,6 +6043,8 @@ export default function App() {
     providerRouting.grokImageRoutes,
     providerRouting.flareRoutes,
     providerRouting.sunburstRoutes,
+    providerRouting.flare26Routes,
+    providerRouting.sunburst26Routes,
     selectedModel,
   ]);
 
@@ -5943,7 +6100,8 @@ export default function App() {
       setOptimizeChineseText(false);
       return;
     }
-    if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+    if (modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+      || modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
       setImageSize('1K');
       setGptQuality('auto');
       setOptimizeChineseText(false);
@@ -6145,11 +6303,13 @@ export default function App() {
         ? 'Nano_Banana_2_1'
         : normalizedName.includes('nano banana')
           ? 'Nano_Banana_Pro'
-          : normalizedName.includes('gpt-image-2.5')
-            ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
-            : normalizedName.includes('adobe')
-              ? 'gpt-image-2-adobe'
-              : 'gpt-image-2';
+          : normalizedName.includes('gpt-image-2.6')
+            ? (normalizedName.includes('sunburst') ? 'GPT-image-2.6-Sunburst' : 'GPT-image-2.6-Flare')
+            : normalizedName.includes('gpt-image-2.5')
+              ? (normalizedName.includes('sunburst') ? 'GPT-image-2.5-Sunburst' : 'GPT-image-2.5-Flare')
+              : normalizedName.includes('adobe')
+                ? 'gpt-image-2-adobe'
+                : 'gpt-image-2';
     setSelectedModel(normalizedModel);
     if (image.imageSize && ['STANDARD', '1K', '2K', '4K'].includes(image.imageSize)) {
       setImageSize(image.imageSize as ImageSizeOption);
@@ -8500,9 +8660,11 @@ export default function App() {
                             if (selectedModel === 'gpt-image-2' && item.value === 'STANDARD') {
                               setGptQuality('auto');
                             }
-                            // GPT-image-2.5 切换清晰度后，若当前比例不在新档位支持列表内，回退到 1:1
-                            if (isGptImage2_5) {
-                              const allowed = GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[item.value] || [];
+                            // GPT-image-2.5 / 2.6 切换清晰度后，若当前比例不在新档位支持列表内，回退到 1:1
+                            if (isGptImage2_5 || isGptImage2_6) {
+                              const allowed = (isGptImage2_5
+                                ? GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[item.value]
+                                : GPT_IMAGE_2_6_RATIO_OPTIONS[selectedModel]?.[item.value]) || [];
                               setDimensions((current) => (allowed as DimensionOption[]).includes(current) ? current : '1:1');
                               if (item.value === '1K') setGptQuality('auto');
                             }

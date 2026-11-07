@@ -335,6 +335,7 @@ export function createImageProviderRouter(options: RouterOptions) {
           form.set('size', requestSize(input, upstreamModel));
           form.set('response_format', requestedResponseFormat);
           const imageSources = (input.inlineImages?.length === input.images.length ? input.inlineImages : input.images).slice(0, input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst'
+              || input.modelId === 'GPT-image-2.6-Flare' || input.modelId === 'GPT-image-2.6-Sunburst'
               ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
               : MAX_REFERENCE_IMAGES);
           const blobs = await Promise.all(
@@ -495,6 +496,8 @@ export function createImageProviderRouter(options: RouterOptions) {
       (input.modelId === 'gpt-image-2'
         || input.modelId === 'GPT-image-2.5-Flare'
         || input.modelId === 'GPT-image-2.5-Sunburst'
+        || input.modelId === 'GPT-image-2.6-Flare'
+        || input.modelId === 'GPT-image-2.6-Sunburst'
         || input.modelId === 'Nano_Banana_Pro'
         || input.modelId === 'Grok_Image') &&
       candidates.length > 0;

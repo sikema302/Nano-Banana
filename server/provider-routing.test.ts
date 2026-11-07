@@ -71,6 +71,16 @@ const defaults: ProviderRoutingConfig = {
     '2K': [{ id: 'junliai-firefly', enabled: true }],
     '4K': [{ id: 'junliai-firefly', enabled: true }],
   },
+  flare26Routes: {
+    '1K': [{ id: 'junliai-economy', enabled: true }],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
+  sunburst26Routes: {
+    '1K': [{ id: 'junliai-economy', enabled: true }],
+    '2K': [{ id: 'junliai-firefly', enabled: true }],
+    '4K': [{ id: 'junliai-firefly', enabled: true }],
+  },
 };
 
 test('persists independent provider order and switches for each resolution', async () => {
@@ -192,6 +202,9 @@ test('fills legacy configs missing flare/sunburst groups from defaults', async (
   const config = await routing.get();
   assert.deepEqual(config.flareRoutes, defaults.flareRoutes);
   assert.deepEqual(config.sunburstRoutes, defaults.sunburstRoutes);
+  // 2.6 渠道组同样按 defaults 兜底补齐。
+  assert.deepEqual(config.flare26Routes, defaults.flare26Routes);
+  assert.deepEqual(config.sunburst26Routes, defaults.sunburst26Routes);
 
   // 独立调整 Flare 1K 顺序时，不影响 Sunburst 与 Image2。
   const nextFlare1K = [

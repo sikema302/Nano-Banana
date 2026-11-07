@@ -6,6 +6,11 @@ export type GrokImageProviderId = 'junliai-grok';
 // gpt-image-2.5-sunburst（仅 2K/4K，走 uselg.top 的 OpenAI 兼容 /v1/images 接口）。
 // Visionary 走的是自家模型（Flux、gpt-image-2），不是 2.5 上游，不进这两组。
 export type GptImage25ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'uselg-flare' | 'uselg-sunburst';
+// GPT-image-2.6 Flare / Sunburst 独立渠道组：junli 两个 2.6 上游——
+// 经济版 gpt-image-2.6-{flare|sunburst}（仅 1K，1 积分/张）、
+// Firefly gpt-image-2.6-{flare|sunburst}-firefly（仅 2K/4K，7 积分/张）。
+// junli 无通用 gpt-image-2.6 兜底模型，uselg 也未提供 2.6，因此只有这两个渠道。
+export type GptImage26ProviderId = 'junliai-economy' | 'junliai-firefly';
 export type ProviderResolution = '1K' | '2K' | '4K';
 
 export type ProviderChannel<T extends string = string> = {
@@ -24,6 +29,8 @@ export type ProviderRoutingConfig = {
   grokImageRoutes: ProviderResolutionRoutes<GrokImageProviderId>;
   flareRoutes: ProviderResolutionRoutes<GptImage25ProviderId>;
   sunburstRoutes: ProviderResolutionRoutes<GptImage25ProviderId>;
+  flare26Routes: ProviderResolutionRoutes<GptImage26ProviderId>;
+  sunburst26Routes: ProviderResolutionRoutes<GptImage26ProviderId>;
 };
 
 export type ProviderRoutingPatch = Partial<ProviderRoutingConfig>;
@@ -64,6 +71,8 @@ function cloneConfig(config: ProviderRoutingConfig): ProviderRoutingConfig {
     grokImageRoutes: cloneRoutes(config.grokImageRoutes),
     flareRoutes: cloneRoutes(config.flareRoutes),
     sunburstRoutes: cloneRoutes(config.sunburstRoutes),
+    flare26Routes: cloneRoutes(config.flare26Routes),
+    sunburst26Routes: cloneRoutes(config.sunburst26Routes),
   };
 }
 
@@ -171,6 +180,19 @@ function normalizeConfig(value: unknown, defaults: ProviderRoutingConfig): Provi
       record.sunburstRoutes,
       undefined,
       defaults.sunburstRoutes,
+      {},
+    ),
+    // 旧配置没有 2.6 渠道组：同样按 defaults 兜底补齐。
+    flare26Routes: normalizeRoutes(
+      record.flare26Routes,
+      undefined,
+      defaults.flare26Routes,
+      {},
+    ),
+    sunburst26Routes: normalizeRoutes(
+      record.sunburst26Routes,
+      undefined,
+      defaults.sunburst26Routes,
       {},
     ),
   };

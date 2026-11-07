@@ -267,6 +267,7 @@ export type Image2ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'jun
 export type BananaProviderId = 'flux' | 'flux-flash' | 'visionary' | 'junliai' | 'junliai-nano-banana-2' | 'schat-nano-banana-2';
 export type GrokImageProviderId = 'junliai-grok';
 export type GptImage25ProviderId = 'junliai-economy' | 'junliai-gpt-image-25' | 'junliai-firefly' | 'uselg-flare' | 'uselg-sunburst';
+export type GptImage26ProviderId = 'junliai-economy' | 'junliai-firefly';
 
 export interface ProviderChannel<T extends string = string> {
   id: T;
@@ -279,6 +280,8 @@ export interface ProviderRoutingConfig {
   grokImageRoutes: Record<ProviderResolution, Array<ProviderChannel<GrokImageProviderId>>>;
   flareRoutes: Record<ProviderResolution, Array<ProviderChannel<GptImage25ProviderId>>>;
   sunburstRoutes: Record<ProviderResolution, Array<ProviderChannel<GptImage25ProviderId>>>;
+  flare26Routes: Record<ProviderResolution, Array<ProviderChannel<GptImage26ProviderId>>>;
+  sunburst26Routes: Record<ProviderResolution, Array<ProviderChannel<GptImage26ProviderId>>>;
 }
 
 export interface AdminRecordsStats {

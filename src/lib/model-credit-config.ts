@@ -162,6 +162,8 @@ export const GENERATION_RECORD_MODEL_FILTERS: Array<{ label: string; modelIds: s
   { label: 'GPT-image-2', modelIds: ['gpt-image-2'] },
   { label: 'GPT-image-2.5 Flare', modelIds: ['GPT-image-2.5-Flare'] },
   { label: 'GPT-image-2.5 Sunburst', modelIds: ['GPT-image-2.5-Sunburst'] },
+  { label: 'GPT-image-2.6 Flare', modelIds: ['GPT-image-2.6-Flare'] },
+  { label: 'GPT-image-2.6 Sunburst', modelIds: ['GPT-image-2.6-Sunburst'] },
   { label: 'Nano Banana Pro', modelIds: ['Nano_Banana_Pro'] },
   { label: 'Nano Banana 2.1', modelIds: ['Nano_Banana_2_1'] },
   { label: 'Grok Image', modelIds: ['Grok_Image', 'grok-image', 'grok_image'] },
@@ -212,6 +214,8 @@ export type ModelCreditPricing = {
   gptImage2: GptImagePricing;
   gptImage25Flare: GptImagePricing;
   gptImage25Sunburst: GptImagePricing;
+  gptImage26Flare: GptImagePricing;
+  gptImage26Sunburst: GptImagePricing;
   gptImage2Adobe: GptImage2AdobeCreditPricing;
   nanoBanana: NanoBananaCreditPricing;
   nanoBanana21: NanoBanana21CreditPricing;
@@ -224,6 +228,15 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
   gptImage2: { ...DEFAULT_GPT_IMAGE_PRICING },
   gptImage25Flare: { ...DEFAULT_GPT_IMAGE_PRICING },
   gptImage25Sunburst: {
+    standard: 20,
+    twoK: 34,
+    twoKHigh: 48,
+    fourK: 40,
+    fourKHigh: 48,
+  },
+  // GPT-image-2.6 与 2.5 同结构定价：Flare 沿用 GPT 默认档，Sunburst 沿用 2.5 Sunburst 档。
+  gptImage26Flare: { ...DEFAULT_GPT_IMAGE_PRICING },
+  gptImage26Sunburst: {
     standard: 20,
     twoK: 34,
     twoKHigh: 48,
@@ -291,6 +304,8 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     gptImage2: normalizeGptImagePricing(source.gptImage2),
     gptImage25Flare: normalizeGptImagePricing(source.gptImage25Flare),
     gptImage25Sunburst: normalizeGptImagePricing(source.gptImage25Sunburst),
+    gptImage26Flare: normalizeGptImagePricing(source.gptImage26Flare),
+    gptImage26Sunburst: normalizeGptImagePricing(source.gptImage26Sunburst),
     gptImage2Adobe: {
       oneK: positiveCredit(gptImage2Adobe.oneK, DEFAULT_MODEL_CREDIT_PRICING.gptImage2Adobe.oneK),
     },
@@ -336,12 +351,17 @@ export function getConfiguredImageCredits(
   imageSize: string,
   quality = '',
 ) {
-  if (modelId === 'gpt-image-2' || modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst') {
+  if (modelId === 'gpt-image-2' || modelId === 'GPT-image-2.5-Flare' || modelId === 'GPT-image-2.5-Sunburst'
+    || modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
     const gptPricing = modelId === 'GPT-image-2.5-Flare'
       ? pricing.gptImage25Flare
       : modelId === 'GPT-image-2.5-Sunburst'
         ? pricing.gptImage25Sunburst
-        : pricing.gptImage2;
+        : modelId === 'GPT-image-2.6-Flare'
+          ? pricing.gptImage26Flare
+          : modelId === 'GPT-image-2.6-Sunburst'
+            ? pricing.gptImage26Sunburst
+            : pricing.gptImage2;
     const normalizedQuality = String(quality).toLowerCase();
     if (imageSize === '2K') return normalizedQuality === 'high' ? gptPricing.twoKHigh : gptPricing.twoK;
     if (imageSize === '4K') return normalizedQuality === 'high' ? gptPricing.fourKHigh : gptPricing.fourK;

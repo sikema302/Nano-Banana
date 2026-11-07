@@ -6,6 +6,8 @@ const MODEL_THEME: Record<string, { glow: string }> = {
   'gpt-image-2': { glow: 'rgba(168,85,247,0.45)' },
   'GPT-image-2.5-Flare': { glow: 'rgba(251,146,60,0.45)' },
   'GPT-image-2.5-Sunburst': { glow: 'rgba(244,63,94,0.45)' },
+  'GPT-image-2.6-Flare': { glow: 'rgba(245,158,11,0.45)' },
+  'GPT-image-2.6-Sunburst': { glow: 'rgba(217,70,239,0.45)' },
   Nano_Banana_Pro: { glow: 'rgba(16,185,129,0.45)' },
   Nano_Banana_2_1: { glow: 'rgba(20,184,166,0.45)' },
   Grok_Image: { glow: 'rgba(148,163,184,0.5)' },
