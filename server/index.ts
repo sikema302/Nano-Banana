@@ -1067,7 +1067,7 @@ const models = [
     id: 'GPT-image-2.6-Sunburst',
     name: 'GPT-image-2.6 Sunburst',
     description: 'OpenAI最新生图模型 · 思考更久',
-    creditsCost: 20,
+    creditsCost: 24,
   },
   {
     id: 'Nano_Banana_Pro',

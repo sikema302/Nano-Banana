@@ -237,7 +237,8 @@ export const DEFAULT_MODEL_CREDIT_PRICING: ModelCreditPricing = {
   // GPT-image-2.6 与 2.5 同结构定价：Flare 沿用 GPT 默认档，Sunburst 沿用 2.5 Sunburst 档。
   gptImage26Flare: { ...DEFAULT_GPT_IMAGE_PRICING },
   gptImage26Sunburst: {
-    standard: 20,
+    // 1K 站点售价按 2026-11-07 定价：上游 junli 1 积分/张，站点收 24 积分。
+    standard: 24,
     twoK: 34,
     twoKHigh: 48,
     fourK: 40,
@@ -283,6 +284,17 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
   const gptImage2Adobe: Partial<GptImage2AdobeCreditPricing> = source.gptImage2Adobe && typeof source.gptImage2Adobe === 'object'
     ? source.gptImage2Adobe
     : {};
+  // GPT-image-2.6 是后加的定价组：线上存量计价记录里没有这两个键，
+  // 若直接丢给 normalizeGptImagePricing(undefined) 会回退成「GPT 默认档」（1K 20 / 2K 28 / 4K 34），
+  // 而不是 2.6 自己的档位。这里用 2.6 默认值打底、再用存量记录覆盖，保证默认价能生效。
+  const gptImage26Flare: Partial<GptImagePricing> =
+    source.gptImage26Flare && typeof source.gptImage26Flare === 'object'
+      ? source.gptImage26Flare as Partial<GptImagePricing>
+      : {};
+  const gptImage26Sunburst: Partial<GptImagePricing> =
+    source.gptImage26Sunburst && typeof source.gptImage26Sunburst === 'object'
+      ? source.gptImage26Sunburst as Partial<GptImagePricing>
+      : {};
   const nanoBanana21: Partial<NanoBanana21CreditPricing> =
     source.nanoBanana21 && typeof source.nanoBanana21 === 'object'
       ? source.nanoBanana21 as Partial<NanoBanana21CreditPricing>
@@ -304,8 +316,8 @@ export function normalizeModelCreditPricing(value: unknown): ModelCreditPricing 
     gptImage2: normalizeGptImagePricing(source.gptImage2),
     gptImage25Flare: normalizeGptImagePricing(source.gptImage25Flare),
     gptImage25Sunburst: normalizeGptImagePricing(source.gptImage25Sunburst),
-    gptImage26Flare: normalizeGptImagePricing(source.gptImage26Flare),
-    gptImage26Sunburst: normalizeGptImagePricing(source.gptImage26Sunburst),
+    gptImage26Flare: normalizeGptImagePricing({ ...DEFAULT_MODEL_CREDIT_PRICING.gptImage26Flare, ...gptImage26Flare }),
+    gptImage26Sunburst: normalizeGptImagePricing({ ...DEFAULT_MODEL_CREDIT_PRICING.gptImage26Sunburst, ...gptImage26Sunburst }),
     gptImage2Adobe: {
       oneK: positiveCredit(gptImage2Adobe.oneK, DEFAULT_MODEL_CREDIT_PRICING.gptImage2Adobe.oneK),
     },

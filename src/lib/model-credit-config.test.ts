@@ -62,6 +62,28 @@ test('Grok Image is tiered 1K 20 / 2K 22', () => {
   assert.equal(getConfiguredImageCredits(pricing, 'Grok_Image', '2K'), 31);
 });
 
+test('GPT-image-2.6 Sunburst 1K is priced at 24, and stale records keep it', () => {
+  // 1K = 24 积分（上游 junli 1 积分/张）
+  assert.equal(DEFAULT_MODEL_CREDIT_PRICING.gptImage26Sunburst.standard, 24);
+  assert.equal(getConfiguredImageCredits(DEFAULT_MODEL_CREDIT_PRICING, 'GPT-image-2.6-Sunburst', '1K'), 24);
+
+  // 线上存量计价记录是 2.6 上线前保存的，没有 gptImage26 键：
+  // 归一化后 2.6 必须取自己的默认档（1K 24），不能回退成 GPT 默认档 20。
+  const legacy = normalizeModelCreditPricing({
+    gptImage2: { standard: 20, twoK: 28, twoKHigh: 48, fourK: 34, fourKHigh: 48 },
+  });
+  assert.deepEqual(legacy.gptImage26Sunburst, DEFAULT_MODEL_CREDIT_PRICING.gptImage26Sunburst);
+  assert.equal(getConfiguredImageCredits(legacy, 'GPT-image-2.6-Sunburst', '1K'), 24);
+
+  // 后台改成 30 后以记录为准
+  const overridden = normalizeModelCreditPricing({
+    gptImage26Sunburst: { standard: 30 },
+  });
+  assert.equal(getConfiguredImageCredits(overridden, 'GPT-image-2.6-Sunburst', '1K'), 30);
+  // 只改 1K 不影响其它档位
+  assert.equal(getConfiguredImageCredits(overridden, 'GPT-image-2.6-Sunburst', '2K'), 34);
+});
+
 test('invalid values fall back without dropping unrelated tiers', () => {
   const pricing = normalizeModelCreditPricing({
     nanoBanana: { oneK: -1, twoK: 88 },
