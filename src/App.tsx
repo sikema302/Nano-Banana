@@ -443,6 +443,11 @@ function displayModelName(modelName: string) {
   return parts.length > 1 ? parts[parts.length - 1].trim() || value : value;
 }
 
+// GPT-image-2.6 前端暂时只开放 1K 选中（1K 走 junli 经济版，2K/4K 走 firefly）。
+// 仅限制界面可选性，后端与公开 API 的档位能力不变；恢复时把档位加回这个数组即可。
+// BatchCreateView 内的同款常量需同步修改。
+const GPT_IMAGE_2_6_ENABLED_SIZES: ReadonlyArray<ImageSizeOption> = ['1K'];
+
 function isImageResolutionEnabled(
   routing: ProviderRoutingConfig,
   modelId: string,
@@ -451,6 +456,11 @@ function isImageResolutionEnabled(
   // Banana 2.1 走固定的单一上游，不受后台渠道开关影响，三个尺寸档恒可用。
   if (modelId === 'Nano_Banana_2_1') return true;
   const resolution = imageSize === '2K' || imageSize === '4K' ? imageSize : '1K';
+  // GPT-image-2.6 前端暂时只开放 1K，2K/4K 一律视为不可选
+  if ((modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst')
+    && !GPT_IMAGE_2_6_ENABLED_SIZES.includes(resolution as ImageSizeOption)) {
+    return false;
+  }
   const channels = isNanoBananaModel(modelId)
     ? routing.bananaRoutes[resolution]
     : modelId === 'Grok_Image'
@@ -5812,7 +5822,10 @@ export default function App() {
     ? imageSizeOptions.filter((item) => item.value === '1K' || item.value === '2K')
     : selectedModel === 'gpt-image-2-adobe'
       ? imageSizeOptions.filter((item) => item.value === '1K')
-      : selectedResolutionOptions;
+      : isGptImage2_6
+        // GPT-image-2.6 前端暂时只开放 1K，2K/4K 不可选
+        ? imageSizeOptions.filter((item) => GPT_IMAGE_2_6_ENABLED_SIZES.includes(item.value))
+        : selectedResolutionOptions;
   const visibleDimensionOptions = isGptImage2_5
     ? (GPT_IMAGE_2_5_RATIO_OPTIONS[selectedModel]?.[imageSize] || []).map((value) => ({ value, label: value }))
     : isGptImage2_6
@@ -6027,12 +6040,19 @@ export default function App() {
   }, [loading]);
 
   useEffect(() => {
+    // GPT-image-2.6 前端暂时只开放 1K：历史记录回填、编辑复用等途径带入 2K/4K 时统一回退到 1K
+    if (isGptImage2_6 && !GPT_IMAGE_2_6_ENABLED_SIZES.includes(imageSize)) {
+      setImageSize('1K');
+      return;
+    }
     if (!isImageResolutionEnabled(providerRouting, selectedModel, imageSize)) {
       const candidates: ImageSizeOption[] = isNanoBanana
         ? ['1K', '2K', '4K']
         : selectedModel === 'Grok_Image'
           ? ['1K', '2K']
-          : ['STANDARD', '2K', '4K'];
+          : isGptImage2_6
+            ? ['1K']
+            : ['STANDARD', '2K', '4K'];
       const next = candidates.find((candidate) => isImageResolutionEnabled(providerRouting, selectedModel, candidate));
       if (next) setImageSize(next);
     }

@@ -138,6 +138,10 @@ const GPT_IMAGE_2_6_RATIO_OPTIONS: Record<string, Record<string, string[]>> = {
     '4K': ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
   },
 };
+// GPT-image-2.6 前端暂时只开放 1K 选中（仅限制界面，后端与公开 API 的档位能力不变）。
+// 与 App.tsx 的 GPT_IMAGE_2_6_ENABLED_SIZES 保持同步。
+const GPT_IMAGE_2_6_ENABLED_SIZES: ImageSize[] = ['1K'];
+
 const qualityOptions: Array<{ value: ImageQuality; label: string }> = [
   { value: 'auto', label: 'auto' },
   { value: 'low', label: '低' },
@@ -535,6 +539,8 @@ export default function BatchCreateView({
           providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
       : isGpt25 || isGpt26
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) => {
+          // GPT-image-2.6 暂时只开放 1K，2K/4K 不可选
+          if (isGpt26 && !GPT_IMAGE_2_6_ENABLED_SIZES.includes(resolution)) return false;
           const routes = model?.id === 'GPT-image-2.5-Flare'
             ? providerRouting.flareRoutes
             : model?.id === 'GPT-image-2.5-Sunburst'
