@@ -231,6 +231,10 @@ function getCredits(
   if (model.id === 'Nano_Banana_2_1') {
     return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
   }
+  // Grok Image 只有 1K / 2K 两档，其余尺寸按 2K 计价。
+  if (model.id === 'Grok_Image') {
+    return getConfiguredImageCredits(modelCreditPricing, model.id, imageSize, quality);
+  }
   return typeof model.creditsCost === 'number' ? model.creditsCost : 1;
 }
 
@@ -450,7 +454,8 @@ export default function BatchCreateView({
       || item.id === 'GPT-image-2.6-Flare'
       || item.id === 'GPT-image-2.6-Sunburst'
       || item.id === 'Nano_Banana_Pro'
-      || item.id === 'Nano_Banana_2_1'),
+      || item.id === 'Nano_Banana_2_1'
+      || item.id === 'Grok_Image'),
     [models],
   );
   const [mode, setMode] = useState<BatchMode>('multiple');
@@ -484,10 +489,16 @@ export default function BatchCreateView({
   const isGpt25 = model ? isGpt25Model(model.id) : false;
   const isGpt26 = model ? isGpt26Model(model.id) : false;
   const isGpt25Family = isGpt25 || isGpt26;
+  const isGrok = model?.id === 'Grok_Image';
   const canEnhanceNano = model?.id === 'Nano_Banana_Pro';
   const effectiveOptimizeChineseText = canEnhanceNano && optimizeChineseText;
   const sourceLimit = mode === 'unified' ? MAX_UNIFIED_IMAGES : MAX_GROUP_IMAGES;
-  const refsLimit = model && isGpt25FamilyModel(model.id) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
+  // Grok Image 上游最多 3 张参考图；GPT-2.5/2.6 最多 9 张；其余走默认上限。
+  const refsLimit = model && isGpt25FamilyModel(model.id)
+    ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+    : isGrok
+      ? 3
+      : MAX_REFERENCE_IMAGES;
   const activePrompts = prompts.filter((item) => item.value.trim());
   const activeCards = taskCards.filter((item) => item.prompt.trim());
   const taskCount = mode === 'unified'
@@ -531,12 +542,17 @@ export default function BatchCreateView({
     ? (isGpt25
         ? GPT_IMAGE_2_5_RATIO_OPTIONS[model.id]?.[imageSize as string] || []
         : GPT_IMAGE_2_6_RATIO_OPTIONS[model.id]?.[imageSize as string] || [])
-    : aspectOptions;
+    : isGrok
+      ? aspectOptions.filter((value) => value !== '21:9')
+      : aspectOptions;
   const resolutionOptions: ImageSize[] = isNano21
     ? (['1K', '2K', '4K'] as ImageSize[])
     : isNano
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) =>
           providerRouting.bananaRoutes[resolution as '1K' | '2K' | '4K'].some((channel) => channel.enabled))
+      : isGrok
+      ? (['1K', '2K'] as ImageSize[]).filter((resolution) =>
+          providerRouting.grokImageRoutes[resolution as '1K' | '2K'].some((channel) => channel.enabled))
       : isGpt25 || isGpt26
       ? (['1K', '2K', '4K'] as ImageSize[]).filter((resolution) => {
           // GPT-image-2.6 暂时只开放 1K，2K/4K 不可选
@@ -624,7 +640,11 @@ export default function BatchCreateView({
 
   function changeModel(modelId: string) {
     setSelectedModel(modelId);
-    const nextRefsLimit = isGpt25FamilyModel(modelId) ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES : MAX_REFERENCE_IMAGES;
+    const nextRefsLimit = isGpt25FamilyModel(modelId)
+      ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
+      : modelId === 'Grok_Image'
+        ? 3
+        : MAX_REFERENCE_IMAGES;
     setTaskCards((current) => current.map((item) => ({ ...item, references: item.references.slice(0, nextRefsLimit) })));
     if (modelId === 'gpt-image-2') {
       setImageSize('STANDARD');
@@ -642,6 +662,16 @@ export default function BatchCreateView({
       setTaskCards((current) => current.map((item) => ({
         ...item,
         priorityAspect: item.priorityAspect && allowed.includes(item.priorityAspect) ? item.priorityAspect : '',
+      })));
+    } else if (modelId === 'Grok_Image') {
+      // Grok 只有 1K / 2K 两档，默认 1K；比例不支持 21:9。
+      setImageSize('1K');
+      setQuality('auto');
+      setOptimizeChineseText(false);
+      setDimensions((current) => (current === '21:9' ? '1:1' : current));
+      setTaskCards((current) => current.map((item) => ({
+        ...item,
+        priorityAspect: item.priorityAspect === '21:9' ? '' : item.priorityAspect,
       })));
     } else if (modelId === 'Nano_Banana_2_1') {
       // Banana 2.1 单上游、三档尺寸恒可用，默认 1K；不支持 AI 增强。
