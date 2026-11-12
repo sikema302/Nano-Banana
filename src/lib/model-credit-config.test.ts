@@ -140,6 +140,21 @@ test('minimax-h3-768p video credits = per-second linear (48/s)', () => {
   assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'minimax-h3-768p', '768p', Number.NaN), 0);
 });
 
+test('muse-video credits = flat 180 regardless of resolution or seconds', () => {
+  // 统一一口价 180，不随清晰度/时长变化
+  for (const resolution of ['480p', '720p', '1080p']) {
+    for (const seconds of [5, 8, 15]) {
+      assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'muse-video', resolution, seconds), 180);
+    }
+  }
+  // 非法秒数不影响一口价
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'muse-video', '720p', 0), 180);
+  assert.equal(getConfiguredVideoCredits(DEFAULT_MODEL_CREDIT_PRICING, 'muse-video', '720p', Number.NaN), 180);
+  // 后台改价后按记录为准
+  const overridden = normalizeModelCreditPricing({ video: { muse: { credits: 200 } } });
+  assert.equal(getConfiguredVideoCredits(overridden, 'muse-video', '1080p', 15), 200);
+});
+
 test('normalizes nested minimax + grok video pricing', () => {
   const pricing = normalizeModelCreditPricing({
     video: {

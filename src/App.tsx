@@ -883,6 +883,7 @@ const VIDEO_MODEL_THEME: Record<VideoModelId, { glow: string }> = {
   'grok-imagine-video-1.5': { glow: 'rgba(56,189,248,0.45)' },
   'minimax-h3-768p': { glow: 'rgba(250,204,21,0.45)' },
   'minimax-h3-optimized': { glow: 'rgba(52,211,153,0.45)' },
+  'muse-video': { glow: 'rgba(45,212,191,0.45)' },
 };
 
 function getVideoModelTheme(modelId: VideoModelId) {
@@ -894,6 +895,7 @@ function getVideoModelDescription(modelId: VideoModelId) {
   if (modelId === 'grok-imagine-video-1.5') return 'grok 视频生成模型';
   if (modelId === 'minimax-h3-768p') return '可传参考视频';
   if (modelId === 'minimax-h3-optimized') return '自部署优化版，参考图最多 9 张';
+  if (modelId === 'muse-video') return 'Muse 视频，参考图/视频/音频各最多 10';
   return '';
 }
 
@@ -6182,7 +6184,7 @@ export default function App() {
       setNotice(`最多上传 ${maxRef} 段参考视频`);
       return;
     }
-    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 50 * 1024 * 1024, 50, 'video/mp4')));
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 100 * 1024 * 1024, 100, 'video/mp4')));
     setVideoReferenceVideos((current) => [...current, ...next].slice(0, maxRef));
   }
 
@@ -6194,7 +6196,7 @@ export default function App() {
       setNotice(`最多上传 ${maxRef} 段参考音频`);
       return;
     }
-    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 20 * 1024 * 1024, 20, 'audio/mpeg')));
+    const next = await Promise.all(files.slice(0, remaining).map((file) => fileToBase64(file, 100 * 1024 * 1024, 100, 'audio/mpeg')));
     setVideoReferenceAudios((current) => [...current, ...next].slice(0, maxRef));
   }
 
@@ -8156,7 +8158,7 @@ export default function App() {
                     <section className="space-y-1.5">
                       <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
                         <span>上传参考视频（可选）</span>
-                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceVideos.length} / {VIDEO_MODELS[videoModel].maxReferenceVideos} · 单个 ≤50MB</span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceVideos.length} / {VIDEO_MODELS[videoModel].maxReferenceVideos} · 单个 ≤100MB</span>
                       </div>
                       <div className="card bg-transparent! p-1.5">
                         <div className="flex flex-wrap gap-2">
@@ -8207,7 +8209,7 @@ export default function App() {
                     <section className="space-y-1.5">
                       <div className="flex items-center justify-between gap-3 text-[10px] font-bold text-zinc-400">
                         <span>上传参考音频（可选）</span>
-                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceAudios.length} / {VIDEO_MODELS[videoModel].maxReferenceAudios} · 单个 ≤20MB</span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">{videoReferenceAudios.length} / {VIDEO_MODELS[videoModel].maxReferenceAudios} · 单个 ≤100MB</span>
                       </div>
                       <div className="card bg-transparent! p-1.5">
                         <div className="flex flex-wrap gap-2">

@@ -2362,8 +2362,8 @@ type VideoGenerationInput = {
 };
 
 async function callVideoGeneration(input: VideoGenerationInput) {
-  // MiniMax H3 优化版走君临渠道，复用君临图像同一把 Key；其余视频模型仍走 uselg。
-  const useJunliai = input.modelId === 'minimax-h3-optimized';
+  // MiniMax H3 优化版与 muse-video 均走君临渠道，复用君临图像同一把 Key；其余视频模型仍走 uselg。
+  const useJunliai = input.modelId === 'minimax-h3-optimized' || input.modelId === 'muse-video';
   const apiKey = useJunliai ? JUNLIAI_API_KEY : USELG_VIDEO_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -6587,6 +6587,7 @@ function isVideoModelHistoryId(modelId?: string) {
   if (modelId.startsWith('minimax_h3') || modelId.startsWith('minimax-h3')) return true;
   if (modelId === '全参MinimaxH3') return true;
   if (modelId.startsWith('grok-imagine-video-1.5')) return true;
+  if (modelId.startsWith('muse-video') || modelId.startsWith('muse_video')) return true;
   return false;
 }
 
