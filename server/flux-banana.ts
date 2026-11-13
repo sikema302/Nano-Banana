@@ -1,5 +1,5 @@
 import { MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
-import { pooledFetch, isConnectionTerminatedError } from './pooled-fetch.js';
+import { pooledFetch, isConnectionTerminatedError, downloadReferenceImage } from './pooled-fetch.js';
 import { indeterminateTaskError } from './generation-reconciliation.js';
 
 export type FluxBananaInput = {
@@ -127,7 +127,7 @@ function authHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-async function referencePart(source: string, signal: AbortSignal, fetchImpl: typeof fetch): Promise<GeminiPart> {
+async function referencePart(source: string, signal: AbortSignal): Promise<GeminiPart> {
   if (source.startsWith('data:')) {
     const match = source.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
     if (!match) throw providerError('Invalid reference image data URL', true);
@@ -138,19 +138,10 @@ async function referencePart(source: string, signal: AbortSignal, fetchImpl: typ
     return { inlineData: { mimeType, data } };
   }
 
-  let response: Response;
-  try {
-    response = await fetchImpl(source, { signal });
-  } catch (error) {
-    throw providerError(error instanceof Error ? error.message : 'Unable to load reference image', true);
-  }
-  if (!response.ok) {
-    throw providerError(`Unable to load reference image (${response.status})`, true, response.status);
-  }
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const { mimeType, bytes } = await downloadReferenceImage(source, { signal });
   return {
     inlineData: {
-      mimeType: response.headers.get('content-type') || 'image/png',
+      mimeType,
       data: bytes.toString('base64'),
     },
   };
@@ -313,7 +304,7 @@ async function submitViaGeminiNative(
   const imageSources = (input.inlineImages?.length === input.images.length ? input.inlineImages : input.images)
     .slice(0, MAX_REFERENCE_IMAGES);
   parts.push(...await Promise.all(
-    imageSources.map((source) => referencePart(source, signal, fetchImpl)),
+    imageSources.map((source) => referencePart(source, signal)),
   ));
   const response = await fetchImpl(
     `${rootUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,

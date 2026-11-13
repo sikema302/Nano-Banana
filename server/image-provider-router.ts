@@ -1,4 +1,5 @@
 import { MAX_GPT_IMAGE_25_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES } from '../src/lib/reference-image-limits.js';
+import { downloadReferenceImage } from './pooled-fetch.js';
 
 export type ImageGenerationInput = {
   prompt: string;
@@ -170,7 +171,7 @@ function payloadError(payload: ImageApiPayload) {
   return payload.error?.message || payload.message || payload.detail || '';
 }
 
-async function imageBlob(source: string, signal: AbortSignal, fetchImpl: typeof fetch) {
+async function imageBlob(source: string, signal: AbortSignal) {
   if (source.startsWith('data:')) {
     const match = source.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
     if (!match) throw new Error('Invalid reference image data URL');
@@ -179,9 +180,8 @@ async function imageBlob(source: string, signal: AbortSignal, fetchImpl: typeof 
       : Buffer.from(decodeURIComponent(match[3]));
     return new Blob([bytes], { type: match[1] || 'image/png' });
   }
-  const response = await fetchImpl(source, { signal });
-  if (!response.ok) throw new Error(`Unable to load reference image (${response.status})`);
-  return response.blob();
+  const { mimeType, bytes } = await downloadReferenceImage(source, { signal });
+  return new Blob([bytes], { type: mimeType });
 }
 
 function errorText(error: unknown) {
@@ -339,7 +339,7 @@ export function createImageProviderRouter(options: RouterOptions) {
               ? MAX_GPT_IMAGE_25_REFERENCE_IMAGES
               : MAX_REFERENCE_IMAGES);
           const blobs = await Promise.all(
-            imageSources.map((source) => imageBlob(source, controller.signal, fetchImpl)),
+            imageSources.map((source) => imageBlob(source, controller.signal)),
           );
           const imageField = blobs.length > 1 ? 'image[]' : 'image';
           blobs.forEach((blob, index) => form.append(imageField, blob, `reference-${index + 1}.png`));

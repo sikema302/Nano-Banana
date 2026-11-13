@@ -133,6 +133,47 @@ export async function pooledFetch(
 }
 
 /**
+ * 下载参考图外链：带重试与更长超时。
+ * 参考图常挂在第三方免费图床（如 catbox.moe），国内/服务器所在区域访问不稳定，
+ * undici 默认 10s 连接超时极易误杀；这里复用连接池 Agent（连接超时 30s）并重试。
+ * 失败时抛出以「参考图读取失败」开头的错误，便于上层识别为参考图问题而非服务故障。
+ */
+export async function downloadReferenceImage(
+  source: string,
+  options: { signal?: AbortSignal; retries?: number; timeoutMs?: number } = {},
+): Promise<{ mimeType: string; bytes: Buffer }> {
+  const retries = options.retries ?? 3;
+  const timeoutMs = options.timeoutMs ?? 45_000;
+  const baseUrl = (() => {
+    try { return new URL(source).origin; } catch { return source; }
+  })();
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      const response = await pooledFetch(source, { signal: options.signal }, { baseUrl, timeoutMs });
+      if (!response.ok) {
+        throw new Error(`参考图读取失败（HTTP ${response.status}）`);
+      }
+      const mimeType = (response.headers.get('content-type') || 'image/png').split(';')[0].trim();
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length) throw new Error('参考图读取失败（下载内容为空）');
+      return { mimeType, bytes };
+    } catch (error) {
+      lastError = error;
+      // HTTP 状态码错误重试无意义；外部已取消也不重试。
+      const message = error instanceof Error ? error.message : '';
+      if (options.signal?.aborted || /^参考图读取失败（HTTP \d+）$/.test(message)) {
+        throw error;
+      }
+      if (attempt < retries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+  }
+  throw new Error(`参考图读取失败：${lastError instanceof Error ? lastError.message : '网络异常'}`);
+}
+
+/**
  * 判断是否应该对当前渠道快速 fallback（连接断开类错误 + 不可重试错误）。
  */
 export function shouldFastFailover(error: unknown): boolean {
