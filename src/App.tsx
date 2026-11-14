@@ -144,6 +144,7 @@ import {
   supportsVideoReferenceImageSurcharge,
   GENERATION_RECORD_MODEL_FILTERS,
   HIDDEN_VIDEO_MODEL_IDS,
+  HIDDEN_IMAGE_MODEL_IDS,
   VIDEO_MODELS,
   VIDEO_REFERENCE_IMAGE_FREE_COUNT,
   VIDEO_EXTRA_REFERENCE_IMAGE_CREDITS,
@@ -5808,9 +5809,10 @@ export default function App() {
   // GPT-image-2 的 STANDARD、GPT-image-2.5 / 2.6 的 1K 都是上游"标准"档，不支持 quality
   const disableGptQuality = showGptQuality && (imageSize === 'STANDARD' || (isGptImage25Family && imageSize === '1K'));
   // gpt-image-2 Adobe 仅对指定账号开放，其余用户在选择器中隐藏
-  const visibleModels = (user?.username || '').toLowerCase() === 'lh1173444'
+  const visibleModels = ((user?.username || '').toLowerCase() === 'lh1173444'
     ? models
-    : models.filter((item) => item.id !== 'gpt-image-2-adobe');
+    : models.filter((item) => item.id !== 'gpt-image-2-adobe'))
+    .filter((item) => !HIDDEN_IMAGE_MODEL_IDS.includes(item.id));
   const selectedModelInfo = models.find((item) => item.id === selectedModel) || defaultModels.find((item) => item.id === selectedModel) || null;
   const selectedModelCredits = getModelCredits(selectedModelInfo, {
     imageSize,

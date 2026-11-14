@@ -152,6 +152,9 @@ export const VIDEO_DEFAULT_MODEL_ID: VideoModelId = 'minimax-h3';
  */
 export const HIDDEN_VIDEO_MODEL_IDS: VideoModelId[] = ['minimax-h3-768p', 'minimax-h3', 'grok-imagine-video-1.5'];
 
+/** 图像模型：前端选择器隐藏（下架但保留配置与生成链路）。 */
+export const HIDDEN_IMAGE_MODEL_IDS: string[] = ['Grok_Image'];
+
 /** 把前端/历史传入的模型名归一化为内部 VideoModelId，非法值回退 minimax-h3。 */
 export function normalizeVideoModelId(value: unknown): VideoModelId {
   if (value === 'minimax-h3' || value === 'minimax_h3' || value === '全参MinimaxH3') return 'minimax-h3';
