@@ -90,6 +90,7 @@ import {
   onDownloadError,
   rechargeAdminUserCredits,
   rechargeInviteCodeCredits as rechargeInviteCodeCreditsRequest,
+  resetAdminUserPassword,
   rechargePublicApiKeyCredits,
   redeemInviteCode,
   reclaimInviteCodeCredits as reclaimInviteCodeCreditsRequest,
@@ -3741,6 +3742,7 @@ function AdminView({
   onRechargeUser,
   onDeductUser,
   onDeleteUser,
+  onResetPassword,
   onUpdateProviderRouting,
   onUpdateModelCreditPricing,
   onLoadSection,
@@ -3777,6 +3779,7 @@ function AdminView({
   onRechargeUser: (user: AdminUserSummary, credits: CreditBalances) => Promise<void>;
   onDeductUser: (user: AdminUserSummary, credits: number) => Promise<void>;
   onDeleteUser: (user: AdminUserSummary) => Promise<void>;
+  onResetPassword: (user: AdminUserSummary) => Promise<void>;
   onUpdateProviderRouting: (patch: Partial<ProviderRoutingConfig>, notice?: string) => Promise<void>;
   onUpdateModelCreditPricing: (pricing: ModelCreditPricing) => Promise<void>;
   onLoadSection: (
@@ -3821,6 +3824,7 @@ function AdminView({
   const [rechargeAmounts, setRechargeAmounts] = useState<CreditBalances>({ gpt: 0, banana: 0, general: 0 });
   const [deductingUserId, setDeductingUserId] = useState('');
   const [deletingUserId, setDeletingUserId] = useState('');
+  const [resettingPasswordUserId, setResettingPasswordUserId] = useState('');
   const [redemptionUser, setRedemptionUser] = useState<AdminUserSummary | null>(null);
   const [redemptionRecords, setRedemptionRecords] = useState<InviteRedemptionRecord[]>([]);
   const [redemptionLoading, setRedemptionLoading] = useState(false);
@@ -3933,6 +3937,20 @@ function AdminView({
       await onDeleteUser(user);
     } finally {
       setDeletingUserId('');
+    }
+  }
+
+  async function handleResetPasswordUser(user: AdminUserSummary) {
+    const confirmed = window.confirm(
+      `确定重置用户 ${user.username} 的密码吗？\n\n密码将统一重置为该用户的用户名「${user.username}」。`,
+    );
+    if (!confirmed) return;
+
+    setResettingPasswordUserId(user.userId);
+    try {
+      await onResetPassword(user);
+    } finally {
+      setResettingPasswordUserId('');
     }
   }
 
@@ -5101,7 +5119,7 @@ function AdminView({
                                   ) : null}
                                   <button
                                     className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || (item.username.toLowerCase() !== 'admin' && adminCredits.remainingCredits <= 0) || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || (item.username.toLowerCase() !== 'admin' && adminCredits.remainingCredits <= 0) || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId || resettingPasswordUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleRechargeUser(item)}
                                   >
@@ -5109,15 +5127,23 @@ function AdminView({
                                   </button>
                                   <button
                                     className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || item.remainingCredits <= 0 || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId || resettingPasswordUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeductUser(item)}
                                   >
                                     {deductingUserId === item.userId ? '扣除中...' : '扣积分'}
                                   </button>
                                   <button
+                                    className="rounded-lg border border-violet-500/20 bg-violet-500/10 px-2 py-1.5 text-[11px] font-semibold text-violet-100 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled={isApiKeyUsage || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId || resettingPasswordUserId === item.userId}
+                                    type="button"
+                                    onClick={() => void handleResetPasswordUser(item)}
+                                  >
+                                    {resettingPasswordUserId === item.userId ? '重置中...' : '重置密码'}
+                                  </button>
+                                  <button
                                     className="inline-flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2 py-1.5 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled={isApiKeyUsage || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId}
+                                    disabled={isApiKeyUsage || rechargingUserId === item.userId || deductingUserId === item.userId || deletingUserId === item.userId || resettingPasswordUserId === item.userId}
                                     type="button"
                                     onClick={() => void handleDeleteUser(item)}
                                   >
@@ -6787,6 +6813,16 @@ export default function App() {
       void loadAdminSection('users', { page: 1, pageSize: 10 });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '删除用户失败');
+      throw error;
+    }
+  }
+
+  async function handleResetAdminUserPassword(user: AdminUserSummary) {
+    try {
+      const payload = await resetAdminUserPassword(user.userId);
+      setNotice(`已重置用户 ${payload.username} 的密码为「${payload.username}」`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '重置密码失败');
       throw error;
     }
   }
@@ -9050,6 +9086,7 @@ export default function App() {
               onRechargeUser={handleRechargeUserCredits}
               onDeductUser={handleDeductUserCredits}
               onDeleteUser={handleDeleteAdminUser}
+              onResetPassword={handleResetAdminUserPassword}
               onUpdateProviderRouting={handleUpdateProviderRouting}
               onUpdateModelCreditPricing={handleUpdateModelCreditPricing}
               onLoadSection={loadAdminSection}

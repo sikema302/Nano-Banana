@@ -12731,6 +12731,58 @@ async function start() {
     }
   });
 
+  app.post('/api/admin/users/:userId/reset-password', requireAuth, requireAdmin, async (req, res) => {
+    const userId = normalizeString(req.params.userId);
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+
+    try {
+      if (USE_SUPABASE) {
+        const db = await getSupabaseDb();
+        const user = await db.findUserById(userId);
+        if (!user || !user.username) {
+          res.status(404).json({ error: '用户不存在' });
+          return;
+        }
+        const newPassword = user.username;
+        const passwordHash = await bcrypt.hash(newPassword, 10);
+        await db.updateUserPassword(user.username, passwordHash);
+        res.json({ ok: true, username: user.username });
+        return;
+      }
+
+      // SQLite：先定位用户，再在事务外做 bcrypt 哈希（避免同步哈希阻塞事件循环），最后写回。
+      const target = await withReadDb((db) => {
+        ensureSchema(db);
+        return getOne<Record<string, unknown>>(
+          db,
+          `SELECT u.id AS id, u.username AS username
+             FROM users u
+             LEFT JOIN user_migrations m ON m.legacy_user_id = u.id
+            WHERE CAST(u.id AS TEXT) = ? OR m.supabase_user_id = ?
+            LIMIT 1`,
+          [userId, userId],
+        );
+      });
+      if (!target || !String(target.username || '')) {
+        res.status(404).json({ error: '用户不存在' });
+        return;
+      }
+      const username = String(target.username);
+      const passwordHash = await bcrypt.hash(username, 10);
+      await withWriteDb((db) => {
+        ensureSchema(db);
+        db.run('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, target.id]);
+      });
+      res.json({ ok: true, username });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '重置密码失败';
+      res.status(message.includes('不存在') ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get('/api/admin/records', requireAuth, requireAdmin, async (req, res) => {
     const page = parsePaginationValue(req.query.page, 1, 1, 100000);
     const pageSize = parsePaginationValue(req.query.pageSize, 10, 1, 100);

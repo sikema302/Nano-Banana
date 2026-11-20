@@ -1403,6 +1403,14 @@ export async function deleteAdminUser(userId: string) {
   );
 }
 
+export async function resetAdminUserPassword(userId: string) {
+  return request<{ ok: true; username: string }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/reset-password`,
+    { method: 'POST' },
+    true,
+  );
+}
+
 export async function fetchAdminRecords(params: {
   page?: number;
   pageSize?: number;
