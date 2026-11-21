@@ -770,6 +770,22 @@ function getApiErrorCode(payload: unknown): string {
     return /\b(502|503|504)\b|bad gateway|gateway time-?out|service unavailable/.test(lower);
   }
 
+  // 浏览器 fetch 的瞬时网络失败（连不上/中途断连）统一抛 TypeError: Failed to fetch 等；
+  // 这些属于瞬时抖动，重试一次大概率自愈，不该直接甩英文报错给客户。
+  const NETWORK_RETRY_MARKER = '__network_retry_marker__';
+
+  function isTransientNetworkError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const message = error instanceof Error ? error.message : String(error);
+    const lower = message.toLowerCase();
+    return lower.includes('failed to fetch')
+      || lower.includes('networkerror')
+      || lower.includes('load failed')
+      || lower.includes('network error')
+      || lower.includes('network request failed')
+      || lower.includes('fetch failed');
+  }
+
   async function requestOnce<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
     const headers = new Headers(init.headers || {});
     headers.set('Content-Type', 'application/json');
@@ -803,6 +819,9 @@ function getApiErrorCode(payload: unknown): string {
       if (controller.signal.aborted && !externalSignal?.aborted) {
         throw new Error('请求超时，请稍后重试');
       }
+      if (isTransientNetworkError(error)) {
+        throw new Error(NETWORK_RETRY_MARKER);
+      }
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -830,15 +849,25 @@ function getApiErrorCode(payload: unknown): string {
 
   const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  // 网关 503/502/504 属于部署/维护瞬态，静默重试一次后自愈；仍失败才抛错误。
+  // 网关 503/502/504 及浏览器瞬时网络失败（Failed to fetch）属于瞬态，静默重试一次后自愈；
+  // 仍失败才抛错误，其中网络失败会转成客户看得懂的中文提示。
   async function request<T>(input: string, init: RequestInit = {}, auth = false, timeoutMs = 30_000): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await requestOnce(input, init, auth, timeoutMs);
       } catch (error) {
-        const shouldRetry = attempt === 0 && error instanceof Error && error.message === GATEWAY_RETRY_MARKER;
-        if (!shouldRetry) throw error;
-        await delay(1500);
+        const marker = error instanceof Error
+          && (error.message === GATEWAY_RETRY_MARKER || error.message === NETWORK_RETRY_MARKER)
+          ? error.message
+          : '';
+        if (attempt === 0 && marker) {
+          await delay(1500);
+          continue;
+        }
+        if (marker === NETWORK_RETRY_MARKER) {
+          throw new Error('网络连接中断，请稍后重试');
+        }
+        throw error;
       }
     }
   }

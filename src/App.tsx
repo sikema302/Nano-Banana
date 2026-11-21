@@ -6935,8 +6935,14 @@ export default function App() {
   async function openPromoPurchasePage() {
     if (!activePromoCoupon || promoCouponClaiming) return;
 
-    const purchaseWindow = window.open('about:blank', '_blank');
-    if (purchaseWindow) purchaseWindow.opener = null;
+    // 购买地址在领取优惠码之前就已存在（服务端始终返回 purchaseUrl），因此在用户点击的
+    // 手势上下文内同步打开购买页。若先 await 领取优惠码再 window.open，会丢失手势上下文
+    // 被浏览器弹窗拦截，导致「去购买」点了跳不过去。
+    window.open(
+      activePromoCoupon.purchaseUrl || 'https://pay.ldxp.cn/shop/RHPYAKWG',
+      '_blank',
+      'noopener,noreferrer',
+    );
     setPromoCouponClaiming(true);
 
     try {
@@ -6968,12 +6974,6 @@ export default function App() {
         copied = false;
       }
 
-      if (purchaseWindow) {
-        purchaseWindow.location.replace(coupon.purchaseUrl);
-      } else {
-        window.open(coupon.purchaseUrl, '_blank', 'noopener,noreferrer');
-      }
-
       if (copied) {
         setNotice(`优惠码 ${coupon.redemptionCode} 已复制，请在小铺结算时使用`);
         void closePromoCoupon();
@@ -6981,7 +6981,6 @@ export default function App() {
         setNotice('优惠券已领取，请手动复制弹窗中的优惠码');
       }
     } catch (error) {
-      purchaseWindow?.close();
       setNotice(error instanceof Error ? error.message : '优惠券领取失败，请稍后再试');
     } finally {
       setPromoCouponClaiming(false);
