@@ -787,6 +787,7 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   image2Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
@@ -794,12 +795,14 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
@@ -841,14 +844,17 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   flareRoutes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'uselg-flare', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'uselg-flare', enabled: true },
     ],
@@ -856,14 +862,17 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   sunburstRoutes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-gpt-image-25', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'uselg-sunburst', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'uselg-sunburst', enabled: true },
     ],
@@ -874,22 +883,28 @@ const DEFAULT_PROVIDER_ROUTING: ProviderRoutingConfig = {
   flare26Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
   },
   sunburst26Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: JUNLIAI_PRIMARY_ENABLED },
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: JUNLIAI_PRIMARY_ENABLED },
       { id: 'junliai-firefly', enabled: JUNLIAI_PRIMARY_ENABLED },
     ],
   },
@@ -5614,11 +5629,14 @@ function isGptImage2Family(modelId: string) {
 }
 
 // 把 image2Routes 里的渠道映射到 junliai 上游模型名。
-// GPT-image-2：junliai-economy → gpt-image-2（1K 标准），junliai-firefly → firefly-gpt-image-2（2K/4K）。
+// GPT-image-2：junliai-economy → gpt-image-2（1K 标准），junliai-firefly → firefly-gpt-image-2（2K/4K），
+//              junliai-cf → gpt-image-2-cf（超分放大，1K/2K/4K）。
 // GPT-image-2.5-*：junliai-economy → gpt-image-2.5-{flare|sunburst}（仅 1K），
-//                 junliai-firefly → gpt-image-2.5-{flare|sunburst}-firefly（仅 2K/4K）。
+//                 junliai-firefly → gpt-image-2.5-{flare|sunburst}-firefly（仅 2K/4K），
+//                 junliai-cf → gpt-image-2.5-{flare|sunburst}-cf（超分放大，1K/2K/4K）。
 // GPT-image-2.6-*：junliai-economy → gpt-image-2.6-{flare|sunburst}（仅 1K），
-//                 junliai-firefly → gpt-image-2.6-{flare|sunburst}-firefly（仅 2K/4K）。
+//                 junliai-firefly → gpt-image-2.6-{flare|sunburst}-firefly（仅 2K/4K），
+//                 junliai-cf → gpt-image-2.6-{flare|sunburst}-cf（超分放大，1K/2K/4K）。
 function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSize: string) {
   if (modelId === 'GPT-image-2.6-Flare' || modelId === 'GPT-image-2.6-Sunburst') {
     const variant = modelId === 'GPT-image-2.6-Flare' ? 'flare' : 'sunburst';
@@ -5627,6 +5645,9 @@ function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSi
     }
     if (channelId === 'junliai-firefly') {
       return imageSize === '2K' || imageSize === '4K' ? `gpt-image-2.6-${variant}-firefly` : '';
+    }
+    if (channelId === 'junliai-cf') {
+      return `gpt-image-2.6-${variant}-cf`;
     }
     return '';
   }
@@ -5641,10 +5662,14 @@ function resolveJunliaiUpstreamModel(channelId: string, modelId: string, imageSi
     if (channelId === 'junliai-firefly') {
       return imageSize === '2K' || imageSize === '4K' ? `gpt-image-2.5-${variant}-firefly` : '';
     }
+    if (channelId === 'junliai-cf') {
+      return `gpt-image-2.5-${variant}-cf`;
+    }
     return '';
   }
   if (channelId === 'junliai-economy') return JUNLIAI_GPT_IMAGE_2_STANDARD_MODEL;
   if (channelId === 'junliai-firefly') return JUNLIAI_MODEL;
+  if (channelId === 'junliai-cf') return 'gpt-image-2-cf';
   return '';
 }
 
@@ -5925,6 +5950,11 @@ async function callImageGeneration(input: ImageGenerationInput) {
                 ? enabledProviderIds(routing.image2Routes[resolution])
                   .filter((channelId) => channelId === 'junliai-firefly')
                 : enabledProviderIds(routing.image2Routes[resolution]);
+  // 4K 高质量（quality=high）永不走 cf 超分渠道，直接走其他渠道（firefly / uselg / visionary 等），
+  // 避免高画质输出被超分放大链路影响。
+  if (effectiveInput.imageSize === '4K' && normalizeGptImageQuality(effectiveInput.quality, effectiveInput.imageSize) === 'high') {
+    configuredChannels = configuredChannels.filter((channelId) => channelId !== 'junliai-cf');
+  }
   if (configuredChannels.length === 0) {
     throw new Error('管理员已停用当前模型的全部生图渠道');
   }
@@ -7078,6 +7108,33 @@ async function start() {
         ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5', '4:1'],
         maxImages: 9,
       },
+      // 新增「超分放大」cf 渠道（junli 1 积分/张，1K/2K/4K，最多 15 张参考图）。
+      // 参考图张数按站点口径收到 9（gpt-image-2 收到 6），与同系列经济版一致。
+      'gpt-image-2-cf': {
+        imageSizes: ['STANDARD', '1K', '2K', '4K'],
+        ratios: ['auto', '1:1', '16:9', '9:16', '4:3', '21:9', '3:4', '2:3'],
+        maxImages: 6,
+      },
+      'gpt-image-2.5-flare-cf': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3', '4:5'],
+        maxImages: 9,
+      },
+      'gpt-image-2.5-sunburst-cf': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '4:5', '3:4', '2:3'],
+        maxImages: 9,
+      },
+      'gpt-image-2.6-flare-cf': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3'],
+        maxImages: 9,
+      },
+      'gpt-image-2.6-sunburst-cf': {
+        imageSizes: ['1K', '2K', '4K'],
+        ratios: ['1:1', '16:9', '9:16', '4:3', '3:2', '21:9', '3:4', '2:3'],
+        maxImages: 9,
+      },
       'grok-image': {
         imageSizes: ['1K', '2K'],
         ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
@@ -7092,7 +7149,8 @@ async function start() {
           ? routing.flare26Routes[resolution]
           : routing.sunburst26Routes[resolution];
         return isProviderEnabled(routes, 'junliai-economy')
-          || isProviderEnabled(routes, 'junliai-firefly');
+          || isProviderEnabled(routes, 'junliai-firefly')
+          || isProviderEnabled(routes, 'junliai-cf');
       }
       if (input.modelId === 'GPT-image-2.5-Flare' || input.modelId === 'GPT-image-2.5-Sunburst') {
         const routes = input.modelId === 'GPT-image-2.5-Flare'
@@ -7100,7 +7158,8 @@ async function start() {
           : routing.sunburstRoutes[resolution];
         return isProviderEnabled(routes, 'junliai-economy')
           || isProviderEnabled(routes, 'junliai-firefly')
-          || isProviderEnabled(routes, 'junliai-gpt-image-25');
+          || isProviderEnabled(routes, 'junliai-gpt-image-25')
+          || isProviderEnabled(routes, 'junliai-cf');
       }
       return input.modelId === 'Nano_Banana_Pro'
         ? isProviderEnabled(routing.bananaRoutes[resolution], 'junliai')
@@ -7109,7 +7168,8 @@ async function start() {
           ? isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok')
           : isProviderEnabled(routing.image2Routes[resolution], 'junliai-economy')
             || isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly')
-            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25');
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-gpt-image-25')
+            || isProviderEnabled(routing.image2Routes[resolution], 'junliai-cf');
     },
     isPrimaryModelEnabled: async (input, upstreamModel) => {
       const routing = await providerRouting!.get();
@@ -7123,11 +7183,14 @@ async function start() {
         return isProviderEnabled(routing.grokImageRoutes[resolution], 'junliai-grok');
       }
       // GPT-image-2.5 Flare / Sunburst 有独立渠道组：变体主渠道 → junliai-economy，
-      // 通用 gpt-image-2.5 → junliai-gpt-image-25，*firefly → junliai-firefly。
+      // 通用 gpt-image-2.5 → junliai-gpt-image-25，*firefly → junliai-firefly，*-cf → junliai-cf。
       if (input.modelId === 'GPT-image-2.6-Flare' || input.modelId === 'GPT-image-2.6-Sunburst') {
         const routes = input.modelId === 'GPT-image-2.6-Flare'
           ? routing.flare26Routes[resolution]
           : routing.sunburst26Routes[resolution];
+        if (upstreamModel.endsWith('-cf')) {
+          return isProviderEnabled(routes, 'junliai-cf');
+        }
         if (upstreamModel.endsWith('-firefly')) {
           return isProviderEnabled(routes, 'junliai-firefly');
         }
@@ -7140,12 +7203,19 @@ async function start() {
         if (upstreamModel === 'gpt-image-2.5') {
           return isProviderEnabled(routes, 'junliai-gpt-image-25');
         }
+        if (upstreamModel.endsWith('-cf')) {
+          return isProviderEnabled(routes, 'junliai-cf');
+        }
         if (upstreamModel.endsWith('-firefly')) {
           return isProviderEnabled(routes, 'junliai-firefly');
         }
         return isProviderEnabled(routes, 'junliai-economy');
       }
-      // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，其余走 junliai-economy
+      // GPT-image-2 / GPT-image-2.5-* 系列：firefly 上游（前缀 firefly-* 或后缀 *-firefly）走 junliai-firefly，
+      // *-cf 走 junliai-cf，其余走 junliai-economy
+      if (upstreamModel.endsWith('-cf')) {
+        return isProviderEnabled(routing.image2Routes[resolution], 'junliai-cf');
+      }
       if (upstreamModel.startsWith('firefly-gpt-image-2') || upstreamModel.endsWith('-firefly')) {
         return isProviderEnabled(routing.image2Routes[resolution], 'junliai-firefly');
       }

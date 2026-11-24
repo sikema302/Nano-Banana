@@ -291,6 +291,7 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   image2Routes: {
     '1K': [
       { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'schat-gpt-image-2', enabled: false },
@@ -298,12 +299,14 @@ const defaultProviderRouting: ProviderRoutingConfig = {
       { id: 'visionary', enabled: true },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
       { id: 'visionary', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'schat-gpt-image-2', enabled: false },
       { id: 'uselg', enabled: true },
@@ -339,14 +342,17 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   flareRoutes: {
     '1K': [
       { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'uselg-flare', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'uselg-flare', enabled: true },
     ],
@@ -354,33 +360,55 @@ const defaultProviderRouting: ProviderRoutingConfig = {
   sunburstRoutes: {
     '1K': [
       { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-gpt-image-25', enabled: true },
       { id: 'junliai-firefly', enabled: true },
     ],
     '2K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'uselg-sunburst', enabled: true },
     ],
     '4K': [
+      { id: 'junliai-cf', enabled: true },
       { id: 'junliai-firefly', enabled: true },
       { id: 'uselg-sunburst', enabled: true },
     ],
   },
   // GPT-image-2.6 独立渠道组：junli 经济版（1K）与 Firefly（2K/4K），无 uselg 兜底。
   flare26Routes: {
-    '1K': [{ id: 'junliai-economy', enabled: true }],
-    '2K': [{ id: 'junliai-firefly', enabled: true }],
-    '4K': [{ id: 'junliai-firefly', enabled: true }],
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-cf', enabled: true },
+    ],
+    '2K': [
+      { id: 'junliai-cf', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-cf', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
   },
   sunburst26Routes: {
-    '1K': [{ id: 'junliai-economy', enabled: true }],
-    '2K': [{ id: 'junliai-firefly', enabled: true }],
-    '4K': [{ id: 'junliai-firefly', enabled: true }],
+    '1K': [
+      { id: 'junliai-economy', enabled: true },
+      { id: 'junliai-cf', enabled: true },
+    ],
+    '2K': [
+      { id: 'junliai-cf', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
+    '4K': [
+      { id: 'junliai-cf', enabled: true },
+      { id: 'junliai-firefly', enabled: true },
+    ],
   },
 };
 
 const PROVIDER_CHANNEL_NAMES: Record<string, string> = {
   'junliai-economy': 'Junli · GPT 经济版',
+  'junliai-cf': 'Junli · GPT-image-2-cf',
   'junliai-gpt-image-25': 'Junli · GPT-image-2.5',
   'junliai-firefly': 'Junli · Firefly',
   'schat-gpt-image-2': 'Schat · GPT Image 2',
@@ -408,6 +436,7 @@ function gpt25ChannelName(groupKey: 'flareRoutes' | 'sunburstRoutes' | 'flare26R
   const version = is26 ? '2.6' : '2.5';
   const variant = groupKey === 'flareRoutes' || groupKey === 'flare26Routes' ? 'flare' : 'sunburst';
   if (id === 'junliai-economy') return `Junli · gpt-image-${version}-${variant}`;
+  if (id === 'junliai-cf') return `Junli · gpt-image-${version}-${variant}-cf`;
   if (id === 'junliai-gpt-image-25') return 'Junli · gpt-image-2.5';
   if (id === 'junliai-firefly') return `Junli · gpt-image-${version}-${variant}-firefly`;
   if (id === 'uselg-flare') return 'Uselg · gpt-image-2.5-flare';
