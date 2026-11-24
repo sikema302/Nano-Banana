@@ -12004,6 +12004,12 @@ async function start() {
       if (req.body?.sunburstRoutes && typeof req.body.sunburstRoutes === 'object') {
         patch.sunburstRoutes = req.body.sunburstRoutes;
       }
+      if (req.body?.flare26Routes && typeof req.body.flare26Routes === 'object') {
+        patch.flare26Routes = req.body.flare26Routes;
+      }
+      if (req.body?.sunburst26Routes && typeof req.body.sunburst26Routes === 'object') {
+        patch.sunburst26Routes = req.body.sunburst26Routes;
+      }
       if (Object.keys(patch).length === 0) {
         res.status(400).json({ error: '至少需要提交一组有效的渠道顺序或接口开关' });
         return;
