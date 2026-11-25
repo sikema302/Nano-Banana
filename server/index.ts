@@ -2080,6 +2080,7 @@ function toPagination(page: number, pageSize: number, total: number): Pagination
 type AdminUserSummaryRow = {
   userId: string;
   username: string;
+  email?: string;
   inviteCode?: string;
   generations: number;
   creditsUsed: number;
@@ -2185,6 +2186,7 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
     userMap.set(row.user_id, {
       userId: row.user_id,
       username: row.username,
+      email: row.email || '',
       inviteCode: inviteCodeByUserId.get(row.user_id) || '',
       generations: 0,
       creditsUsed: 0,
@@ -2200,6 +2202,7 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
       userMap.set(row.user_id, {
         userId: row.user_id,
         username: row.username,
+        email: '',
         inviteCode: inviteCodeByUserId.get(row.user_id) || '',
         generations: 0,
         creditsUsed: 0,
@@ -2240,6 +2243,7 @@ async function getSupabaseAdminUsers(): Promise<AdminUserSummaryRow[]> {
     userMap.set(summary.userId, {
       userId: summary.userId,
       username: current?.username || summary.username,
+      email: current?.email || '',
       inviteCode: current?.inviteCode || inviteCodeByUserId.get(summary.userId) || '',
       generations: summary.generations,
       creditsUsed: summary.creditsUsed,
@@ -12390,6 +12394,7 @@ async function start() {
             return (
               item.username.toLowerCase().includes(search) ||
               item.userId.toLowerCase().includes(search) ||
+              (item.email || '').toLowerCase().includes(search) ||
               matchedInviteUserIds.has(item.userId)
             );
           })

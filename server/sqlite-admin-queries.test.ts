@@ -83,7 +83,7 @@ test('SQLite admin overview records query executes and excludes demo rows', asyn
 
 test('SQLite admin users query returns migrated users with credits, invites, usage, and search', async () => {
   const db = makeTestDb();
-  db.run('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)');
+  db.run('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, email TEXT)');
   db.run('CREATE TABLE user_migrations (legacy_user_id INTEGER PRIMARY KEY, supabase_user_id TEXT NOT NULL)');
   db.run(`CREATE TABLE user_credits (
     user_id TEXT PRIMARY KEY, username TEXT NOT NULL, total_credits INTEGER NOT NULL, used_credits INTEGER NOT NULL
@@ -96,7 +96,7 @@ test('SQLite admin users query returns migrated users with credits, invites, usa
     code TEXT PRIMARY KEY, created_at TEXT NOT NULL, redeemed_by TEXT, redeemed_at TEXT
   )`);
 
-  db.run("INSERT INTO users VALUES (1, 'member')");
+  db.run("INSERT INTO users VALUES (1, 'member', 'member@example.com')");
   db.run("INSERT INTO user_migrations VALUES (1, 'user-uuid')");
   db.run("INSERT INTO user_credits VALUES ('user-uuid', 'member', 100, 25)");
   db.run("INSERT INTO invite_codes VALUES ('CODE-OLD', '2026-08-01T00:00:00.000Z', 'user-uuid', '2026-08-01T00:00:00.000Z')");
@@ -132,6 +132,20 @@ test('SQLite admin users query returns migrated users with credits, invites, usa
   assert.equal(result.users[0].creditsUsed, 7);
   assert.equal(result.users[0].remainingCredits, 75);
   assert.deepEqual(result.users[0].usageTrend, [0, 0, 0, 0, 0, 7, 0]);
+
+  const emailResult = buildSqliteAdminUsersPage({
+    rows,
+    trendRows,
+    apiKeys: [{ id: 'key-1', name: 'partner-1', totalCredits: 50, usedCredits: 10 }],
+    search: 'member@example.com',
+    sort: 'recent-desc',
+    page: 1,
+    pageSize: 10,
+    now: new Date('2026-08-09T18:00:00.000Z').getTime(),
+  });
+  assert.equal(emailResult.total, 1);
+  assert.equal(emailResult.users[0].userId, 'user-uuid');
+  assert.equal(emailResult.users[0].email, 'member@example.com');
 
   const apiKeyResult = buildSqliteAdminUsersPage({
     rows,

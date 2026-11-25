@@ -2102,13 +2102,14 @@ export async function getRegisteredUsers(): Promise<
   Array<{
     user_id: string;
     username: string;
+    email: string;
     total_credits: number;
     used_credits: number;
   }>
 > {
   const { data, error } = await getSupabase()
     .from('users')
-    .select('id, username')
+    .select('id, username, email')
     .neq('username', 'demo')
     .order('created_at', { ascending: false });
   if (error) return [];
@@ -2131,12 +2132,13 @@ export async function getRegisteredUsers(): Promise<
     }
   }
 
-  return (data as Array<{ id: string; username: string }>).map((user) => {
+  return (data as Array<{ id: string; username: string; email?: string | null }>).map((user) => {
     const userId = normalizeSupabaseId(user.id);
     const credits = creditMap.get(userId);
     return {
       user_id: userId,
       username: user.username,
+      email: user.email || '',
       total_credits: Number(credits?.total_credits || 0),
       used_credits: Number(credits?.used_credits || 0),
     };

@@ -27,7 +27,8 @@ export const ADMIN_USERS_SQL = `
   WITH registered_users AS (
     SELECT
       COALESCE(m.supabase_user_id, CAST(u.id AS TEXT)) AS user_id,
-      u.username
+      u.username,
+      u.email
     FROM users u
     LEFT JOIN user_migrations m ON m.legacy_user_id = u.id
     WHERE u.username != 'demo'
@@ -61,6 +62,7 @@ export const ADMIN_USERS_SQL = `
   SELECT
     ids.user_id,
     COALESCE(registered.username, credits.username, generated.username, '') AS username,
+    COALESCE(registered.email, '') AS email,
     COALESCE((
       SELECT latest_invite.code
       FROM invite_codes latest_invite
@@ -147,6 +149,7 @@ type AdminApiKey = {
 export type SqliteAdminUserSummary = {
   userId: string;
   username: string;
+  email?: string;
   inviteCode?: string;
   generations: number;
   creditsUsed: number;
@@ -257,6 +260,7 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
       const user: SqliteAdminUserSummary = {
         userId,
         username: displayName,
+        email: String(row.email || ''),
         inviteCode: String(row.invite_code || ''),
         generations: Number(row.generations || 0) + (acc?.generations || 0),
         creditsUsed: Number(row.credits_used || 0) + (acc?.creditsUsed || 0),
@@ -278,6 +282,7 @@ export function buildSqliteAdminUsersPage(options: BuildSqliteAdminUsersOptions)
       return (
         user.username.toLowerCase().includes(search) ||
         user.userId.toLowerCase().includes(search) ||
+        (user.email || '').toLowerCase().includes(search) ||
         inviteCodes.includes(search) ||
         (user.ownerUsername || '').toLowerCase().includes(search) ||
         (user.keyName || '').toLowerCase().includes(search)

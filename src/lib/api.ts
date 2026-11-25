@@ -144,6 +144,7 @@ export interface GenerationRecord {
 export interface AdminUserSummary {
   userId: string;
   username: string;
+  email?: string;
   inviteCode?: string;
   generations: number;
   creditsUsed: number;

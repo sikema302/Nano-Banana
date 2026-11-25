@@ -5014,12 +5014,12 @@ function AdminView({
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-base font-black text-white">用户信息与 Key 使用页</h2>
-                    <p className="mt-1 text-xs text-zinc-500">支持按用户 ID / 邀请码前缀搜索，点击最近生成可切换活跃排序。</p>
+                    <p className="mt-1 text-xs text-zinc-500">支持按用户 ID / 用户名 / 注册邮箱 / 邀请码前缀搜索，点击最近生成可切换活跃排序。</p>
                   </div>
                   <div className="flex w-full items-center gap-2 md:w-auto">
                     <input
                       className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-200 outline-none md:w-72"
-                      placeholder="搜索用户 ID、用户名、invite-/admin/credit-"
+                      placeholder="搜索用户 ID、用户名、邮箱、invite-/admin/credit-"
                       value={userSearchDraft}
                       onChange={(event) => setUserSearchDraft(event.target.value)}
                       onKeyDown={(event) => {
@@ -5044,9 +5044,10 @@ function AdminView({
                   {searchableUsers.length > 0 ? (
                     <>
                     <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
-                    <table className="w-[1020px] table-fixed text-left text-xs">
+                    <table className="w-[1170px] table-fixed text-left text-xs">
                       <colgroup>
                         <col style={{ width: '115px' }} />
+                        <col style={{ width: '150px' }} />
                         <col style={{ width: '65px' }} />
                         <col style={{ width: '145px' }} />
                         <col style={{ width: '65px' }} />
@@ -5058,6 +5059,7 @@ function AdminView({
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a] text-zinc-500">
                         <tr className="border-b border-white/8">
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">用户</th>
+                          <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">邮箱</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">用户 ID</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">{"\u9080\u8bf7\u7801"}</th>
                           <th className="px-3 py-2 text-[9px] font-bold tracking-[0.06em] text-zinc-500">生成次数</th>
@@ -5102,6 +5104,7 @@ function AdminView({
                                   <div className="mt-0.5 text-[11px] font-normal text-zinc-500">{item.keyName}</div>
                                 ) : null}
                               </td>
+                              <td className="truncate px-2.5 py-2.5 text-zinc-400" title={item.email || ''}>{item.email || '-'}</td>
                               <td className="truncate px-2.5 py-2.5 text-zinc-500">{item.userId}</td>
                               <td className="truncate px-2.5 py-2.5 font-mono text-zinc-400">{inviteCode || '-'}</td>
                               <td className="px-2.5 py-2.5">{item.generations}</td>
