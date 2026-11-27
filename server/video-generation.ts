@@ -53,8 +53,9 @@ export type UselgVideoOptions = {
   /**
    * 上游协议差异：
    * - 'uselg'（默认）：媒体字段为 `[{ url }]` 对象数组，resolution 原样小写下发。
-   * - 'junliai'：媒体字段为 URL 字符串数组，含素材时需带 `reference_mode=asset`，
-   *   resolution 用大写档位（如 768P）。
+   * - 'junliai'：媒体字段为 URL 字符串数组，含素材时需带 `reference_mode=asset`；
+   *   仅 768p 档位需大写为 768P（minimax-h3-optimized），其余档位（muse-video 的
+   *   480p/720p/1080p）保持小写。
    */
   provider?: 'uselg' | 'junliai';
   maxConcurrent?: number;
@@ -216,7 +217,7 @@ export async function generateUselgVideo(
         model: spec.upstreamModelFor(resolution),
         prompt: input.prompt,
         seconds,
-        resolution: isJunliai ? resolution.toUpperCase() : resolution,
+        resolution: isJunliai && resolution === '768p' ? '768P' : resolution,
         aspect_ratio: aspect,
       };
       if (isJunliai) {

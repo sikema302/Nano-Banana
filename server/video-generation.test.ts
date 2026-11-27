@@ -382,6 +382,38 @@ test('junliai channel omits reference_mode when no media is provided', async () 
   assert.equal(body.aspect_ratio, '9:16');
 });
 
+test('junliai channel: muse-video resolution stays lower-case (480p/720p/1080p)', async () => {
+  // 君临只有 768p 档位需要大写（minimax-h3-optimized）；muse-video 的
+  // 480p/720p/1080p 必须保持小写 p，否则上游会拒绝（resolution="720P" 不支持）。
+  let body: Record<string, unknown> = {};
+  await generateUselgVideo(
+    {
+      modelId: 'muse-video',
+      prompt: '16:9 横屏建筑空间汇报短视频',
+      resolution: '720p',
+      aspect: '16:9',
+      seconds: 5,
+      referenceImages: [],
+    },
+    {
+      baseUrl: 'https://img.junliai.org',
+      apiKey: 'secret',
+      provider: 'junliai',
+      sleepImpl: async () => {},
+      fetchImpl: async (_url, init) => {
+        if (init?.method === 'POST') {
+          body = JSON.parse(String(init?.body));
+          return jsonResponse({ id: 'task_muse', status: 'completed', url: 'https://cdn.example.com/out.mp4' });
+        }
+        return new Response(Buffer.from('mp4-bytes'), { status: 200, headers: { 'content-type': 'video/mp4' } });
+      },
+    },
+  );
+
+  assert.equal(body.model, 'muse-video');
+  assert.equal(body.resolution, '720p');
+});
+
 test('resumeTask skips submit and polls the existing task id', async () => {
   let submitCalled = false;
   let polledUrl = '';
